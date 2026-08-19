@@ -109,3 +109,18 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "herdrm-$VERSION.zip" appcast.xml \
             --title "herdrm $VERSION" --generate-notes
+
+      - name: Bump Homebrew cask
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          [ -n "$TAP_TOKEN" ] || { echo "TAP_GITHUB_TOKEN not set, skipping"; exit 0; }
+          SHA=$(shasum -a 256 "herdrm-$VERSION.zip" | cut -d' ' -f1)
+          git clone --depth 1 "https://x-access-token:$TAP_TOKEN@github.com/OwO-Network/homebrew-brew" tap
+          cd tap
+          sed -i '' -E "s|^  version \".*\"|  version \"$VERSION\"|" Casks/herdrm.rb
+          sed -i '' -E "s|^  sha256 \".*\"|  sha256 \"$SHA\"|" Casks/herdrm.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(herdrm): bump to $VERSION"
+          git push
