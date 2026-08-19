@@ -48,9 +48,17 @@ working, blocked, or done. **herdrm** puts a native macOS window on top of it:
 
 ## Install
 
+### Homebrew
+
+```sh
+brew install owo-network/brew/herdrm
+```
+
+### Manual
+
 Download the latest `herdrm-x.y.z.zip` from
 [Releases](https://github.com/missuo/herdrm/releases), unzip, and drag
-`herdrm.app` into `/Applications`. The app updates itself from then on.
+`herdrm.app` into `/Applications`. Either way the app updates itself from then on.
 
 ## Build from source
 
