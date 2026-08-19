@@ -75,3 +75,15 @@ make kit-test  # HerdrKit integration tests (needs a running local herdr)
   the herdr socket API, SSH tunnel management, device store.
 - `Sources/HerdrM` — SwiftUI app; the terminal embed is
   [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
+
+## Credits
+
+- [herdr](https://herdr.dev) — the terminal workspace manager for coding
+  agents that this app is a console for.
+- [Heeler](https://github.com/ZingerLittleBee/Heeler) — the iOS herdr client;
+  herdrm borrows its domain model and transport patterns.
+- [waku](https://github.com/egoist/waku) — the sidebar design reference.
+- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) — terminal emulation.
+- [Sparkle](https://sparkle-project.org) — auto-updates.
+- [Lobe Icons](https://github.com/lobehub/lobe-icons) and
+  [Simple Icons](https://simpleicons.org) — agent and OS brand icons.
