@@ -267,6 +267,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Tears down every live tunnel. Awaited from the app's terminate hook — `stopSession`
+    /// fires its disconnect in a detached `Task`, which never runs when the process is exiting.
+    func shutdownAllSessions() async {
+        let live = services
+        services.removeAll()
+        sessionTasks.values.forEach { $0.cancel() }
+        sessionTasks.removeAll()
+        for service in live.values {
+            await service.disconnect()
+        }
+    }
+
     private func stopSession(_ id: UUID) {
         sessionTasks[id]?.cancel()
         sessionTasks[id] = nil

@@ -93,6 +93,9 @@ public actor SSHTunnel {
         let errorOutput = Pipe()
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = errorOutput
+        // The probe above can suspend for seconds; if the session was cancelled meanwhile
+        // (app quitting), spawning here would leak an ssh nobody is left to tear down.
+        try Task.checkCancellation()
         try proc.run()
         process = proc
 

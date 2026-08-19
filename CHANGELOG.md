@@ -7,6 +7,11 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- SSH tunnels are torn down when the app quits. Each launch used to leave its
+  `ssh` processes running (reparented to `launchd`) and their forwarded sockets
+  in place, so tunnels piled up across quit/relaunch cycles.
+
 ## [0.3.0] - 2026-08-19
 
 ### Added
