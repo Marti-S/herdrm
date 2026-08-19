@@ -7,6 +7,12 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- File menu commands with keyboard shortcuts: **New Agent** (⌘N) and **New
+  Space** (⇧⌘N), reachable while the focus is inside an agent's terminal.
+  ⌘N replaces *New Window* — herdrm is a single-window console, so a second
+  window would only duplicate the device tree.
+
 ## [0.3.0] - 2026-08-19
 
 ### Added
