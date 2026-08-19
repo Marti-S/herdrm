@@ -7,13 +7,18 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-19
+
+### Added
+- Spaces can now be renamed from the sidebar context menu. (#6, thanks
+  @hhmy27!)
+
 ## [0.2.2] - 2026-08-19
 
 ### Added
 - Terminal settings: "Mouse reporting" toggle — turn it off to always select
   text with the mouse even in TUIs that capture the mouse (Shift-drag selects
   either way). (#2, #5)
-- Spaces can now be renamed from the sidebar context menu.
 
 ### Fixed
 - The terminal now re-renders immediately when the app theme changes. (#4)
