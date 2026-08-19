@@ -19,6 +19,11 @@ final class AppModel: ObservableObject {
     @Published var panes: [PaneInfo] = []
     @Published var selectedSpaceID: String?
     @Published var selectedPaneID: String?
+    /// Selection to apply after the next refresh (used by notification jumps
+    /// that first switch devices).
+    var pendingSelectPaneID: String?
+    /// Last seen status per pane, for detecting blocked/done transitions.
+    private var previousStatuses: [String: AgentStatus] = [:]
     @Published var showAddDevice = false
     @Published var showNewAgent = false
     @Published var showNewSpace = false
@@ -95,6 +100,7 @@ final class AppModel: ObservableObject {
     // MARK: - Lifecycle
 
     func start() {
+        NotificationManager.shared.setup(model: self)
         connect(to: activeDevice)
         // Sniff OS for every known device up front so the switcher shows brand icons.
         for device in devices {
@@ -113,6 +119,7 @@ final class AppModel: ObservableObject {
         panes = []
         agentKinds = []
         installedAgentKinds = []
+        previousStatuses = [:]
         connect(to: device)
     }
 
@@ -219,9 +226,18 @@ final class AppModel: ObservableObject {
     func refresh() async {
         do {
             let snapshot = try await activeService.snapshot()
+            notifyTransitions(from: previousStatuses, to: snapshot.agents)
+            previousStatuses = Dictionary(
+                uniqueKeysWithValues: snapshot.agents.map { ($0.paneID, $0.status) }
+            )
             agents = snapshot.agents
             workspaces = snapshot.workspaces
             panes = snapshot.panes ?? []
+            if let pending = pendingSelectPaneID, agents.contains(where: { $0.paneID == pending }) {
+                selectedSpaceID = nil
+                selectedPaneID = pending
+                pendingSelectPaneID = nil
+            }
             if let selected = selectedPaneID, !agents.contains(where: { $0.paneID == selected }) {
                 selectedPaneID = nil
             }
@@ -230,6 +246,23 @@ final class AppModel: ObservableObject {
             }
         } catch {
             connection = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Notifies when an agent newly becomes blocked (needs input) or done (finished
+    /// while unwatched). Initial snapshots don't notify — only real transitions do.
+    private func notifyTransitions(from previous: [String: AgentStatus], to agents: [AgentInfo]) {
+        guard !previous.isEmpty else { return }
+        for agent in agents {
+            guard let old = previous[agent.paneID], old != agent.status else { continue }
+            guard agent.status == .blocked || agent.status == .done else { continue }
+            NotificationManager.shared.post(
+                agent: agent,
+                status: agent.status,
+                deviceID: activeDeviceID,
+                deviceName: activeDevice.name,
+                spaceName: workspaces.first { $0.workspaceID == agent.workspaceID }?.label ?? agent.workspaceID
+            )
         }
     }
 

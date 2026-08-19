@@ -56,6 +56,7 @@ targets:
         DEVELOPMENT_TEAM: NCFNX3LJ83
       configs:
         Debug:
-          CODE_SIGN_IDENTITY: "-"
+          # real identity so UserNotifications & friends work in dev builds
+          CODE_SIGN_IDENTITY: "Developer ID Application: MOE AI LLC (NCFNX3LJ83)"
         Release:
           CODE_SIGN_IDENTITY: "Developer ID Application: MOE AI LLC (NCFNX3LJ83)"

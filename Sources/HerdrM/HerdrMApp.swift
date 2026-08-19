@@ -51,6 +51,8 @@ struct SettingsView: View {
                 .tabItem { Label("Appearance", systemImage: "paintbrush") }
             TerminalSettingsView()
                 .tabItem { Label("Terminal", systemImage: "terminal") }
+            NotificationSettingsView()
+                .tabItem { Label("Notifications", systemImage: "bell") }
             AboutSettingsView()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -118,6 +120,20 @@ struct AppearanceSettingsView: View {
             }
             .pickerStyle(.segmented)
             Text("The terminal follows the app theme.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .padding(20)
+    }
+}
+
+struct NotificationSettingsView: View {
+    @AppStorage("notifications.enabled") private var enabled = true
+
+    var body: some View {
+        Form {
+            Toggle("Notify when an agent finishes or needs input", isOn: $enabled)
+            Text("Finished agents only notify while you're not watching them — herdr reports panes you have open as idle, not done.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
