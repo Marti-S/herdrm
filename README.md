@@ -1,0 +1,62 @@
+<p align="center">
+  <img src="Resources/AppIcon/herdrm-icon-rounded.png" width="128" alt="herdrm icon" />
+</p>
+
+<h1 align="center">herdrm</h1>
+
+<p align="center">
+  A native macOS console for <a href="https://herdr.dev">herdr</a> — see every coding agent
+  across all your machines, and jump straight into its live terminal.
+</p>
+
+---
+
+## What it does
+
+[herdr](https://herdr.dev) is the runtime your coding agents live on: a background
+server that owns their terminals, keeps them running, and knows which one is
+working, blocked, or done. **herdrm** puts a native macOS window on top of it:
+
+- **Spaces & Agents sidebar** — every herdr workspace and every agent
+  (claude, codex, gemini, grok, opencode, …) with live status: blocked agents
+  bubble to the top, working ones spin, done ones get a check.
+- **Live terminal** — selecting an agent attaches directly to its PTY
+  (`herdr agent attach`). Full TUI, precise cursor, no chat wrapper.
+- **Devices** — the bottom-left switcher jumps between your local herdr and
+  remote machines over SSH (the remote socket is forwarded through
+  `ssh -L`, so everything works identically). OS icons are sniffed
+  automatically; devices can be added, renamed, and removed in-app.
+- **New Agent** — starts an agent in any space. The picker only offers CLIs
+  actually installed on that device, and enables each agent's own
+  bypass-permissions flag by default (e.g. `--dangerously-skip-permissions`
+  for claude).
+- **Search** — ⌘K command palette across agents and spaces.
+- **Light & dark**, auto-updates via Sparkle, signed and notarized.
+
+## Requirements
+
+- macOS 14+
+- [herdr](https://herdr.dev) running locally and/or on your remote machines
+- For remote devices: SSH key access (herdrm uses your local keys/agent)
+
+## Install
+
+Download the latest `herdrm-x.y.z.zip` from
+[Releases](https://github.com/missuo/herdrm/releases), unzip, and drag
+`herdrm.app` into `/Applications`. The app updates itself from then on.
+
+## Build from source
+
+```sh
+brew install xcodegen
+make build   # xcodegen + xcodebuild → build/Build/Products/Debug/herdrm.app
+make run
+make kit-test  # HerdrKit integration tests (needs a running local herdr)
+```
+
+## Architecture
+
+- `Packages/HerdrKit` — Swift package: NDJSON-over-Unix-socket RPC client for
+  the herdr socket API, SSH tunnel management, device store.
+- `Sources/HerdrM` — SwiftUI app; the terminal embed is
+  [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).

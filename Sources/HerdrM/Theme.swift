@@ -1,0 +1,53 @@
+import AppKit
+import HerdrKit
+import SwiftUI
+
+/// Design tokens from the herdrm design canvas (waku-derived), light/dark adaptive.
+enum Theme {
+    private static func dynamic(_ light: NSColor, _ dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
+
+    private static func hex(_ value: UInt32, alpha: CGFloat = 1) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: alpha
+        )
+    }
+
+    // text ramp
+    static let text = dynamic(hex(0x242424), hex(0xE2E2E2))
+    static let textSecondary = dynamic(hex(0x666666), hex(0xA3A3A3))
+    static let textTertiary = dynamic(hex(0x858585), hex(0x7D7D7D))
+    static let textGhost = dynamic(hex(0xA4A4A4), hex(0x575757))
+
+    // accent + status
+    static let accent = dynamic(hex(0xC85F44), hex(0xE2795B))
+    static let accentWash = dynamic(hex(0xC85F44, alpha: 0.12), hex(0xE2795B, alpha: 0.14))
+    static let working = dynamic(hex(0x2563EB), hex(0x3B82F6))
+    static let success = dynamic(hex(0x2FA35F), hex(0x62C987))
+    static let warning = dynamic(hex(0xB8862E), hex(0xE0B36A))
+    static let danger = dynamic(hex(0xC94F44), hex(0xE2726A))
+
+    // surfaces
+    static let itemWash = dynamic(hex(0x141414, alpha: 0.06), hex(0xF0F0F0, alpha: 0.06))
+    static let itemWashSelected = dynamic(hex(0x141414, alpha: 0.07), hex(0xF0F0F0, alpha: 0.07))
+    static let contentBackground = dynamic(hex(0xF6F6F6), hex(0x181818))
+    static let terminalBackground = dynamic(hex(0xFFFFFF), hex(0x101012))
+    static let statusBarBackground = dynamic(hex(0xF1F1F2), hex(0x141416))
+    static let sidebarBorder = dynamic(hex(0xD9D9D9), hex(0x292929))
+    static let hairline = dynamic(hex(0x000000, alpha: 0.08), hex(0xFFFFFF, alpha: 0.06))
+
+    static func statusColor(_ status: AgentStatus) -> Color {
+        switch status {
+        case .working: return working
+        case .blocked: return warning
+        case .done: return success
+        case .idle, .unknown: return textGhost
+        }
+    }
+}
