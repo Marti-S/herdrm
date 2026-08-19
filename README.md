@@ -14,6 +14,10 @@
 > [!WARNING]
 > Early stage software without full test coverage — expect bugs. PRs are very welcome!
 
+<p align="center">
+  <img src=".github/assets/screenshot.png" alt="herdrm — device switcher and a live claude terminal" />
+</p>
+
 ## What it does
 
 [herdr](https://herdr.dev) is the runtime your coding agents live on: a background
