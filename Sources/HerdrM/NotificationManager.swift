@@ -19,17 +19,29 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// Chime played in-app (like herdr's bell) so it works regardless of how the
+    /// system chooses to deliver the banner.
+    func playSound(for status: AgentStatus) {
+        guard UserDefaults.standard.object(forKey: "notifications.sound") as? Bool ?? true else { return }
+        let name: String
+        switch status {
+        case .done: name = "Glass"
+        case .blocked: name = "Funk"
+        default: return
+        }
+        NSSound(named: name)?.play()
+    }
+
     func post(agent: AgentInfo, status: AgentStatus, deviceID: UUID, deviceName: String, spaceName: String) {
+        playSound(for: status)
         guard authorized, UserDefaults.standard.object(forKey: "notifications.enabled") as? Bool ?? true else { return }
         let content = UNMutableNotificationContent()
         content.title = agent.title
         switch status {
         case .blocked:
             content.body = "\(agent.agent) needs your input · \(spaceName) · \(deviceName)"
-            content.sound = .default
         case .done:
             content.body = "\(agent.agent) finished · \(spaceName) · \(deviceName)"
-            content.sound = .default
         default:
             return
         }

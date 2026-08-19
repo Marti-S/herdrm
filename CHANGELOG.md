@@ -7,6 +7,25 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-19
+
+### Added
+- SSH password authentication as a fallback: when keys/agent/Tailscale SSH
+  can't authenticate, herdrm prompts in-app and stores the password in the
+  macOS login Keychain — never in files or process arguments. (#3, thanks
+  @ljxw88!)
+- SSH failures now surface OpenSSH's actual error text instead of a bare
+  exit code. (#3)
+- Notification sounds: a chime when an agent finishes (Glass) or needs input
+  (Funk), independent of banner delivery; toggle in Settings → Notifications.
+- Settings → Notifications now shows the system permission status, with
+  one-click request or a shortcut to System Settings when denied.
+
+### Fixed
+- Starting an agent right after creating its pane no longer fails with
+  `agent_pane_busy` while the shell is still initializing — herdrm now waits
+  like the herdr CLI does. (#3)
+
 ## [0.2.3] - 2026-08-19
 
 ### Added
