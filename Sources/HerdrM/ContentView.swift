@@ -53,6 +53,7 @@ struct RootView: View {
         .onAppear { model.start() }
         .sheet(isPresented: $model.showAddDevice) { AddDeviceSheet(model: model) }
         .sheet(isPresented: $model.showNewAgent) { NewAgentSheet(model: model) }
+        .sheet(isPresented: $model.showNewSpace) { NewSpaceSheet(model: model) }
         .sheet(item: $model.deviceToEdit) { device in EditDeviceSheet(model: model, device: device) }
         .alert(
             "Something went wrong",
@@ -336,6 +337,74 @@ struct SheetSectionLabel: View {
             .font(.system(size: 10.5, weight: .medium))
             .kerning(0.4)
             .foregroundStyle(Theme.textTertiary)
+    }
+}
+
+struct NewSpaceSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var directory = "~"
+    @State private var label = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(
+                systemImage: "folder.badge.plus",
+                title: "New Space",
+                subtitle: "A herdr workspace rooted at a project directory on \(model.activeDevice.name)"
+            )
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 8) {
+                SheetSectionLabel("DIRECTORY")
+                HStack(spacing: 6) {
+                    TextField("~/Projects/foo", text: $directory)
+                        .textFieldStyle(.roundedBorder)
+                    if model.activeDevice.isLocal {
+                        Button("Browse…") {
+                            let panel = NSOpenPanel()
+                            panel.canChooseDirectories = true
+                            panel.canChooseFiles = false
+                            panel.allowsMultipleSelection = false
+                            if panel.runModal() == .OK, let url = panel.url {
+                                directory = (url.path as NSString).abbreviatingWithTildeInPath
+                            }
+                        }
+                    }
+                }
+                if !model.activeDevice.isLocal {
+                    Text("Path on \(model.activeDevice.name); ~ expands to its home directory")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+
+                Spacer().frame(height: 8)
+
+                SheetSectionLabel("NAME")
+                TextField("Defaults to the folder name", text: $label)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .padding(16)
+
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Create Space") {
+                    model.createNewSpace(directory: directory, label: label)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(directory.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 440)
     }
 }
 

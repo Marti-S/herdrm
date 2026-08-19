@@ -59,7 +59,7 @@ struct SidebarView: View {
                             .foregroundStyle(Theme.textGhost)
                         Spacer()
                         Button {
-                            model.createNewSpace()
+                            model.showNewSpace = true
                         } label: {
                             Image(systemName: "folder.badge.plus")
                                 .font(.system(size: 11.5))

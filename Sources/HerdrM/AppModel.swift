@@ -21,6 +21,7 @@ final class AppModel: ObservableObject {
     @Published var selectedPaneID: String?
     @Published var showAddDevice = false
     @Published var showNewAgent = false
+    @Published var showNewSpace = false
     @Published var showSearch = false
     /// In-window device panel (NSPopover crashes in ViewBridge on macOS 26+ betas).
     @Published var showDevicePanel = false
@@ -273,14 +274,22 @@ final class AppModel: ObservableObject {
 
     // MARK: - Actions
 
-    /// One-click New Space: a fresh workspace rooted at the device's home directory
-    /// (herdr would otherwise inherit the focused workspace's cwd), then straight into
-    /// the New Agent sheet for it.
-    func createNewSpace() {
+    /// Creates a workspace rooted at the given directory ("~" expands to the device's
+    /// home, local or remote), then goes straight into the New Agent sheet for it.
+    func createNewSpace(directory: String, label: String?) {
         Task {
             do {
-                let home = try await activeService.homeDirectory()
-                let created = try await activeService.createWorkspace(label: nil, cwd: home)
+                var path = directory.trimmingCharacters(in: .whitespaces)
+                if path.isEmpty { path = "~" }
+                if path == "~" || path.hasPrefix("~/") {
+                    let home = try await activeService.homeDirectory()
+                    path = path == "~" ? home : "\(home)/\(path.dropFirst(2))"
+                }
+                let trimmedLabel = label?.trimmingCharacters(in: .whitespaces)
+                let created = try await activeService.createWorkspace(
+                    label: (trimmedLabel?.isEmpty ?? true) ? nil : trimmedLabel,
+                    cwd: path
+                )
                 await refresh()
                 selectedSpaceID = created.workspaceID
                 showNewAgent = true
