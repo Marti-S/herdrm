@@ -193,6 +193,8 @@ struct DetailView: View {
 
     @AppStorage(TerminalDefaults.fontNameKey) private var terminalFontName = ""
     @AppStorage(TerminalDefaults.fontSizeKey) private var terminalFontSize = TerminalDefaults.defaultFontSize
+    @AppStorage("terminal.mouseReporting") private var terminalMouseReporting = true
+    @Environment(\.colorScheme) private var colorScheme
 
     @ViewBuilder
     private var terminal: some View {
@@ -201,7 +203,9 @@ struct DetailView: View {
                 device: entry.device,
                 paneID: entry.agent.paneID,
                 fontName: terminalFontName,
-                fontSize: terminalFontSize
+                fontSize: terminalFontSize,
+                dark: colorScheme == .dark,
+                mouseReporting: terminalMouseReporting
             )
                 .id("attach-\(entry.id)")
                 .padding(.horizontal, 10)

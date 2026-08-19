@@ -31,6 +31,11 @@ struct AttachTerminalView: NSViewRepresentable {
     let paneID: String
     var fontName: String = ""
     var fontSize: Double = TerminalDefaults.defaultFontSize
+    /// From SwiftUI's environment so theme switches re-render immediately.
+    var dark: Bool = false
+    /// When false, mouse drags always select text locally even if the TUI
+    /// requested mouse reporting (Shift+drag bypasses it either way).
+    var mouseReporting: Bool = true
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -60,13 +65,17 @@ struct AttachTerminalView: NSViewRepresentable {
         if view.font != font {
             view.font = font
         }
-        let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if dark {
-            view.nativeBackgroundColor = NSColor(srgbRed: 0x10 / 255, green: 0x10 / 255, blue: 0x12 / 255, alpha: 1)
-            view.nativeForegroundColor = NSColor(srgbRed: 0xD6 / 255, green: 0xD6 / 255, blue: 0xD6 / 255, alpha: 1)
-        } else {
-            view.nativeBackgroundColor = .white
-            view.nativeForegroundColor = NSColor(srgbRed: 0x3A / 255, green: 0x3A / 255, blue: 0x3A / 255, alpha: 1)
+        view.allowMouseReporting = mouseReporting
+        let background: NSColor = dark
+            ? NSColor(srgbRed: 0x10 / 255, green: 0x10 / 255, blue: 0x12 / 255, alpha: 1)
+            : .white
+        let foreground: NSColor = dark
+            ? NSColor(srgbRed: 0xD6 / 255, green: 0xD6 / 255, blue: 0xD6 / 255, alpha: 1)
+            : NSColor(srgbRed: 0x3A / 255, green: 0x3A / 255, blue: 0x3A / 255, alpha: 1)
+        if view.nativeBackgroundColor != background {
+            view.nativeBackgroundColor = background
+            view.nativeForegroundColor = foreground
+            view.needsDisplay = true
         }
     }
 

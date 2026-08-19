@@ -63,6 +63,7 @@ struct SettingsView: View {
 struct TerminalSettingsView: View {
     @AppStorage(TerminalDefaults.fontNameKey) private var fontName = ""
     @AppStorage(TerminalDefaults.fontSizeKey) private var fontSize = TerminalDefaults.defaultFontSize
+    @AppStorage("terminal.mouseReporting") private var mouseReporting = true
 
     private let families = TerminalDefaults.monospacedFamilies()
 
@@ -88,9 +89,19 @@ struct TerminalSettingsView: View {
                     .labelsHidden()
             }
 
+            Toggle(isOn: $mouseReporting) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Mouse reporting")
+                    Text("Forwards clicks and drags to TUI apps that ask for them. Turn off to always select text with the mouse — Shift-drag selects either way.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Button("Reset to Defaults") {
                 fontName = ""
                 fontSize = TerminalDefaults.defaultFontSize
+                mouseReporting = true
             }
 
             Section {
