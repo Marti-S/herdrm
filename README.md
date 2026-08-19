@@ -11,6 +11,9 @@
 
 ---
 
+> [!WARNING]
+> Early stage software without full test coverage — expect bugs. PRs are very welcome!
+
 ## What it does
 
 [herdr](https://herdr.dev) is the runtime your coding agents live on: a background
