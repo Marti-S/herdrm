@@ -24,20 +24,24 @@
 server that owns their terminals, keeps them running, and knows which one is
 working, blocked, or done. **herdrm** puts a native macOS window on top of it:
 
+- **All your devices, in parallel** — local herdr plus any number of remote
+  machines over SSH (the remote socket is forwarded through `ssh -L`, so
+  everything works identically). Every device stays connected with automatic
+  reconnect; the sidebar aggregates them all, with a tinted name chip marking
+  where each row lives, and the bottom-left switcher filters by device.
 - **Spaces & Agents sidebar** — every herdr workspace and every agent
   (claude, codex, gemini, grok, opencode, …) with live status: blocked agents
   bubble to the top, working ones spin, done ones get a check.
 - **Live terminal** — selecting an agent attaches directly to its PTY
   (`herdr agent attach`). Full TUI, precise cursor, no chat wrapper.
-- **Devices** — the bottom-left switcher jumps between your local herdr and
-  remote machines over SSH (the remote socket is forwarded through
-  `ssh -L`, so everything works identically). OS icons are sniffed
-  automatically; devices can be added, renamed, and removed in-app.
-- **New Agent** — starts an agent in any space. The picker only offers CLIs
-  actually installed on that device, and enables each agent's own
+- **Notifications** — a system notification when any agent on any device
+  finishes or needs your input; clicking it jumps straight to that agent.
+  Agents you're actively watching never notify.
+- **New Agent** — starts an agent in any space on any device. The picker only
+  offers CLIs actually installed on that device, and enables each agent's own
   bypass-permissions flag by default (e.g. `--dangerously-skip-permissions`
   for claude).
-- **Search** — ⌘K command palette across agents and spaces.
+- **Search** — ⌘K command palette across agents and spaces on every device.
 - **Light & dark**, auto-updates via Sparkle, signed and notarized.
 
 ## Requirements
