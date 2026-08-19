@@ -117,7 +117,8 @@ struct DetailView: View {
                     sidebarCollapsed = false
                 }
             }
-            if let agent = model.selectedAgent {
+            if let entry = model.selectedEntry {
+                let agent = entry.agent
                 statusGlyph(agent.status)
                 Text(agent.title)
                     .font(.system(size: 13, weight: .medium))
@@ -130,10 +131,13 @@ struct DetailView: View {
                 Text("·")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textGhost)
-                Text(spaceName(agent.workspaceID))
+                Text(model.spaceName(deviceID: entry.device.id, workspaceID: agent.workspaceID))
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
+                if model.showsDeviceBadges {
+                    DeviceChip(device: entry.device)
+                }
                 statusPill(agent.status)
             } else {
                 Text("No agent selected")
@@ -145,10 +149,6 @@ struct DetailView: View {
         .padding(.leading, sidebarCollapsed ? 10 : 14)
         .padding(.trailing, 12)
         .frame(height: TitlebarMetrics.height)
-    }
-
-    private func spaceName(_ workspaceID: String) -> String {
-        model.workspaces.first { $0.workspaceID == workspaceID }?.label ?? workspaceID
     }
 
     @ViewBuilder
@@ -196,14 +196,14 @@ struct DetailView: View {
 
     @ViewBuilder
     private var terminal: some View {
-        if let agent = model.selectedAgent {
+        if let entry = model.selectedEntry {
             AttachTerminalView(
-                device: model.activeDevice,
-                paneID: agent.paneID,
+                device: entry.device,
+                paneID: entry.agent.paneID,
                 fontName: terminalFontName,
                 fontSize: terminalFontSize
             )
-                .id("attach-\(model.activeDeviceID)-\(agent.paneID)")
+                .id("attach-\(entry.id)")
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -235,10 +235,10 @@ struct DetailView: View {
 
     private var placeholderText: String {
         switch model.connection {
-        case .connecting: return "Connecting to \(model.activeDevice.name)…"
+        case .connecting: return "Connecting…"
         case .failed(let reason): return reason
         default:
-            if model.selectedSpaceID != nil && model.visibleAgents.isEmpty {
+            if model.selectedSpace != nil && model.visibleAgents.isEmpty {
                 return "No agents in this space yet"
             }
             return "Select an agent, or start a new one"
@@ -343,24 +343,42 @@ struct SheetSectionLabel: View {
 struct NewSpaceSheet: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var deviceID = Device.local.id
     @State private var directory = "~"
     @State private var label = ""
+
+    private var chosenDevice: Device {
+        model.device(deviceID) ?? .local
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(
                 systemImage: "folder.badge.plus",
                 title: "New Space",
-                subtitle: "A herdr workspace rooted at a project directory on \(model.activeDevice.name)"
+                subtitle: "A herdr workspace rooted at a project directory on \(chosenDevice.name)"
             )
             Rectangle().fill(Theme.hairline).frame(height: 1)
 
             VStack(alignment: .leading, spacing: 8) {
+                if model.showsDeviceBadges {
+                    SheetSectionLabel("DEVICE")
+                    Picker("", selection: $deviceID) {
+                        ForEach(model.devices) { device in
+                            Text(device.name).tag(device.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+
+                    Spacer().frame(height: 8)
+                }
+
                 SheetSectionLabel("DIRECTORY")
                 HStack(spacing: 6) {
                     TextField("~/Projects/foo", text: $directory)
                         .textFieldStyle(.roundedBorder)
-                    if model.activeDevice.isLocal {
+                    if chosenDevice.isLocal {
                         Button("Browse…") {
                             let panel = NSOpenPanel()
                             panel.canChooseDirectories = true
@@ -372,8 +390,8 @@ struct NewSpaceSheet: View {
                         }
                     }
                 }
-                if !model.activeDevice.isLocal {
-                    Text("Path on \(model.activeDevice.name); ~ expands to its home directory")
+                if !chosenDevice.isLocal {
+                    Text("Path on \(chosenDevice.name); ~ expands to its home directory")
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.textTertiary)
                 }
@@ -393,7 +411,7 @@ struct NewSpaceSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Create Space") {
-                    model.createNewSpace(directory: directory, label: label)
+                    model.createNewSpace(device: chosenDevice, directory: directory, label: label)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
@@ -405,21 +423,33 @@ struct NewSpaceSheet: View {
             .padding(.vertical, 12)
         }
         .frame(width: 440)
+        .onAppear {
+            deviceID = model.deviceFilter ?? model.devices.first?.id ?? Device.local.id
+        }
     }
 }
 
 struct NewAgentSheet: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var deviceID = Device.local.id
     @State private var kind = "claude"
     @State private var workspaceID: String = ""
     @AppStorage("agent.bypassDefault") private var bypass = true
 
-    /// Only agents actually installed on the active device; falls back to the full
+    private var chosenDevice: Device {
+        model.device(deviceID) ?? .local
+    }
+
+    private var session: DeviceSessionState {
+        model.session(deviceID)
+    }
+
+    /// Only agents actually installed on the chosen device; falls back to the full
     /// manifest list if sniffing failed.
     private var kinds: [String] {
-        if !model.installedAgentKinds.isEmpty { return model.installedAgentKinds }
-        return model.agentKinds.isEmpty ? ["claude", "codex", "gemini", "opencode", "grok"] : model.agentKinds
+        if !session.installedAgentKinds.isEmpty { return session.installedAgentKinds }
+        return session.agentKinds.isEmpty ? ["claude", "codex", "gemini", "opencode", "grok"] : session.agentKinds
     }
 
     private var bypassFlags: [String]? {
@@ -428,7 +458,7 @@ struct NewAgentSheet: View {
 
     private var spaceLabel: String {
         if workspaceID.isEmpty { return "the focused space" }
-        return model.workspaces.first { $0.workspaceID == workspaceID }?.label ?? workspaceID
+        return session.workspaces.first { $0.workspaceID == workspaceID }?.label ?? workspaceID
     }
 
     var body: some View {
@@ -441,6 +471,23 @@ struct NewAgentSheet: View {
             Rectangle().fill(Theme.hairline).frame(height: 1)
 
             VStack(alignment: .leading, spacing: 8) {
+                if model.showsDeviceBadges {
+                    SheetSectionLabel("DEVICE")
+                    Picker("", selection: $deviceID) {
+                        ForEach(model.devices) { device in
+                            Text(device.name).tag(device.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .onChange(of: deviceID) { _, _ in
+                        workspaceID = ""
+                        if !kinds.contains(kind) { kind = kinds.first ?? "claude" }
+                    }
+
+                    Spacer().frame(height: 8)
+                }
+
                 SheetSectionLabel("AGENT")
                 ScrollView {
                     LazyVGrid(
@@ -460,7 +507,7 @@ struct NewAgentSheet: View {
                 SheetSectionLabel("SPACE")
                 Picker("", selection: $workspaceID) {
                     Text("Focused space").tag("")
-                    ForEach(model.workspaces) { workspace in
+                    ForEach(session.workspaces) { workspace in
                         Text(workspace.label).tag(workspace.workspaceID)
                     }
                 }
@@ -496,6 +543,7 @@ struct NewAgentSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Start Agent") {
                     model.startNewAgent(
+                        device: chosenDevice,
                         kind: kind,
                         workspaceID: workspaceID.isEmpty ? nil : workspaceID,
                         bypass: bypass && bypassFlags != nil
@@ -511,7 +559,13 @@ struct NewAgentSheet: View {
         }
         .frame(width: 480)
         .onAppear {
-            workspaceID = model.selectedSpaceID ?? ""
+            deviceID = model.selectedSpace?.deviceID
+                ?? model.deviceFilter
+                ?? model.devices.first?.id
+                ?? Device.local.id
+            workspaceID = model.selectedSpace?.deviceID == deviceID
+                ? (model.selectedSpace?.workspaceID ?? "")
+                : ""
             if !kinds.contains(kind) { kind = kinds.first ?? "claude" }
         }
     }

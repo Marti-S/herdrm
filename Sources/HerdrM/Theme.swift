@@ -42,6 +42,22 @@ enum Theme {
     static let sidebarBorder = dynamic(hex(0xD9D9D9), hex(0x292929))
     static let hairline = dynamic(hex(0x000000, alpha: 0.08), hex(0xFFFFFF, alpha: 0.06))
 
+    /// Distinct tints for device chips (deliberately avoids the status colors).
+    static let devicePalette: [Color] = [
+        dynamic(hex(0x7C3AED), hex(0x8B5CF6)),  // violet
+        dynamic(hex(0x0D9488), hex(0x14B8A6)),  // teal
+        dynamic(hex(0xBE185D), hex(0xEC4899)),  // magenta
+        dynamic(hex(0x4338CA), hex(0x818CF8)),  // indigo
+        dynamic(hex(0x92640C), hex(0xC9964A)),  // bronze
+    ]
+
+    /// Stable per-device tint; Local stays neutral.
+    static func deviceTint(_ device: Device) -> Color {
+        if device.isLocal { return textSecondary }
+        let sum = device.id.uuidString.utf8.reduce(0) { $0 &+ Int($1) }
+        return devicePalette[sum % devicePalette.count]
+    }
+
     static func statusColor(_ status: AgentStatus) -> Color {
         switch status {
         case .working: return working

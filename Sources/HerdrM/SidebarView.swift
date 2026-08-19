@@ -72,13 +72,12 @@ struct SidebarView: View {
                     }
                     .padding(.horizontal, 8)
                     .frame(height: 28)
-                    spaceRow(id: nil, name: "All Spaces", count: model.agents.count)
-                    ForEach(model.workspaces) { workspace in
-                        spaceRow(id: workspace.workspaceID, name: workspace.label,
-                                 count: model.agentCount(inSpace: workspace.workspaceID))
+                    allSpacesRow
+                    ForEach(model.visibleSpaces) { entry in
+                        spaceRow(entry)
                             .contextMenu {
-                                Button("Close Space \"\(workspace.label)\"…", role: .destructive) {
-                                    model.requestCloseSpace(workspace)
+                                Button("Close Space \"\(entry.workspace.label)\"…", role: .destructive) {
+                                    model.requestCloseSpace(entry)
                                 }
                             }
                     }
@@ -93,11 +92,11 @@ struct SidebarView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(8)
                     }
-                    ForEach(model.visibleAgents) { agent in
-                        agentRow(agent)
+                    ForEach(model.visibleAgents) { entry in
+                        agentRow(entry)
                             .contextMenu {
                                 Button("Close Agent…", role: .destructive) {
-                                    model.requestClosePane(agent.paneID, name: agent.title)
+                                    model.requestClosePane(entry.ref, name: entry.agent.title)
                                 }
                             }
                     }
@@ -155,20 +154,20 @@ struct SidebarView: View {
         .frame(height: 28)
     }
 
-    private func spaceRow(id: String?, name: String, count: Int) -> some View {
-        let selected = model.selectedSpaceID == id
+    private var allSpacesRow: some View {
+        let selected = model.selectedSpace == nil
         return Button {
-            model.selectSpace(id)
+            model.selectSpace(nil)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: id == nil ? "square.grid.2x2" : "folder")
+                Image(systemName: "square.grid.2x2")
                     .font(.system(size: 11.5))
                     .foregroundStyle(selected ? Theme.textSecondary : Theme.textTertiary)
-                Text(name)
+                Text("All Spaces")
                     .font(.system(size: 13))
                     .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
                 Spacer()
-                Text("\(count)")
+                Text("\(model.scopeAgentCount)")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.textGhost)
             }
@@ -179,10 +178,39 @@ struct SidebarView: View {
         .buttonStyle(SidebarRowButtonStyle(selected: selected))
     }
 
-    private func agentRow(_ agent: AgentInfo) -> some View {
-        let selected = model.selectedPaneID == agent.paneID
+    private func spaceRow(_ entry: AppModel.SpaceEntry) -> some View {
+        let selected = model.selectedSpace == entry.ref
         return Button {
-            model.selectedPaneID = agent.paneID
+            model.selectSpace(entry.ref)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(selected ? Theme.textSecondary : Theme.textTertiary)
+                Text(entry.workspace.label)
+                    .font(.system(size: 13))
+                    .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
+                    .lineLimit(1)
+                Spacer()
+                if model.showsDeviceBadges {
+                    deviceBadge(entry.device)
+                }
+                Text("\(model.agentCount(in: entry))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textGhost)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarRowButtonStyle(selected: selected))
+    }
+
+    private func agentRow(_ entry: AppModel.AgentEntry) -> some View {
+        let agent = entry.agent
+        let selected = model.selectedPane == entry.ref
+        return Button {
+            model.selectedPane = entry.ref
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -201,12 +229,15 @@ struct SidebarView: View {
                     Image(systemName: "folder")
                         .font(.system(size: 9.5))
                         .foregroundStyle(Theme.textTertiary)
-                    Text(spaceName(agent.workspaceID))
+                    Text(model.spaceName(deviceID: entry.device.id, workspaceID: agent.workspaceID))
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     trailingDetail(agent)
+                    if model.showsDeviceBadges {
+                        deviceBadge(entry.device)
+                    }
                 }
             }
             .padding(.horizontal, 8)
@@ -215,6 +246,11 @@ struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(SidebarRowButtonStyle(selected: selected))
+    }
+
+    /// Tinted name chip marking which device a row belongs to.
+    private func deviceBadge(_ device: Device) -> some View {
+        DeviceChip(device: device)
     }
 
     @ViewBuilder
@@ -245,11 +281,7 @@ struct SidebarView: View {
         }
     }
 
-    private func spaceName(_ workspaceID: String) -> String {
-        model.workspaces.first { $0.workspaceID == workspaceID }?.label ?? workspaceID
-    }
-
-    // MARK: - Footer (device switcher)
+    // MARK: - Footer (device filter)
 
     private var footer: some View {
         HStack(spacing: 6) {
@@ -257,9 +289,15 @@ struct SidebarView: View {
                 model.showDevicePanel.toggle()
             } label: {
                 HStack(spacing: 6) {
-                    DeviceIcon(osID: model.activeDevice.osID, isLocal: model.activeDevice.isLocal, size: 10)
-                        .foregroundStyle(Theme.textSecondary)
-                    Text(model.activeDevice.name)
+                    if let device = model.filteredDevice {
+                        DeviceIcon(osID: device.osID, isLocal: device.isLocal, size: 10)
+                            .foregroundStyle(Theme.textSecondary)
+                    } else {
+                        Image(systemName: "square.stack.3d.up")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Text(model.filteredDevice?.name ?? "All Devices")
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(Theme.text)
                     Circle()
@@ -352,14 +390,57 @@ struct DevicePopover: View {
                 .padding(.horizontal, 9)
                 .frame(height: 24, alignment: .leading)
 
+            // aggregate view across every connected device
+            Button {
+                isPresented = false
+                model.setDeviceFilter(nil)
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.system(size: 13))
+                        .foregroundStyle(model.deviceFilter == nil ? Theme.text : Theme.textSecondary)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("All Devices")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.text)
+                        Text("\(model.devices.count) devices · \(connectedCount) connected")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    Spacer(minLength: 0)
+                    if model.deviceFilter == nil {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Theme.text)
+                    }
+                }
+                .padding(.horizontal, 9)
+                .frame(height: 42)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(SidebarRowButtonStyle(selected: model.deviceFilter == nil))
+
             ForEach(model.devices) { device in
                 DevicePopoverRow(
                     device: device,
-                    isActive: device.id == model.activeDeviceID,
-                    isConnected: device.id == model.activeDeviceID && isConnectedState
+                    isActive: device.id == model.deviceFilter,
+                    connection: model.session(device.id).connection
                 ) {
                     isPresented = false
-                    model.switchDevice(device)
+                    model.setDeviceFilter(device.id)
+                }
+                .contextMenu {
+                    if !device.isLocal {
+                        Button("Edit \(device.name)…") {
+                            isPresented = false
+                            model.deviceToEdit = device
+                        }
+                        Button("Remove \(device.name)", role: .destructive) {
+                            isPresented = false
+                            model.removeDevice(device)
+                        }
+                    }
                 }
             }
 
@@ -373,16 +454,6 @@ struct DevicePopover: View {
                 isPresented = false
                 model.showAddDevice = true
             }
-            if !model.activeDevice.isLocal {
-                actionRow(icon: "pencil", label: "Edit \(model.activeDevice.name)…") {
-                    isPresented = false
-                    model.deviceToEdit = model.activeDevice
-                }
-                actionRow(icon: "minus.circle", label: "Remove \(model.activeDevice.name)") {
-                    isPresented = false
-                    model.removeDevice(model.activeDevice)
-                }
-            }
         }
         .padding(5)
         .frame(width: 252)
@@ -394,9 +465,11 @@ struct DevicePopover: View {
         .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
     }
 
-    private var isConnectedState: Bool {
-        if case .connected = model.connection { return true }
-        return false
+    private var connectedCount: Int {
+        model.devices.filter {
+            if case .connected = model.session($0.id).connection { return true }
+            return false
+        }.count
     }
 
     private func actionRow(icon: String, label: String, action: @escaping () -> Void) -> some View {
@@ -422,9 +495,18 @@ struct DevicePopover: View {
 struct DevicePopoverRow: View {
     let device: Device
     let isActive: Bool
-    let isConnected: Bool
+    let connection: ConnectionState
     let action: () -> Void
     @State private var hovered = false
+
+    private var dotColor: Color {
+        switch connection {
+        case .connected: return Theme.success
+        case .connecting: return Theme.warning
+        case .failed: return Theme.danger
+        case .idle: return Theme.textGhost
+        }
+    }
 
     var body: some View {
         Button(action: action) {
@@ -438,9 +520,7 @@ struct DevicePopoverRow: View {
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.text)
                         Circle()
-                            .fill(isActive
-                                  ? (isConnected ? Theme.success : Theme.warning)
-                                  : Theme.textGhost)
+                            .fill(dotColor)
                             .frame(width: 6, height: 6)
                     }
                     Text(device.subtitle)

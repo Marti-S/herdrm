@@ -1,4 +1,5 @@
 import AppKit
+import HerdrKit
 import SwiftUI
 
 /// Renders a bundled mono SVG brand icon (LobeHub agent icons, Simple Icons OS icons)
@@ -122,6 +123,31 @@ struct AgentKindBadge: View {
                 .font(.system(size: fontSize))
                 .foregroundStyle(color)
         }
+    }
+}
+
+/// Small tinted chip naming the device a row belongs to. Each device gets a
+/// stable distinct color, so identical OS icons (two Macs) stay tellable apart.
+struct DeviceChip: View {
+    let device: Device
+
+    private var shortName: String {
+        device.name.count > 12 ? String(device.name.prefix(11)) + "…" : device.name
+    }
+
+    var body: some View {
+        let tint = Theme.deviceTint(device)
+        HStack(spacing: 3) {
+            DeviceIcon(osID: device.osID, isLocal: device.isLocal, size: 8)
+            Text(shortName)
+                .font(.system(size: 9, weight: .medium))
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 4)
+        .frame(height: 15)
+        .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 4))
+        .fixedSize()
+        .help(device.name)
     }
 }
 

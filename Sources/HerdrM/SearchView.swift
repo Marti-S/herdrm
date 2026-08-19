@@ -1,7 +1,7 @@
 import HerdrKit
 import SwiftUI
 
-/// Command-palette style search over agents and spaces (⌘K).
+/// Command-palette style search over agents and spaces across all devices (⌘K).
 struct SearchSheet: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -10,27 +10,35 @@ struct SearchSheet: View {
     @FocusState private var fieldFocused: Bool
 
     enum Result: Identifiable {
-        case agent(AgentInfo)
-        case space(WorkspaceInfo)
+        case agent(AppModel.AgentEntry)
+        case space(AppModel.SpaceEntry)
 
         var id: String {
             switch self {
-            case .agent(let agent): return "agent-\(agent.paneID)"
-            case .space(let workspace): return "space-\(workspace.workspaceID)"
+            case .agent(let entry): return "agent-\(entry.id)"
+            case .space(let entry): return "space-\(entry.id)"
             }
         }
     }
 
     private var results: [Result] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let agents = model.agents.filter { agent in
+        let agents = model.devices.flatMap { device in
+            model.session(device.id).agents.map { AppModel.AgentEntry(device: device, agent: $0) }
+        }.filter { entry in
             q.isEmpty
-                || agent.title.lowercased().contains(q)
-                || agent.agent.lowercased().contains(q)
-                || spaceName(agent.workspaceID).lowercased().contains(q)
+                || entry.agent.title.lowercased().contains(q)
+                || entry.agent.agent.lowercased().contains(q)
+                || entry.device.name.lowercased().contains(q)
+                || model.spaceName(deviceID: entry.device.id, workspaceID: entry.agent.workspaceID)
+                    .lowercased().contains(q)
         }
-        let spaces = model.workspaces.filter { workspace in
-            q.isEmpty || workspace.label.lowercased().contains(q)
+        let spaces = model.devices.flatMap { device in
+            model.session(device.id).workspaces.map { AppModel.SpaceEntry(device: device, workspace: $0) }
+        }.filter { entry in
+            q.isEmpty
+                || entry.workspace.label.lowercased().contains(q)
+                || entry.device.name.lowercased().contains(q)
         }
         return agents.map(Result.agent) + spaces.map(Result.space)
     }
@@ -83,6 +91,7 @@ struct SearchSheet: View {
                 }
                 .frame(maxHeight: 320)
             }
+
             Rectangle().fill(Theme.hairline).frame(height: 1)
 
             HStack(spacing: 12) {
@@ -117,8 +126,8 @@ struct SearchSheet: View {
     private func row(_ result: Result, isHighlighted: Bool) -> some View {
         HStack(spacing: 9) {
             switch result {
-            case .agent(let agent):
-                if let resource = BrandIconLoader.agentIcon(for: agent.agent) {
+            case .agent(let entry):
+                if let resource = BrandIconLoader.agentIcon(for: entry.agent.agent) {
                     BrandIcon(resource: resource, size: 13)
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: 16)
@@ -128,28 +137,26 @@ struct SearchSheet: View {
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: 16)
                 }
-                Text(agent.title)
+                Text(entry.agent.title)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text("\(agent.agent) · \(spaceName(agent.workspaceID))")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.textTertiary)
-                    .lineLimit(1)
-            case .space(let workspace):
+                trailing(
+                    "\(entry.agent.agent) · \(model.spaceName(deviceID: entry.device.id, workspaceID: entry.agent.workspaceID))",
+                    device: entry.device
+                )
+            case .space(let entry):
                 Image(systemName: "folder")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textSecondary)
                     .frame(width: 16)
-                Text(workspace.label)
+                Text(entry.workspace.label)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text("Space · \(model.agentCount(inSpace: workspace.workspaceID)) agents")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.textTertiary)
+                trailing("Space · \(model.agentCount(in: entry)) agents", device: entry.device)
             }
         }
         .padding(.horizontal, 10)
@@ -161,6 +168,19 @@ struct SearchSheet: View {
         .contentShape(Rectangle())
     }
 
+    @ViewBuilder
+    private func trailing(_ text: String, device: Device) -> some View {
+        HStack(spacing: 5) {
+            Text(text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.textTertiary)
+                .lineLimit(1)
+            if model.showsDeviceBadges {
+                DeviceChip(device: device)
+            }
+        }
+    }
+
     private func chooseHighlighted() {
         guard results.indices.contains(highlighted) else { return }
         choose(results[highlighted])
@@ -168,18 +188,14 @@ struct SearchSheet: View {
 
     private func choose(_ result: Result) {
         switch result {
-        case .agent(let agent):
-            if model.selectedSpaceID != nil && model.selectedSpaceID != agent.workspaceID {
-                model.selectedSpaceID = agent.workspaceID
+        case .agent(let entry):
+            model.reveal(entry.ref)
+        case .space(let entry):
+            if let filter = model.deviceFilter, filter != entry.device.id {
+                model.setDeviceFilter(nil)
             }
-            model.selectedPaneID = agent.paneID
-        case .space(let workspace):
-            model.selectSpace(workspace.workspaceID)
+            model.selectSpace(entry.ref)
         }
         dismiss()
-    }
-
-    private func spaceName(_ workspaceID: String) -> String {
-        model.workspaces.first { $0.workspaceID == workspaceID }?.label ?? workspaceID
     }
 }

@@ -63,13 +63,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         DispatchQueue.main.async { [weak self] in
             NSApp.activate(ignoringOtherApps: true)
             guard let model = self?.model, let paneID, let deviceID else { return }
-            if deviceID == model.activeDeviceID {
-                model.selectedSpaceID = nil
-                model.selectedPaneID = paneID
-            } else if let device = model.devices.first(where: { $0.id == deviceID }) {
-                model.pendingSelectPaneID = paneID
-                model.switchDevice(device)
-            }
+            model.reveal(PaneRef(deviceID: deviceID, paneID: paneID))
         }
         completionHandler()
     }
