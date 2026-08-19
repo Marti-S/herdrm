@@ -225,6 +225,11 @@ final class AppModel: ObservableObject {
                     let pong = try await service.connect()
                     self.sessions[device.id]?.connection = .connected(version: pong.version)
                     backoff = 1
+                    // retried on every successful connect until it sticks (a fresh
+                    // device's first probes can fail before its host key is known)
+                    if let current = self.device(device.id) {
+                        self.probeOSIfNeeded(current)
+                    }
                     await self.refresh(device.id)
                     if self.sessions[device.id]?.agentKinds.isEmpty ?? true {
                         let kinds = (try? await service.agentKinds()) ?? []

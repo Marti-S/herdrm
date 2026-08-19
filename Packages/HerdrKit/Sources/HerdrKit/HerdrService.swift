@@ -256,7 +256,12 @@ public actor HerdrService {
             return ("/bin/sh", ["-c", local])
         case .ssh(let target):
             let remote = "\(SSHTunnel.remotePathExport); exec herdr agent attach '\(paneID)' --takeover"
-            return ("/usr/bin/ssh", ["-tt", "-o", "BatchMode=yes", target, remote])
+            return ("/usr/bin/ssh", [
+                "-tt",
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=accept-new",
+                target, remote,
+            ])
         }
     }
 }

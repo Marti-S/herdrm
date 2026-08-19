@@ -7,6 +7,12 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- OS detection for newly added devices now retries on every successful
+  connection instead of only once at add time, and SSH auto-accepts unknown
+  host keys (`accept-new`) so a fresh device's first connection no longer
+  fails before you've ssh'd to it manually.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

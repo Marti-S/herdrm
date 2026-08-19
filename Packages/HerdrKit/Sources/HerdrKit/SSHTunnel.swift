@@ -63,6 +63,7 @@ public actor SSHTunnel {
         proc.arguments = [
             "-N",
             "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=10",
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=15",
@@ -118,7 +119,12 @@ public actor SSHTunnel {
             DispatchQueue.global(qos: .userInitiated).async {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-                proc.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", target, command]
+                proc.arguments = [
+                    "-o", "BatchMode=yes",
+                    "-o", "StrictHostKeyChecking=accept-new",
+                    "-o", "ConnectTimeout=8",
+                    target, command,
+                ]
                 let out = Pipe()
                 proc.standardOutput = out
                 proc.standardError = FileHandle.nullDevice
