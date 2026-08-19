@@ -61,6 +61,46 @@ final class LocalSocketTests: XCTestCase {
         XCTAssertEqual(AgentStatus(wire: nil), .unknown)
     }
 
+    func testOnlyPaneBusyErrorsAreRetryable() {
+        XCTAssertTrue(HerdrService.isPaneBusy(.rpc(code: "agent_pane_busy", message: "busy")))
+        XCTAssertFalse(HerdrService.isPaneBusy(.rpc(code: "agent_name_taken", message: "taken")))
+        XCTAssertFalse(HerdrService.isPaneBusy(.rpc(code: "agent_pane_unavailable", message: "gone")))
+        XCTAssertFalse(HerdrService.isPaneBusy(.connectionFailed("dropped")))
+    }
+
+    func testShellInitializationProcessInfoRequiresThePaneShellInForeground() {
+        let initializing: JSONValue = .object([
+            "shell_pid": .number(42),
+            "foreground_process_group_id": .number(42),
+            "foreground_processes": .array([
+                .object([
+                    "pid": .number(42),
+                    "name": .string("-zsh"),
+                    "argv": .array([.string("/bin/zsh")]),
+                ]),
+            ]),
+        ])
+        XCTAssertTrue(HerdrService.processInfoShowsShellInitialization(initializing))
+
+        let busy: JSONValue = .object([
+            "shell_pid": .number(42),
+            "foreground_process_group_id": .number(99),
+            "foreground_processes": .array([
+                .object(["pid": .number(99), "name": .string("vim")]),
+            ]),
+        ])
+        XCTAssertFalse(HerdrService.processInfoShowsShellInitialization(busy))
+
+        let replacedShell: JSONValue = .object([
+            "shell_pid": .number(42),
+            "foreground_process_group_id": .number(42),
+            "foreground_processes": .array([
+                .object(["pid": .number(42), "name": .string("opencode")]),
+            ]),
+        ])
+        XCTAssertFalse(HerdrService.processInfoShowsShellInitialization(replacedShell))
+    }
+
     func testEventStreamDeliversTabLifecycle() async throws {
         try requireLocalHerdr()
         let service = HerdrService(device: .local)

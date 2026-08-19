@@ -48,7 +48,8 @@ working, blocked, or done. **herdrm** puts a native macOS window on top of it:
 
 - macOS 14+
 - [herdr](https://herdr.dev) running locally and/or on your remote machines
-- For remote devices: SSH key access (herdrm uses your local keys/agent)
+- For remote devices: OpenSSH access through your SSH config/agent, Tailscale
+  SSH, or a password stored in the macOS login Keychain
 
 ## Install
 

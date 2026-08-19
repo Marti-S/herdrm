@@ -49,4 +49,43 @@ final class RemoteSSHTests: XCTestCase {
         }
         await service.disconnect()
     }
+
+    func testForwardedSocketStartsAgentInNewPane() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let socketPath = environment["HERDRM_E2E_SOCKET_PATH"] else {
+            throw XCTSkip("HERDRM_E2E_SOCKET_PATH not set")
+        }
+        let kind = environment["HERDRM_E2E_AGENT_KIND"] ?? "claude"
+        let device = Device(
+            name: "e2e-forwarded",
+            kind: .local,
+            socketPath: socketPath
+        )
+        let service = HerdrService(device: device)
+        _ = try await service.connect()
+
+        var paneID: String?
+        do {
+            let pane = try await service.createTab(workspaceID: nil, cwd: nil, label: "herdrm-e2e")
+            paneID = pane
+            let name = "herdrm-e2e-\(UUID().uuidString.prefix(6).lowercased())"
+            try await service.startAgent(
+                name: name,
+                kind: kind,
+                paneID: pane,
+                waitForShell: true
+            )
+            let agents = try await service.agents()
+            XCTAssertTrue(
+                agents.contains { $0.paneID == pane },
+                "started agent did not appear in agent.list"
+            )
+            try await service.closePane(paneID: pane)
+            paneID = nil
+        } catch {
+            if let paneID { try? await service.closePane(paneID: paneID) }
+            throw error
+        }
+        await service.disconnect()
+    }
 }

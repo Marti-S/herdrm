@@ -30,6 +30,13 @@ struct DeviceSessionState {
     var installedAgentKinds: [String] = []
 }
 
+struct SSHAuthenticationRequest: Identifiable {
+    let deviceID: UUID
+    let target: String
+
+    var id: UUID { deviceID }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var devices: [Device]
@@ -46,6 +53,7 @@ final class AppModel: ObservableObject {
     /// In-window device panel (NSPopover crashes in ViewBridge on macOS 26+ betas).
     @Published var showDevicePanel = false
     @Published var deviceToEdit: Device?
+    @Published var sshAuthenticationRequest: SSHAuthenticationRequest?
     @Published var spaceToRename: SpaceEntry?
     /// Transient action failures: shown as an alert, never by tearing down sessions.
     @Published var actionError: String?
@@ -244,6 +252,13 @@ final class AppModel: ObservableObject {
                     }
                 } catch {
                     self.sessions[device.id]?.connection = .failed(error.localizedDescription)
+                    if let target = device.sshTarget, Self.isSSHAuthenticationFailure(error) {
+                        self.sshAuthenticationRequest = SSHAuthenticationRequest(
+                            deviceID: device.id,
+                            target: target
+                        )
+                        return
+                    }
                 }
                 guard !Task.isCancelled else { return }
                 try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
@@ -273,12 +288,53 @@ final class AppModel: ObservableObject {
         setDeviceFilter(device.id)
     }
 
+    func saveSSHPassword(_ password: String, for request: SSHAuthenticationRequest) {
+        guard !password.isEmpty,
+              let device = device(request.deviceID),
+              device.sshTarget == request.target
+        else { return }
+        do {
+            try SSHCredentialStore.setPassword(password, for: device.id)
+            sshAuthenticationRequest = nil
+            stopSession(device.id)
+            startSession(device)
+            probeOSIfNeeded(device)
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    /// Leaves the device disconnected but recoverable; the reconnect loop stopped at the prompt.
+    func cancelSSHAuthentication(for request: SSHAuthenticationRequest) {
+        sshAuthenticationRequest = nil
+        sessions[request.deviceID]?.connection =
+            .failed("Authentication cancelled — choose Reconnect to try again")
+    }
+
+    var hasReconnectableDevice: Bool {
+        devicesInScope.contains { isFailed($0.id) }
+    }
+
+    func reconnectFailedDevices() {
+        for device in devicesInScope where isFailed(device.id) {
+            stopSession(device.id)
+            startSession(device)
+            probeOSIfNeeded(device)
+        }
+    }
+
+    private func isFailed(_ deviceID: UUID) -> Bool {
+        if case .failed = session(deviceID).connection { return true }
+        return false
+    }
+
     /// Renames a device and/or updates its SSH target (e.g. after an IP change).
     func updateDevice(_ id: UUID, name: String, sshTarget: String) {
         guard let index = devices.firstIndex(where: { $0.id == id }), !devices[index].isLocal else { return }
         let targetChanged = devices[index].sshTarget != sshTarget
         devices[index].name = name
         if targetChanged {
+            removeSSHPassword(for: id)
             devices[index].kind = .ssh(target: sshTarget)
             devices[index].osID = nil
             stopSession(id)
@@ -290,6 +346,8 @@ final class AppModel: ObservableObject {
 
     func removeDevice(_ device: Device) {
         guard !device.isLocal else { return }
+        removeSSHPassword(for: device.id)
+        if sshAuthenticationRequest?.deviceID == device.id { sshAuthenticationRequest = nil }
         stopSession(device.id)
         devices.removeAll { $0.id == device.id }
         store.save(devices)
@@ -367,11 +425,34 @@ final class AppModel: ObservableObject {
     private func probeOSIfNeeded(_ device: Device) {
         guard device.osID == nil, let target = device.sshTarget else { return }
         Task {
-            guard let os = try? await SSHTunnel.probeOS(target: target) else { return }
+            guard let os = try? await SSHTunnel.probeOS(
+                target: target,
+                credentialID: device.id
+            ) else { return }
             if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
                 self.devices[index].osID = os
                 self.store.save(self.devices)
             }
+        }
+    }
+
+    private static func isSSHAuthenticationFailure(_ error: Error) -> Bool {
+        guard let herdrError = error as? HerdrError,
+              case .tunnelFailed(let reason) = herdrError
+        else { return false }
+        return [
+            "permission denied",
+            "authentication failed",
+            "too many authentication failures",
+            "no supported authentication methods",
+        ].contains { reason.localizedCaseInsensitiveContains($0) }
+    }
+
+    private func removeSSHPassword(for deviceID: UUID) {
+        do {
+            try SSHCredentialStore.removePassword(for: deviceID)
+        } catch {
+            actionError = error.localizedDescription
         }
     }
 
@@ -471,10 +552,22 @@ final class AppModel: ObservableObject {
                 let pane = try await service.createTab(workspaceID: workspaceID, cwd: nil, label: kind)
                 createdPane = pane
                 do {
-                    try await service.startAgent(name: kind, kind: kind, paneID: pane, args: args)
+                    try await service.startAgent(
+                        name: kind,
+                        kind: kind,
+                        paneID: pane,
+                        args: args,
+                        waitForShell: true
+                    )
                 } catch HerdrError.rpc(let code, _) where code == "agent_name_taken" {
                     let suffix = String(UUID().uuidString.prefix(4)).lowercased()
-                    try await service.startAgent(name: "\(kind)-\(suffix)", kind: kind, paneID: pane, args: args)
+                    try await service.startAgent(
+                        name: "\(kind)-\(suffix)",
+                        kind: kind,
+                        paneID: pane,
+                        args: args,
+                        waitForShell: true
+                    )
                 }
                 await refresh(device.id)
                 selectedPane = PaneRef(deviceID: device.id, paneID: pane)

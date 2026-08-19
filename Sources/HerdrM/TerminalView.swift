@@ -48,6 +48,12 @@ struct AttachTerminalView: NSViewRepresentable {
         let command = service.attachCommand(paneID: paneID)
         var environment = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         environment.append("LANG=en_US.UTF-8")
+        for (key, value) in command.environment {
+            environment.removeAll { $0.hasPrefix("\(key)=") }
+            environment.append("\(key)=\(value)")
+        }
+        context.coordinator.authorizationID = command.authorizationID
+        context.coordinator.scheduleAuthorizationCleanup()
         view.startProcess(
             executable: command.executable,
             args: command.args,
@@ -80,9 +86,29 @@ struct AttachTerminalView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
+        var authorizationID: UUID?
+
+        deinit {
+            discardAuthorization()
+        }
+
+        func scheduleAuthorizationCleanup() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                self?.discardAuthorization()
+            }
+        }
+
+        private func discardAuthorization() {
+            guard let authorizationID else { return }
+            try? SSHCredentialStore.removeAuthorization(authorizationID)
+            self.authorizationID = nil
+        }
+
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
         func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-        func processTerminated(source: TerminalView, exitCode: Int32?) {}
+        func processTerminated(source: TerminalView, exitCode: Int32?) {
+            discardAuthorization()
+        }
     }
 }

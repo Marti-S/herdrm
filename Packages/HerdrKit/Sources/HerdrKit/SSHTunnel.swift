@@ -1,11 +1,23 @@
 import Foundation
 
+struct SSHAuthenticationConfiguration {
+    let arguments: [String]
+    let environment: [String: String]
+    let authorizationID: UUID?
+
+    func discardAuthorization() {
+        guard let authorizationID else { return }
+        try? SSHCredentialStore.removeAuthorization(authorizationID)
+    }
+}
+
 /// Forwards a remote herdr Unix socket to a local one using the system OpenSSH client
 /// (`ssh -N -L local.sock:remote.sock target`), so remote devices reuse SocketRPC as-is.
-/// Auth relies on the user's local SSH keys/agent (BatchMode; no password prompts).
+/// Auth uses OpenSSH config/agent/Tailscale SSH, with Keychain-backed askpass as a fallback.
 public actor SSHTunnel {
     public let target: String
     public private(set) var localSocketPath: String?
+    private let credentialID: UUID?
     private var process: Process?
     private var remoteHome: String?
 
@@ -13,8 +25,9 @@ public actor SSHTunnel {
     public static let remotePathExport =
         "export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\""
 
-    public init(target: String) {
+    public init(target: String, credentialID: UUID? = nil) {
         self.target = target
+        self.credentialID = credentialID
     }
 
     deinit {
@@ -26,7 +39,12 @@ public actor SSHTunnel {
     /// Resolves the remote $HOME once; also proves SSH reachability.
     public func probeRemoteHome() async throws -> String {
         if let remoteHome { return remoteHome }
-        let output = try await Self.runSSH(target: target, command: "echo \"$HOME\"", timeout: 12)
+        let output = try await Self.runSSH(
+            target: target,
+            command: "echo \"$HOME\"",
+            timeout: 12,
+            credentialID: credentialID
+        )
         let home = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard home.hasPrefix("/") else {
             throw HerdrError.tunnelFailed("could not resolve remote home (got: \(output))")
@@ -60,9 +78,9 @@ public actor SSHTunnel {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = [
-            "-N",
-            "-o", "BatchMode=yes",
+        let authentication = Self.authenticationConfiguration(for: credentialID)
+        defer { authentication.discardAuthorization() }
+        proc.arguments = ["-N"] + authentication.arguments + [
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=10",
             "-o", "ExitOnForwardFailure=yes",
@@ -71,8 +89,10 @@ public actor SSHTunnel {
             "-L", "\(localSock):\(remoteSock)",
             target,
         ]
+        proc.environment = ProcessInfo.processInfo.environment.merging(authentication.environment) { _, new in new }
+        let errorOutput = Pipe()
         proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
+        proc.standardError = errorOutput
         try proc.run()
         process = proc
 
@@ -83,7 +103,8 @@ public actor SSHTunnel {
                 return localSock
             }
             if !proc.isRunning {
-                throw HerdrError.tunnelFailed("ssh exited with status \(proc.terminationStatus)")
+                let errorData = errorOutput.fileHandleForReading.readDataToEndOfFile()
+                throw HerdrError.tunnelFailed(Self.failureReason(status: proc.terminationStatus, stderr: errorData))
             }
             try await Task.sleep(nanoseconds: 250_000_000)
         }
@@ -101,11 +122,16 @@ public actor SSHTunnel {
     }
 
     /// Sniffs the remote OS: "macos", an os-release ID like "ubuntu"/"debian", or a uname fallback.
-    public static func probeOS(target: String) async throws -> String {
+    public static func probeOS(target: String, credentialID: UUID? = nil) async throws -> String {
         let command = """
         case "$(uname -s)" in Darwin) echo macos;; Linux) . /etc/os-release 2>/dev/null; echo "${ID:-linux}";; *) uname -s | tr '[:upper:]' '[:lower:]';; esac
         """
-        let output = try await runSSH(target: target, command: command, timeout: 10)
+        let output = try await runSSH(
+            target: target,
+            command: command,
+            timeout: 10,
+            credentialID: credentialID
+        )
         let os = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !os.isEmpty else { throw HerdrError.tunnelFailed("empty OS probe result") }
         return os
@@ -114,20 +140,29 @@ public actor SSHTunnel {
     // MARK: - One-shot exec
 
     /// Runs a command on the remote host and returns stdout. Used for probes.
-    public static func runSSH(target: String, command: String, timeout: TimeInterval) async throws -> String {
+    public static func runSSH(
+        target: String,
+        command: String,
+        timeout: TimeInterval,
+        credentialID: UUID? = nil
+    ) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-                proc.arguments = [
-                    "-o", "BatchMode=yes",
+                let authentication = authenticationConfiguration(for: credentialID)
+                defer { authentication.discardAuthorization() }
+                proc.arguments = authentication.arguments + [
                     "-o", "StrictHostKeyChecking=accept-new",
                     "-o", "ConnectTimeout=8",
-                    target, command,
+                    target,
+                    command,
                 ]
+                proc.environment = ProcessInfo.processInfo.environment.merging(authentication.environment) { _, new in new }
                 let out = Pipe()
+                let errorOutput = Pipe()
                 proc.standardOutput = out
-                proc.standardError = FileHandle.nullDevice
+                proc.standardError = errorOutput
                 do {
                     try proc.run()
                 } catch {
@@ -141,11 +176,45 @@ public actor SSHTunnel {
                 proc.waitUntilExit()
                 let data = out.fileHandleForReading.readDataToEndOfFile()
                 guard proc.terminationStatus == 0 else {
-                    continuation.resume(throwing: HerdrError.tunnelFailed("ssh exited \(proc.terminationStatus)"))
+                    let errorData = errorOutput.fileHandleForReading.readDataToEndOfFile()
+                    continuation.resume(throwing: HerdrError.tunnelFailed(
+                        failureReason(status: proc.terminationStatus, stderr: errorData)
+                    ))
                     return
                 }
                 continuation.resume(returning: String(data: data, encoding: .utf8) ?? "")
             }
         }
+    }
+
+    static func authenticationConfiguration(
+        for credentialID: UUID?
+    ) -> SSHAuthenticationConfiguration {
+        guard let credentialID, let executablePath = Bundle.main.executablePath,
+              let authorizationID = try? SSHCredentialStore.createAuthorization(for: credentialID)
+        else {
+            return SSHAuthenticationConfiguration(
+                arguments: ["-o", "BatchMode=yes"],
+                environment: [:],
+                authorizationID: nil
+            )
+        }
+        return SSHAuthenticationConfiguration(
+            arguments: ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"],
+            environment: [
+                "SSH_ASKPASS": executablePath,
+                "SSH_ASKPASS_REQUIRE": "force",
+                SSHCredentialStore.askPassModeEnvironmentKey: "1",
+                SSHCredentialStore.authorizationIDEnvironmentKey: authorizationID.uuidString,
+            ],
+            authorizationID: authorizationID
+        )
+    }
+
+    private static func failureReason(status: Int32, stderr: Data) -> String {
+        let detail = String(data: stderr, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let detail, !detail.isEmpty else { return "ssh exited \(status)" }
+        return String(detail.suffix(2_000))
     }
 }

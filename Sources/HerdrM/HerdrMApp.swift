@@ -1,4 +1,6 @@
 import AppKit
+import Darwin
+import HerdrKit
 import Sparkle
 import SwiftUI
 
@@ -6,11 +8,19 @@ import SwiftUI
 struct HerdrMApp: App {
     @AppStorage("app.theme") private var themePreference = "system"
 
-    private let updaterController = SPUStandardUpdaterController(
-        startingUpdater: true,
-        updaterDelegate: nil,
-        userDriverDelegate: nil
-    )
+    private let updaterController: SPUStandardUpdaterController
+
+    init() {
+        if ProcessInfo.processInfo.environment[SSHCredentialStore.askPassModeEnvironmentKey] == "1" {
+            Self.runSSHAskPass()
+        }
+        SSHCredentialStore.purgeAuthorizations()
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -41,6 +51,18 @@ struct HerdrMApp: App {
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         default: NSApp.appearance = nil
         }
+    }
+
+    private static func runSSHAskPass() -> Never {
+        let environment = ProcessInfo.processInfo.environment
+        guard let rawID = environment[SSHCredentialStore.authorizationIDEnvironmentKey],
+              let authorizationID = UUID(uuidString: rawID),
+              let password = try? SSHCredentialStore.consumePassword(authorizationID: authorizationID)
+        else {
+            Darwin.exit(EXIT_FAILURE)
+        }
+        FileHandle.standardOutput.write(Data("\(password)\n".utf8))
+        Darwin.exit(EXIT_SUCCESS)
     }
 }
 
