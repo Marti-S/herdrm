@@ -7,17 +7,36 @@ struct RootView: View {
     @State private var sidebarCollapsed = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            SidebarView(model: model, collapsed: $sidebarCollapsed)
-                .frame(width: sidebarCollapsed ? 0 : 260, alignment: .trailing)
-                .clipped()
-            Rectangle()
-                .fill(Theme.sidebarBorder)
-                .frame(width: sidebarCollapsed ? 0 : 1)
-                .ignoresSafeArea()
-            DetailView(model: model, sidebarCollapsed: $sidebarCollapsed)
+        ZStack(alignment: .bottomLeading) {
+            HStack(spacing: 0) {
+                SidebarView(model: model, collapsed: $sidebarCollapsed)
+                    .frame(width: sidebarCollapsed ? 0 : 260, alignment: .trailing)
+                    .clipped()
+                Rectangle()
+                    .fill(Theme.sidebarBorder)
+                    .frame(width: sidebarCollapsed ? 0 : 1)
+                    .ignoresSafeArea()
+                DetailView(model: model, sidebarCollapsed: $sidebarCollapsed)
+            }
+            .animation(.easeInOut(duration: 0.2), value: sidebarCollapsed)
+
+            // In-window device panel; NSPopover throws in ViewBridge on macOS 26+ betas.
+            if model.showDevicePanel {
+                Color.black.opacity(0.001)
+                    .ignoresSafeArea()
+                    .onTapGesture { model.showDevicePanel = false }
+                DevicePopover(model: model, isPresented: $model.showDevicePanel)
+                    .padding(.leading, 10)
+                    .padding(.bottom, 46)
+                    .transition(.scale(scale: 0.96, anchor: .bottomLeading).combined(with: .opacity))
+                    .background(
+                        Button("") { model.showDevicePanel = false }
+                            .keyboardShortcut(.cancelAction)
+                            .hidden()
+                    )
+            }
         }
-        .animation(.easeInOut(duration: 0.2), value: sidebarCollapsed)
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: model.showDevicePanel)
         .background(
             Button("") { sidebarCollapsed.toggle() }
                 .keyboardShortcut("b", modifiers: .command)

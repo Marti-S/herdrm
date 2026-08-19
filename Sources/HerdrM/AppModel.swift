@@ -22,6 +22,8 @@ final class AppModel: ObservableObject {
     @Published var showAddDevice = false
     @Published var showNewAgent = false
     @Published var showSearch = false
+    /// In-window device panel (NSPopover crashes in ViewBridge on macOS 26+ betas).
+    @Published var showDevicePanel = false
     @Published var deviceToEdit: Device?
     /// Transient action failures (start agent, create space…): shown as an alert,
     /// never by tearing down the connection state.

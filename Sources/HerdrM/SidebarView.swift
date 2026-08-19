@@ -21,7 +21,6 @@ struct SidebarView: View {
     @ObservedObject var model: AppModel
     @Binding var collapsed: Bool
     @State private var deviceButtonHovered = false
-    @State private var showDevicePopover = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -255,7 +254,7 @@ struct SidebarView: View {
     private var footer: some View {
         HStack(spacing: 6) {
             Button {
-                showDevicePopover.toggle()
+                model.showDevicePanel.toggle()
             } label: {
                 HStack(spacing: 6) {
                     DeviceIcon(osID: model.activeDevice.osID, isLocal: model.activeDevice.isLocal, size: 10)
@@ -277,7 +276,7 @@ struct SidebarView: View {
             .buttonStyle(.plain)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(deviceButtonHovered || showDevicePopover
+                    .fill(deviceButtonHovered || model.showDevicePanel
                           ? AnyShapeStyle(Theme.itemWashSelected)
                           : AnyShapeStyle(Theme.itemWash))
             )
@@ -288,9 +287,6 @@ struct SidebarView: View {
             .scaleEffect(deviceButtonHovered ? 1.04 : 1.0)
             .animation(.spring(response: 0.28, dampingFraction: 0.55), value: deviceButtonHovered)
             .onHover { deviceButtonHovered = $0 }
-            .popover(isPresented: $showDevicePopover, arrowEdge: .top) {
-                DevicePopover(model: model, isPresented: $showDevicePopover)
-            }
 
             Spacer()
 
@@ -390,6 +386,12 @@ struct DevicePopover: View {
         }
         .padding(5)
         .frame(width: 252)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Theme.hairline, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
     }
 
     private var isConnectedState: Bool {
