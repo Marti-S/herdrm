@@ -38,6 +38,10 @@ APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD, SPARKLE_PRIVATE_KEY (EdDSA private
 key also lives in the local login Keychain; public key is pinned in project.yml).
 Sparkle feed: the release asset `appcast.xml` at `releases/latest/download/`.
 Versioning: MARKETING_VERSION from the tag, CFBundleVersion = CI run number.
+CHANGELOG.md is mandatory: CI extracts the `## [x.y.z]` section for the GitHub
+release notes and the Sparkle update description, and fails if it's missing —
+add the section before tagging. The cask in OwO-Network/homebrew-brew is
+auto-bumped after each release.
 
 ## herdr protocol notes (0.8.0, protocol 19; verified against the live socket)
 

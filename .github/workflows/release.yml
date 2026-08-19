@@ -56,6 +56,39 @@ jobs:
           codesign -f --timestamp -o runtime -s "$IDENTITY" "$APP"
           codesign --verify --deep --strict "$APP"
 
+      - name: Extract release notes from CHANGELOG
+        run: |
+          python3 - "$VERSION" <<'PYEOF'
+          import html, re, sys
+          version = sys.argv[1]
+          text = open("CHANGELOG.md").read()
+          m = re.search(rf"## \[{re.escape(version)}\][^\n]*\n(.*?)(?=\n## \[|\Z)", text, re.S)
+          if not m or not m.group(1).strip():
+              sys.exit(f"CHANGELOG.md has no section for {version} — add one before tagging")
+          notes = m.group(1).strip()
+          open("notes.md", "w").write(notes)
+          out, in_ul = [], False
+          for line in notes.splitlines():
+              s = line.rstrip()
+              if s.startswith("- "):
+                  if not in_ul:
+                      out.append("<ul>"); in_ul = True
+                  out.append("<li>" + html.escape(s[2:]) + "</li>")
+              elif s.startswith("  ") and in_ul and out:
+                  out[-1] = out[-1][:-5] + " " + html.escape(s.strip()) + "</li>"
+              else:
+                  if in_ul:
+                      out.append("</ul>"); in_ul = False
+                  if s.startswith("### "):
+                      out.append("<h3>" + html.escape(s[4:]) + "</h3>")
+                  elif s:
+                      out.append("<p>" + html.escape(s) + "</p>")
+          if in_ul:
+              out.append("</ul>")
+          open("notes.html", "w").write("\n".join(out))
+          PYEOF
+          echo "--- notes.md ---"; cat notes.md
+
       - name: Notarize and staple
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -93,6 +126,9 @@ jobs:
                 <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
                 <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
                 <link>https://github.com/${{ github.repository }}/releases/tag/v$VERSION</link>
+                <description><![CDATA[
+          $(cat notes.html)
+                ]]></description>
                 <enclosure
                   url="https://github.com/${{ github.repository }}/releases/download/v$VERSION/herdrm-$VERSION.zip"
                   $SIG_ATTRS
@@ -108,7 +144,7 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" \
             "herdrm-$VERSION.zip" appcast.xml \
-            --title "herdrm $VERSION" --generate-notes
+            --title "herdrm $VERSION" --notes-file notes.md
 
       - name: Bump Homebrew cask
         env:
