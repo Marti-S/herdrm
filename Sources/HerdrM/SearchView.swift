@@ -79,17 +79,30 @@ struct SearchSheet: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
             } else {
-                ScrollView {
-                    VStack(spacing: 1) {
-                        ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
-                            row(result, isHighlighted: index == highlighted)
-                                .onTapGesture { choose(result) }
-                                .onHover { if $0 { highlighted = index } }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 1) {
+                            ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
+                                row(result, isHighlighted: index == highlighted)
+                                    .onTapGesture { choose(result) }
+                                    .onHover { if $0 { highlighted = index } }
+                            }
                         }
+                        .padding(8)
                     }
-                    .padding(8)
+                    .frame(maxHeight: 320)
+                    // anchor: nil moves the minimum to reveal the row — a no-op when it
+                    // is already visible, so hovering never yanks the scroll position.
+                    .onChange(of: highlighted) { _, index in
+                        guard results.indices.contains(index) else { return }
+                        proxy.scrollTo(results[index].id, anchor: nil)
+                    }
+                    // Reopening ⌘K starts at the top even if the sheet was left
+                    // scrolled to the bottom.
+                    .onAppear {
+                        if let first = results.first { proxy.scrollTo(first.id, anchor: .top) }
+                    }
                 }
-                .frame(maxHeight: 320)
             }
 
             Rectangle().fill(Theme.hairline).frame(height: 1)
