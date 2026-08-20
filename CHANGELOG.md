@@ -7,6 +7,8 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-20
+
 ### Fixed
 - Terminal colors now adapt to Light mode: explicit truecolor output (like
   Codex's dark input box) is luminance-flipped before it reaches the terminal,
