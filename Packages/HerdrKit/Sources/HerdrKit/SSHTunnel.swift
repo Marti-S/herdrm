@@ -283,24 +283,39 @@ public actor SSHTunnel {
     /// Streams one regular file to a private cache on the remote host and returns
     /// its absolute remote path. The generated name preserves only a safe extension.
     public func uploadFile(from localURL: URL) async throws -> String {
-        guard localURL.isFileURL else {
-            throw HerdrError.tunnelFailed("file upload requires a local file URL")
-        }
-        let values = try localURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-        guard values.isRegularFile == true else {
-            throw HerdrError.tunnelFailed("file upload supports regular files only")
-        }
-        let fileSize = values.fileSize ?? 0
-        guard fileSize <= Self.maximumUploadBytes else {
-            throw HerdrError.tunnelFailed("file is larger than the 50 MB upload limit")
-        }
-
+        let fileSize = try Self.validateUploadCandidate(localURL)
         return try await Self.uploadFile(
             target: target,
             localURL: localURL,
             remoteFilename: Self.uploadFilename(for: localURL),
-            credentialID: credentialID
+            credentialID: credentialID,
+            timeout: Self.uploadTimeout(fileSizeBytes: fileSize)
         )
+    }
+
+    /// Rejects what the upload path cannot stream, and returns the size in bytes.
+    @discardableResult
+    static func validateUploadCandidate(_ localURL: URL) throws -> Int {
+        guard localURL.isFileURL else {
+            throw HerdrError.fileTransferFailed("a local file is required")
+        }
+        let values = try localURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+        guard values.isRegularFile == true else {
+            throw HerdrError.fileTransferFailed("only regular files can be transferred")
+        }
+        let fileSize = values.fileSize ?? 0
+        guard fileSize <= maximumUploadBytes else {
+            throw HerdrError.fileTransferFailed(
+                "the file is larger than the \(maximumUploadBytes / (1024 * 1024)) MB limit"
+            )
+        }
+        return fileSize
+    }
+
+    /// A hard deadline generous enough for a slow link (~256 KB/s) — stalled
+    /// sessions are caught much earlier by ServerAlive, not by this watchdog.
+    static func uploadTimeout(fileSizeBytes: Int) -> TimeInterval {
+        min(600, 30 + Double(fileSizeBytes) / 262_144)
     }
 
     static func uploadFile(
@@ -308,8 +323,14 @@ public actor SSHTunnel {
         localURL: URL,
         remoteFilename: String,
         credentialID: UUID?,
+        timeout: TimeInterval = 60,
         executableURL: URL = URL(fileURLWithPath: "/usr/bin/ssh")
     ) async throws -> String {
+        // The name lands inside a remote shell script, so nothing but the
+        // generated form of uploadFilename(for:) may reach it.
+        guard isSafeRemoteFilename(remoteFilename) else {
+            throw HerdrError.fileTransferFailed("unsafe remote filename")
+        }
         let command = """
         umask 077
         dir="${XDG_CACHE_HOME:-$HOME/.cache}/herdrm/attachments"
@@ -335,6 +356,7 @@ public actor SSHTunnel {
                     "-o", "StrictHostKeyChecking=accept-new",
                     "-o", "ConnectTimeout=8",
                     "-o", "ServerAliveInterval=15",
+                    "-o", "ServerAliveCountMax=4",
                     sshDestination(target),
                     // Under sh explicitly: the login shell may be zsh (where a
                     // `path=` assignment would clobber PATH) or fish (no `var=`
@@ -350,18 +372,18 @@ public actor SSHTunnel {
                     proc.standardInput = try FileHandle(forReadingFrom: localURL)
                     try proc.run()
                 } catch {
-                    continuation.resume(throwing: HerdrError.tunnelFailed("file upload spawn: \(error.localizedDescription)"))
+                    continuation.resume(throwing: HerdrError.fileTransferFailed("ssh spawn: \(error.localizedDescription)"))
                     return
                 }
-                DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                     if proc.isRunning { proc.terminate() }
                 }
                 proc.waitUntilExit()
                 let data = output.fileHandleForReading.readDataToEndOfFile()
                 guard proc.terminationStatus == 0 else {
                     let errorData = errorOutput.fileHandleForReading.readDataToEndOfFile()
-                    continuation.resume(throwing: HerdrError.tunnelFailed(
-                        "file upload: \(failureReason(status: proc.terminationStatus, stderr: errorData))"
+                    continuation.resume(throwing: HerdrError.fileTransferFailed(
+                        failureReason(status: proc.terminationStatus, stderr: errorData)
                     ))
                     return
                 }
@@ -369,7 +391,7 @@ public actor SSHTunnel {
                     .split(whereSeparator: \.isNewline)
                     .map(String.init) ?? []
                 guard let remotePath = lines.last(where: { $0.hasPrefix("/") }) else {
-                    continuation.resume(throwing: HerdrError.tunnelFailed("file upload returned no remote path"))
+                    continuation.resume(throwing: HerdrError.fileTransferFailed("the remote host returned no path"))
                     return
                 }
                 continuation.resume(returning: remotePath)
@@ -389,6 +411,18 @@ public actor SSHTunnel {
             }
         let suffix = isSafeExtension ? ".\(rawExtension)" : ""
         return "\(UUID().uuidString.lowercased())\(suffix)"
+    }
+
+    static func isSafeRemoteFilename(_ name: String) -> Bool {
+        guard !name.isEmpty, name.utf8.count <= 64, !name.hasPrefix("."), !name.contains("..") else {
+            return false
+        }
+        return name.utf8.allSatisfy { byte in
+            switch byte {
+            case 48...57, 97...122, UInt8(ascii: "-"), UInt8(ascii: "."): return true
+            default: return false
+            }
+        }
     }
 
     // MARK: - One-shot exec

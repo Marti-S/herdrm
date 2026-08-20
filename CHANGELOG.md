@@ -11,11 +11,13 @@ the Sparkle update description — a release without a section here fails CI.
 - Intel Macs are supported: releases are now universal binaries (arm64 +
   x86_64) and the Homebrew cask no longer requires Apple Silicon. (#12, #26,
   thanks @Yuxin-Qiao!)
-- Paste files and images into agent terminals. Locally, an image paste
-  forwards the Ctrl+V shortcut agent CLIs expect; on remote devices, Finder
-  files and clipboard images are uploaded over SSH into the remote user's
-  private cache (50 MB cap, 7-day cleanup) and their remote paths pasted —
-  for Claude Code and Copilot CLI. (#25, thanks @ljxw88!)
+- Paste files and images straight into a Claude Code or Copilot pane. On a
+  remote device the file is streamed over SSH into a private cache under
+  `~/.cache/herdrm/attachments` (0700, entries dropped after seven days) and
+  its remote path is pasted into the agent; on a local device the paste is
+  forwarded as Ctrl+V so the agent reads the clipboard itself. Uploads are
+  capped at 50 MB and show an indicator while they run. (#25, thanks
+  @ljxw88!)
 
 ### Fixed
 - A dead terminal session no longer freezes on its last frame while eating

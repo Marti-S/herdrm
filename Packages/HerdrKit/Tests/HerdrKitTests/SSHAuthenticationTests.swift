@@ -179,12 +179,64 @@ final class SSHFileTransferTests: XCTestCase {
         let png = SSHTunnel.uploadFilename(for: URL(fileURLWithPath: "/tmp/private design.PNG"))
         XCTAssertTrue(png.hasSuffix(".png"))
         XCTAssertFalse(png.contains("private"))
+        XCTAssertTrue(SSHTunnel.isSafeRemoteFilename(png))
 
         let unsafe = SSHTunnel.uploadFilename(for: URL(fileURLWithPath: "/tmp/file.bad$ext"))
         XCTAssertFalse(unsafe.contains("bad$ext"))
+        XCTAssertTrue(SSHTunnel.isSafeRemoteFilename(unsafe))
+    }
+
+    func testUploadRejectsUnsafeRemoteFilename() async {
+        for name in ["a\"; rm -rf ~; echo \".png", "../escape.png", ".hidden.png", "sp ace.png", ""] {
+            XCTAssertFalse(SSHTunnel.isSafeRemoteFilename(name), name)
+        }
+        do {
+            _ = try await SSHTunnel.uploadFile(
+                target: "test@example.invalid",
+                localURL: URL(fileURLWithPath: "/dev/null"),
+                remoteFilename: "$(id).png",
+                credentialID: nil
+            )
+            XCTFail("expected an unsafe filename to be rejected")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("unsafe remote filename"))
+        }
+    }
+
+    func testUploadTimeoutScalesWithFileSize() {
+        XCTAssertEqual(SSHTunnel.uploadTimeout(fileSizeBytes: 0), 30)
+        // A 50 MB paste must not be killed by a fixed one-minute watchdog.
+        XCTAssertGreaterThan(SSHTunnel.uploadTimeout(fileSizeBytes: SSHTunnel.maximumUploadBytes), 180)
+        XCTAssertLessThanOrEqual(SSHTunnel.uploadTimeout(fileSizeBytes: Int.max / 2), 600)
+    }
+
+    func testUploadRejectsOversizedAndIrregularFiles() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("herdrm-upload-guard-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        XCTAssertThrowsError(try SSHTunnel.validateUploadCandidate(directory))
+        XCTAssertThrowsError(try SSHTunnel.validateUploadCandidate(URL(string: "https://example.com/a.png")!))
+
+        let fileURL = directory.appendingPathComponent("small.bin")
+        try Data([0x01]).write(to: fileURL)
+        XCTAssertEqual(try SSHTunnel.validateUploadCandidate(fileURL), 1)
     }
 
     private func shellQuote(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+}
+
+final class AgentAttachmentSupportTests: XCTestCase {
+    func testAcceptsPastedAttachmentsCoversVendorPrefixedKinds() {
+        for kind in ["claude", "claude-code", "claude_code", "Claude", "copilot", "github-copilot"] {
+            XCTAssertTrue(AgentInfo.acceptsPastedAttachments(agentKind: kind), kind)
+        }
+        for kind in ["codex", "gemini", "cursor-agent", "agent", ""] {
+            XCTAssertFalse(AgentInfo.acceptsPastedAttachments(agentKind: kind), kind)
+        }
+        XCTAssertFalse(AgentInfo.acceptsPastedAttachments(agentKind: nil))
     }
 }

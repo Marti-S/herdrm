@@ -47,6 +47,17 @@ public struct AgentInfo: Codable, Sendable, Identifiable, Equatable {
         return agent
     }
 
+    /// Whether the agent's TUI takes an attachment as a pasted file path.
+    /// herdr reports both bare and vendor-prefixed spellings ("claude" /
+    /// "claude-code", "copilot" / "github-copilot"), and nil until detection lands.
+    public static func acceptsPastedAttachments(agentKind: String?) -> Bool {
+        guard let agentKind else { return false }
+        let normalized = agentKind.lowercased().replacingOccurrences(of: "_", with: "-")
+        return ["claude", "copilot"].contains { family in
+            normalized == family || normalized.hasSuffix("-\(family)") || normalized.hasPrefix("\(family)-")
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
         case terminalID = "terminal_id"
         case agentKindRaw = "agent"
@@ -171,6 +182,7 @@ public enum HerdrError: Error, LocalizedError, Sendable {
     case malformedResponse(String)
     case incompatibleProtocol(Int)
     case tunnelFailed(String)
+    case fileTransferFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -183,6 +195,7 @@ public enum HerdrError: Error, LocalizedError, Sendable {
         case .malformedResponse(let reason): return "malformed response: \(reason)"
         case .incompatibleProtocol(let version): return "herdr protocol \(version) is too old (need >= 17)"
         case .tunnelFailed(let reason): return "SSH tunnel failed: \(reason)"
+        case .fileTransferFailed(let reason): return "file transfer failed: \(reason)"
         }
     }
 }
