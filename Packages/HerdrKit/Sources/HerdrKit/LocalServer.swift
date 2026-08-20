@@ -23,15 +23,6 @@ public struct LocalHerdrServer: Sendable {
         }
     }
 
-    /// PATH used to find the herdr CLI. GUI apps launched from Finder don't inherit a
-    /// login-shell PATH, hence the same export the SSH side uses, plus mise's shim
-    /// directory: `mise use -g herdr` is one of herdr's install methods and its shims sit
-    /// in none of the other directories. `SSHTunnel.remotePathExport` stays untouched on
-    /// purpose — it is shared with the tunnel and the terminal attach, where the extra
-    /// directory would belong to the remote user, not to this Mac.
-    public static let localPathExport =
-        "\(SSHTunnel.remotePathExport); export PATH=\"$HOME/.local/share/mise/shims:$PATH\""
-
     /// Grace given to the socket after the spawned process exits. `herdr server` also exits
     /// non-zero when another process won the race to bind the socket — that server is
     /// serving, so an exit on its own is not a failure.
@@ -109,29 +100,19 @@ public struct LocalHerdrServer: Sendable {
 
     // MARK: - Collaborators
 
-    /// Locates the herdr CLI (`command -v` under `localPathExport`); nil when not found.
-    /// `environment` overrides what the lookup inherits, which is how a launchd-style PATH
-    /// (or a different `$HOME`) can be exercised without touching this process.
+    /// Locates the herdr CLI on the same search PATH used for agent CLIs: login-shell
+    /// snapshot (when `ensure()` has already run), GUI PATH, well-known prefixes
+    /// including mise shims. `environment` is a test seam that isolates PATH and HOME
+    /// from this process (a launchd-style PATH, a fake `$HOME`).
     public static func resolveBinary(environment: [String: String]? = nil) -> String? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
-        proc.arguments = ["-c", "\(localPathExport); command -v herdr"]
-        if let environment { proc.environment = environment }
-        let out = Pipe()
-        proc.standardOutput = out
-        proc.standardError = FileHandle.nullDevice
-        do {
-            try proc.run()
-        } catch {
-            return nil
+        if let environment {
+            return ShellEnvironment(variables: environment).findExecutable(
+                "herdr",
+                processPath: environment["PATH"],
+                home: environment["HOME"]
+            )
         }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-        let path = (String(data: data, encoding: .utf8) ?? "")
-            .split(separator: "\n").first
-            .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
-        guard !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) else { return nil }
-        return path
+        return (ShellEnvironment.cached ?? .empty).findExecutable("herdr")
     }
 
     /// Spawns `herdr server` and hands back a handle for watching it.
@@ -145,7 +126,7 @@ public struct LocalHerdrServer: Sendable {
     /// Its output goes to a file for the same reason: an undrained pipe stalls the daemon once
     /// the buffer fills, and closing our end of it would break the daemon's stdout — while a
     /// file still carries the real error text when the start fails.
-    public static func spawn(binary: String) throws -> Launched {
+    public static func spawn(binary: String, environment: [String: String]? = nil) throws -> Launched {
         // Unique per spawn: a fixed name would let a second herdrm (or a second start)
         // truncate a log file the live daemon still holds open at a non-zero offset.
         let logURL = FileManager.default.temporaryDirectory
@@ -157,7 +138,11 @@ public struct LocalHerdrServer: Sendable {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
         proc.arguments = ["server"]
-        proc.environment = serverEnvironment()
+        // Same PATH the lookup walked, plus the binary's directory last: herdr
+        // itself is a real Mach-O, but panes and `#!/usr/bin/env node` shims
+        // still need node / bun / NVM_DIR from the captured block.
+        let base = environment ?? (ShellEnvironment.cached ?? .empty).launchEnvironment(binary: binary)
+        proc.environment = serverEnvironment(base: base)
         proc.standardInput = FileHandle.nullDevice
         proc.standardOutput = log
         proc.standardError = log
@@ -182,8 +167,8 @@ public struct LocalHerdrServer: Sendable {
     /// app started from Finder has no `SHELL` in its environment (`launchctl getenv SHELL` is
     /// empty), so a server spawned from herdrm would give the user `sh` panes instead of their
     /// login shell — no `.zshrc`, and none of the agents installed under `~/.local/bin` (claude
-    /// among them) on PATH. The panes are interactive shells that rebuild their own PATH from
-    /// the rc files, so `SHELL` is the only variable that has to be right here.
+    /// among them) on PATH. Spawn already overlays the login-shell snapshot (PATH, NVM_DIR,
+    /// …) so shims resolve; `SHELL` still has to be right so the pane itself is that shell.
     ///
     /// An explicit `SHELL` is never overwritten: running a shell other than the account's is a
     /// deliberate choice. When the login shell cannot be resolved, nothing is set and herdr

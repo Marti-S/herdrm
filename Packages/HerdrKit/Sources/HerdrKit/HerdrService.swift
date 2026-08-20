@@ -159,9 +159,17 @@ public actor HerdrService {
         ).manifests
     }
 
-    /// The CLI binary a kind installs as (usually the kind itself).
+    /// The CLI binary a kind installs as (usually the kind itself). Cursor's
+    /// installer also ships `agent`, which collides with too many other tools.
     public static func binaryName(for kind: String) -> String {
         kind == "cursor" ? "cursor-agent" : kind
+    }
+
+    /// An advertised kind whose CLI was found on the search PATH (login-shell
+    /// PATH, GUI PATH, well-known prefixes) or via a Settings override.
+    public struct InstalledAgent: Sendable, Equatable {
+        public let kind: String
+        public let path: String
     }
 
     /// Flags that put a kind's CLI into bypass/yolo mode. Only kinds with a verified
@@ -180,47 +188,33 @@ public actor HerdrService {
         }
     }
 
-    /// Sniffs which of the given kinds are actually installed on this device
-    /// (`command -v` locally or over SSH), preserving order.
-    public func installedAgentKinds(from kinds: [String]) async throws -> [String] {
+    /// Local CLIs visible on the login-shell search PATH, preserving manifest
+    /// order. Probe failure does not throw: lookup still walks the GUI PATH and
+    /// well-known prefixes. `overrides` maps a kind to a binary path or command
+    /// name (empty / missing = automatic). `snapshot` is a test seam; production
+    /// callers omit it and share the process-wide capture.
+    public func installedAgents(
+        from kinds: [String],
+        overrides: [String: String] = [:],
+        snapshot: ShellEnvironment? = nil
+    ) async -> [InstalledAgent] {
         guard !kinds.isEmpty else { return [] }
-        let binaries = kinds.map(Self.binaryName)
-        let probe = "for b in \(binaries.joined(separator: " ")); do command -v \"$b\" >/dev/null 2>&1 && echo \"$b\"; done"
-        let output: String
-        switch device.kind {
-        case .local:
-            output = try await Self.runLocalShell("\(LocalHerdrServer.localPathExport); \(probe)")
-        case .ssh(let target):
-            output = try await SSHTunnel.runSSH(
-                target: target,
-                command: "\(SSHTunnel.remotePathExport); \(probe)",
-                timeout: 15,
-                credentialID: device.id
-            )
+        let environment: ShellEnvironment
+        if let snapshot {
+            environment = snapshot
+        } else {
+            environment = await ShellEnvironment.ensure()
         }
-        let found = Set(output.split(separator: "\n").map(String.init))
-        return kinds.filter { found.contains(Self.binaryName(for: $0)) }
-    }
-
-    static func runLocalShell(_ command: String) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: "/bin/sh")
-                proc.arguments = ["-c", command]
-                let out = Pipe()
-                proc.standardOutput = out
-                proc.standardError = FileHandle.nullDevice
-                do {
-                    try proc.run()
-                } catch {
-                    continuation.resume(throwing: HerdrError.connectionFailed(error.localizedDescription))
-                    return
-                }
-                proc.waitUntilExit()
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                continuation.resume(returning: String(data: data, encoding: .utf8) ?? "")
+        return kinds.compactMap { kind in
+            let query: String
+            if let override = overrides[kind]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !override.isEmpty {
+                query = override
+            } else {
+                query = Self.binaryName(for: kind)
             }
+            guard let path = environment.findExecutable(query) else { return nil }
+            return InstalledAgent(kind: kind, path: path)
         }
     }
 
@@ -548,16 +542,31 @@ public actor HerdrService {
     /// pick a herdr binary whose protocol matches the server's — see
     /// `attachBinarySelection`.
     public nonisolated func attachCommand(paneID: String, serverVersion: String? = nil) -> AttachCommand {
-        // GUI apps launched from Finder don't inherit a login-shell PATH, and
-        // sshd exec is not a login shell either — hence the PATH export.
-        let script = "\(SSHTunnel.remotePathExport); \(Self.attachBinarySelection(serverVersion: serverVersion)); "
-            + "exec \"$hb\" agent attach '\(paneID)' --takeover"
         switch device.kind {
         case .local:
-            return AttachCommand(executable: "/bin/sh", args: ["-c", script], environment: [:], authorizationID: nil)
+            // Same PATH we used to discover `herdr`: login-shell snapshot, GUI
+            // PATH, well-known prefixes. Discovery and attach must not diverge
+            // or a `#!/usr/bin/env node` shim is found and then fails at exec.
+            // TERM/COLUMNS/LINES stay with SwiftTerm.
+            var environment = (ShellEnvironment.cached ?? .empty).launchEnvironment(binary: nil)
+            environment.removeValue(forKey: "TERM")
+            environment.removeValue(forKey: "COLUMNS")
+            environment.removeValue(forKey: "LINES")
+            let script = "\(Self.attachBinarySelection(serverVersion: serverVersion)); "
+                + "exec \"$hb\" agent attach '\(paneID)' --takeover"
+            return AttachCommand(
+                executable: "/bin/sh",
+                args: ["-c", script],
+                environment: environment,
+                authorizationID: nil
+            )
         case .ssh(let target):
-            // Wrapped in sh explicitly: the ssh remote command runs in the user's
-            // login shell, and the script's sh syntax must not depend on it.
+            // sshd exec is not a login shell — prepend the well-known prefixes
+            // on the far side. Wrapped in sh explicitly: the ssh remote command
+            // runs in the user's login shell, and the script's sh syntax must
+            // not depend on it.
+            let script = "\(SSHTunnel.remotePathExport); \(Self.attachBinarySelection(serverVersion: serverVersion)); "
+                + "exec \"$hb\" agent attach '\(paneID)' --takeover"
             let remote = "exec /bin/sh -c \(Self.shellQuoted(script))"
             let authentication = SSHTunnel.authenticationConfiguration(for: device.id)
             return AttachCommand(
