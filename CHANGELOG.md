@@ -7,6 +7,8 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-08-20
+
 ### Fixed
 - Terminal attach no longer fails with `protocol_mismatch` when the machine
   has more than one herdr binary (a stale copy earlier in the PATH than the
