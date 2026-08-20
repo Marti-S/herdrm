@@ -85,3 +85,22 @@ final class SSHAuthenticationTests: XCTestCase {
         XCTAssertEqual(SecItemCopyMatching(query as CFDictionary, nil), errSecSuccess)
     }
 }
+final class SSHDestinationTests: XCTestCase {
+    func testCustomPortTargetsBecomeSSHURIs() {
+        XCTAssertEqual(SSHTunnel.sshDestination("vincent@10.10.10.87:2222"), "ssh://vincent@10.10.10.87:2222")
+        XCTAssertEqual(SSHTunnel.sshDestination("host.example.com:23"), "ssh://host.example.com:23")
+        XCTAssertEqual(SSHTunnel.sshDestination("vincent@[fe80::1]:2222"), "ssh://vincent@[fe80::1]:2222")
+    }
+
+    func testPlainTargetsPassThroughUntouched() {
+        XCTAssertEqual(SSHTunnel.sshDestination("vincent@10.10.10.87"), "vincent@10.10.10.87")
+        XCTAssertEqual(SSHTunnel.sshDestination("my-config-alias"), "my-config-alias")
+        XCTAssertEqual(SSHTunnel.sshDestination("ssh://vincent@host:2222"), "ssh://vincent@host:2222")
+        // A bare IPv6 address's colons are not a port.
+        XCTAssertEqual(SSHTunnel.sshDestination("fe80::1"), "fe80::1")
+        XCTAssertEqual(SSHTunnel.sshDestination("vincent@fe80::1"), "vincent@fe80::1")
+        // Malformed ports pass through for ssh to reject with its own error.
+        XCTAssertEqual(SSHTunnel.sshDestination("host:99999"), "host:99999")
+        XCTAssertEqual(SSHTunnel.sshDestination("host:"), "host:")
+    }
+}

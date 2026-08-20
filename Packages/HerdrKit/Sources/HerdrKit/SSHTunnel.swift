@@ -112,7 +112,7 @@ public actor SSHTunnel {
             "-o", "ServerAliveInterval=15",
             "-o", "StreamLocalBindUnlink=yes",
             "-L", "\(localSock):\(remoteSock)",
-            target,
+            Self.sshDestination(target),
         ]
         proc.environment = ProcessInfo.processInfo.environment.merging(authentication.environment) { _, new in new }
         let errorOutput = Pipe()
@@ -192,6 +192,26 @@ public actor SSHTunnel {
         errorOutput?.fileHandleForReading.readabilityHandler = nil
         errorOutput = nil
         errorBuffer = nil
+    }
+
+    /// Turns "user@host:2222" into an OpenSSH `ssh://` URI so a custom port
+    /// survives being passed as the single destination argument (there is no
+    /// separate `-p` in the argv). Anything else — config aliases, plain
+    /// user@host, existing ssh:// URIs, bare IPv6 addresses — passes through
+    /// untouched; bracketed IPv6 with a port ("[::1]:2222") is recognized.
+    public static func sshDestination(_ target: String) -> String {
+        if target.hasPrefix("ssh://") { return target }
+        guard let lastColon = target.lastIndex(of: ":") else { return target }
+        let port = target[target.index(after: lastColon)...]
+        guard !port.isEmpty, port.allSatisfy(\.isNumber),
+              let portNumber = Int(port), (1...65535).contains(portNumber)
+        else { return target }
+        let hostPart = target[..<lastColon]
+        let hostStart = hostPart.lastIndex(of: "@").map { hostPart.index(after: $0) } ?? hostPart.startIndex
+        let host = hostPart[hostStart...]
+        guard !host.isEmpty else { return target }
+        if host.contains(":"), !(host.hasPrefix("[") && host.hasSuffix("]")) { return target }
+        return "ssh://\(target)"
     }
 
     // MARK: - Silent-forward diagnosis
@@ -274,7 +294,7 @@ public actor SSHTunnel {
                 proc.arguments = authentication.arguments + [
                     "-o", "StrictHostKeyChecking=accept-new",
                     "-o", "ConnectTimeout=8",
-                    target,
+                    sshDestination(target),
                     command,
                 ]
                 proc.environment = ProcessInfo.processInfo.environment.merging(authentication.environment) { _, new in new }

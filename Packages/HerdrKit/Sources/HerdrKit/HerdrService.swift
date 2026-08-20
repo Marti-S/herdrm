@@ -455,7 +455,7 @@ public actor HerdrService {
                 args: ["-tt"] + authentication.arguments + [
                     "-o", "StrictHostKeyChecking=accept-new",
                     "-o", "ConnectTimeout=10",
-                    target, remote,
+                    SSHTunnel.sshDestination(target), remote,
                 ],
                 environment: authentication.environment,
                 authorizationID: authentication.authorizationID

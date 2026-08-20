@@ -285,6 +285,9 @@ struct AddDeviceSheet: View {
                 SheetSectionLabel("SSH TARGET")
                 TextField("vincent@10.10.10.87", text: $target)
                     .textFieldStyle(.roundedBorder)
+                Text("user@host, a ~/.ssh/config alias, or user@host:port for a custom port.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.textTertiary)
             }
             .padding(16)
 

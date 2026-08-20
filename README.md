@@ -52,6 +52,7 @@ working, blocked, or done. **herdrm** puts a native macOS window on top of it:
 - For remote devices: OpenSSH access through your SSH config/agent, Tailscale
   SSH, or a password stored in the macOS login Keychain. Tailscale SSH requires
   Tailscale 1.98.0 or newer on the remote host for Unix-socket forwarding.
+  Targets accept `user@host`, `user@host:port`, and `~/.ssh/config` aliases.
 
 ## Install
 

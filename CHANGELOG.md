@@ -8,6 +8,8 @@ the Sparkle update description — a release without a section here fails CI.
 ## [Unreleased]
 
 ### Added
+- Custom SSH ports: enter the device target as `user@host:port` (or an
+  `ssh://` URI); plain targets and `~/.ssh/config` aliases work as before.
 - Right-click context menu in the terminal: Copy, Paste, Select All — plus
   Open Link and Copy Link Address when the selected text contains a URL
   (double-click selects a whole URL). (#19)
