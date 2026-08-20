@@ -7,7 +7,22 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- Intel Macs are supported: releases are now universal binaries (arm64 +
+  x86_64) and the Homebrew cask no longer requires Apple Silicon. (#12, #26,
+  thanks @Yuxin-Qiao!)
+- Paste files and images into agent terminals. Locally, an image paste
+  forwards the Ctrl+V shortcut agent CLIs expect; on remote devices, Finder
+  files and clipboard images are uploaded over SSH into the remote user's
+  private cache (50 MB cap, 7-day cleanup) and their remote paths pasted —
+  for Claude Code and Copilot CLI. (#25, thanks @ljxw88!)
+
 ### Fixed
+- A dead terminal session no longer freezes on its last frame while eating
+  input: a dropped SSH connection or a takeover by another client now covers
+  the pane with an explanation and a Reconnect button, and the attach SSH
+  carries the same keepalives as the tunnel so dead paths are noticed within
+  ~45 s. (#23, thanks @lcandy2!)
 - Settings → Terminal: the preview no longer sits indented by the form's label
   column, and the mouse-reporting description no longer truncates.
 
