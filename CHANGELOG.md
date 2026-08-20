@@ -7,6 +7,15 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Terminal attach no longer fails with `protocol_mismatch` when the machine
+  has more than one herdr binary (a stale copy earlier in the PATH than the
+  one the server runs): the attach now picks the binary whose version matches
+  the server's, falling back to the first one found. herdr's attach stream
+  requires exact protocol equality — 0.8.0 speaks 19, 0.8.2 speaks 20 — while
+  the sidebar's control API tolerates the skew, which is why everything else
+  kept working. (#22)
+
 ### Added
 - The New Space sheet's DIRECTORY field now carries an inline folder browser:
   type freely, click a folder to descend, arrow-up to the parent, and typing a
