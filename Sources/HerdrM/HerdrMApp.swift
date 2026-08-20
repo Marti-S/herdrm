@@ -25,10 +25,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+private struct AppModelFocusedValueKey: FocusedValueKey {
+    typealias Value = AppModel
+}
+
+extension FocusedValues {
+    var appModel: AppModel? {
+        get { self[AppModelFocusedValueKey.self] }
+        set { self[AppModelFocusedValueKey.self] = newValue }
+    }
+}
+
 @main
 struct HerdrMApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @AppStorage("app.theme") private var themePreference = "system"
+    @FocusedValue(\.appModel) private var focusedModel
 
     private let updaterController: SPUStandardUpdaterController
 
@@ -55,6 +67,17 @@ struct HerdrMApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
+            // herdrm is a single-window console: a second window would duplicate the
+            // whole device tree, so New Window gives up ⌘N to the action that matters.
+            CommandGroup(replacing: .newItem) {
+                Button("New Agent") { focusedModel?.showNewAgent = true }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(focusedModel == nil)
+                Button("New Space") { focusedModel?.showNewSpace = true }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .disabled(focusedModel == nil)
+            }
+
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     updaterController.checkForUpdates(nil)

@@ -12,6 +12,10 @@ the Sparkle update description — a release without a section here fails CI.
   — sent as ESC+CR, which coding-agent TUIs already understand. Inert when a
   TUI negotiates the kitty keyboard protocol (it already distinguishes the
   modifier).
+- File menu commands with keyboard shortcuts: **New Agent** (⌘N) and **New
+  Space** (⇧⌘N), reachable while the focus is inside an agent's terminal.
+  ⌘N replaces *New Window* — herdrm is a single-window console, so a second
+  window would only duplicate the device tree.
 
 ### Fixed
 - SSH tunnels are torn down when the app quits. Each launch used to leave its
