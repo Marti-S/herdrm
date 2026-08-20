@@ -7,6 +7,8 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-08-20
+
 ### Added
 - Intel Macs are supported: releases are now universal binaries (arm64 +
   x86_64) and the Homebrew cask no longer requires Apple Silicon. (#12, #26,
