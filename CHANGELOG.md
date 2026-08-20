@@ -7,6 +7,12 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Light mode now also adapts 256-color output — Claude Code's diff and header
+  backgrounds arrive as indexed colors (`48;5;n`), which the 0.3.2 filter
+  didn't cover, so they stayed dark. Foregrounds that are already readable on
+  white keep their color; only backgrounds flip.
+
 ## [0.3.2] - 2026-08-20
 
 ### Fixed

@@ -21,6 +21,24 @@ struct TerminalColorFilterTests {
             "split escape sequences should be transformed without corruption"
         )
 
+        // herdr passes 256-indexed SGR through verbatim (48;5;22 etc.), which is
+        // what Claude Code's diff backgrounds arrive as — they must be resolved
+        // through the xterm palette and adapted like truecolor.
+        var indexedAdapter = LightTerminalANSIAdapter()
+        let indexed = Array("\u{1B}[0;38;5;114;48;5;22mdiff".utf8)
+        let indexedResult = String(decoding: indexedAdapter.transform(indexed[...]), as: UTF8.self)
+        expect(indexedResult.contains("38;2;6;86;6"), "256-color light green foreground should become dark")
+        expect(indexedResult.contains("48;2;119;214;119"), "256-color dark diff background should become light")
+
+        // Foregrounds that already read well on white keep their color;
+        // only backgrounds flip unconditionally.
+        var keepAdapter = LightTerminalANSIAdapter()
+        let darkRed = Array("\u{1B}[38;2;220;50;47merror".utf8)
+        expect(
+            String(decoding: keepAdapter.transform(darkRed[...]), as: UTF8.self).contains("38;2;220;50;47"),
+            "an already-dark truecolor foreground should not wash out"
+        )
+
         // The light palette keeps whichever variant reads better on white:
         // ANSI red is already dark and must not wash out to a pastel, while
         // bright white must flip to dark. Mirrors TerminalDefaults.lightPalette.
