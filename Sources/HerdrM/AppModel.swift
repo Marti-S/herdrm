@@ -533,11 +533,10 @@ final class AppModel: ObservableObject {
             do {
                 let service = service(for: device)
                 var path = directory.trimmingCharacters(in: .whitespaces)
+                // The browser leaves paths slash-terminated; herdr wants them bare.
+                while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
                 if path.isEmpty { path = "~" }
-                if path == "~" || path.hasPrefix("~/") {
-                    let home = try await service.homeDirectory()
-                    path = path == "~" ? home : "\(home)/\(path.dropFirst(2))"
-                }
+                path = try await service.absolutePath(path)
                 let trimmedLabel = label?.trimmingCharacters(in: .whitespaces)
                 let created = try await service.createWorkspace(
                     label: (trimmedLabel?.isEmpty ?? true) ? nil : trimmedLabel,
