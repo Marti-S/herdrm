@@ -58,5 +58,8 @@ targets:
         Debug:
           # real identity so UserNotifications & friends work in dev builds
           CODE_SIGN_IDENTITY: "Developer ID Application: MOE AI LLC (NCFNX3LJ83)"
+          ONLY_ACTIVE_ARCH: YES
         Release:
           CODE_SIGN_IDENTITY: "Developer ID Application: MOE AI LLC (NCFNX3LJ83)"
+          ONLY_ACTIVE_ARCH: NO
+          ARCHS: "arm64 x86_64"

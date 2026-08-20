@@ -39,6 +39,7 @@ jobs:
           xcodegen generate
           xcodebuild -project HerdrM.xcodeproj -scheme HerdrM -configuration Release \
             -derivedDataPath build build -skipPackagePluginValidation \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
             MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             OTHER_CODE_SIGN_FLAGS="--timestamp" CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
 
