@@ -7,6 +7,8 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-20
+
 ### Added
 - Dragging in the terminal now selects text locally, like a native text view —
   no Shift needed — and a plain click dismisses the selection; copy with ⌘C.
