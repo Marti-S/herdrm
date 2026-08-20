@@ -141,6 +141,56 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
         }
     }
 
+    // Right-click context menu. SwiftTerm's link lookup is internal, so link
+    // items key off the selected text instead — a double-click selects a whole
+    // URL, which pairs naturally with right-click.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        if selection.active {
+            menu.addItem(makeItem("Copy", #selector(NSText.copy(_:))))
+            if let url = Self.firstURL(in: selection.getSelectedText()) {
+                menu.addItem(.separator())
+                let open = makeItem("Open Link", #selector(openLinkFromMenu(_:)))
+                open.representedObject = url
+                menu.addItem(open)
+                let copyLink = makeItem("Copy Link Address", #selector(copyLinkFromMenu(_:)))
+                copyLink.representedObject = url
+                menu.addItem(copyLink)
+            }
+            menu.addItem(.separator())
+        }
+        menu.addItem(makeItem("Paste", #selector(NSText.paste(_:))))
+        menu.addItem(makeItem("Select All", #selector(NSText.selectAll(_:))))
+        return menu
+    }
+
+    private func makeItem(_ title: String, _ action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func openLinkFromMenu(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func copyLinkFromMenu(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+    }
+
+    static func firstURL(in text: String) -> URL? {
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = detector?.firstMatch(in: text, range: range),
+              let url = match.url,
+              url.scheme == "http" || url.scheme == "https"
+        else { return nil }
+        return url
+    }
+
     override func interpretKeyEvents(_ eventArray: [NSEvent]) {
         if eventArray.count == 1,
            let event = eventArray.first,

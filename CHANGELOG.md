@@ -7,6 +7,13 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- Right-click context menu in the terminal: Copy, Paste, Select All — plus
+  Open Link and Copy Link Address when the selected text contains a URL
+  (double-click selects a whole URL). (#19)
+- ⌘-click opens http(s) links under the pointer in the default browser
+  (SwiftTerm's built-in link detection; hold ⌘ to highlight). (#19)
+
 ## [0.3.4] - 2026-08-20
 
 ### Added
