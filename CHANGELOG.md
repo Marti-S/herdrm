@@ -7,6 +7,13 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Terminal colors now adapt to Light mode: explicit truecolor output (like
+  Codex's dark input box) is luminance-flipped before it reaches the terminal,
+  and the ANSI palette follows the theme. (#15, thanks @hhmy27!) On top of
+  that, palette entries that already read well on white — red, blue, magenta,
+  black — keep their original colors instead of washing out to pastels.
+
 ## [0.3.1] - 2026-08-20
 
 ### Added

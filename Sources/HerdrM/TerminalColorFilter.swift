@@ -38,6 +38,16 @@ struct LightTerminalANSIAdapter {
         return output
     }
 
+    /// WCAG contrast ratio of an sRGB color against a white background.
+    static func contrastOnWhite(red: Int, green: Int, blue: Int) -> Double {
+        func linear(_ value: Int) -> Double {
+            let channel = Double(value) / 255
+            return channel <= 0.03928 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        return 1.05 / (luminance + 0.05)
+    }
+
     static func lightRGB(red: Int, green: Int, blue: Int) -> (red: Int, green: Int, blue: Int) {
         let luminance = 0.2126 * Double(red) + 0.7152 * Double(green) + 0.0722 * Double(blue)
         let offset = 255 - 2 * luminance

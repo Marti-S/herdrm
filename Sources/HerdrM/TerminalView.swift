@@ -27,16 +27,32 @@ enum TerminalDefaults {
         alpha: 1
     )
     static let darkPalette = SwiftTerm.Color.terminalAppColors
+    /// Per entry, keep whichever of the original and luminance-flipped color reads
+    /// better on the light background: the flip rescues colors designed for dark
+    /// backgrounds (white, the bright variants), but ANSI red/blue/magenta/black
+    /// are already dark and would wash out to pastels.
     static let lightPalette = darkPalette.map { color in
-        let light = LightTerminalANSIAdapter.lightRGB(
+        let original = (
             red: Int(color.red / 257),
             green: Int(color.green / 257),
             blue: Int(color.blue / 257)
         )
+        let flipped = LightTerminalANSIAdapter.lightRGB(
+            red: original.red,
+            green: original.green,
+            blue: original.blue
+        )
+        let originalContrast = LightTerminalANSIAdapter.contrastOnWhite(
+            red: original.red, green: original.green, blue: original.blue
+        )
+        let flippedContrast = LightTerminalANSIAdapter.contrastOnWhite(
+            red: flipped.red, green: flipped.green, blue: flipped.blue
+        )
+        let chosen = originalContrast >= flippedContrast ? original : flipped
         return SwiftTerm.Color(
-            red8: UInt16(light.red),
-            green8: UInt16(light.green),
-            blue8: UInt16(light.blue)
+            red8: UInt16(chosen.red),
+            green8: UInt16(chosen.green),
+            blue8: UInt16(chosen.blue)
         )
     }
 

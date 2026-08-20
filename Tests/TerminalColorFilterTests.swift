@@ -21,6 +21,26 @@ struct TerminalColorFilterTests {
             "split escape sequences should be transformed without corruption"
         )
 
+        // The light palette keeps whichever variant reads better on white:
+        // ANSI red is already dark and must not wash out to a pastel, while
+        // bright white must flip to dark. Mirrors TerminalDefaults.lightPalette.
+        let redOriginal = LightTerminalANSIAdapter.contrastOnWhite(red: 194, green: 54, blue: 33)
+        let redFlipped = LightTerminalANSIAdapter.lightRGB(red: 194, green: 54, blue: 33)
+        expect(
+            redOriginal >= LightTerminalANSIAdapter.contrastOnWhite(
+                red: redFlipped.red, green: redFlipped.green, blue: redFlipped.blue
+            ),
+            "ANSI red should survive the light palette unflipped"
+        )
+        let brightWhiteOriginal = LightTerminalANSIAdapter.contrastOnWhite(red: 233, green: 235, blue: 235)
+        let brightWhiteFlipped = LightTerminalANSIAdapter.lightRGB(red: 233, green: 235, blue: 235)
+        expect(
+            LightTerminalANSIAdapter.contrastOnWhite(
+                red: brightWhiteFlipped.red, green: brightWhiteFlipped.green, blue: brightWhiteFlipped.blue
+            ) > brightWhiteOriginal,
+            "ANSI bright white should flip to a dark color"
+        )
+
         print("PASS: LightTerminalANSIAdapter")
     }
 
