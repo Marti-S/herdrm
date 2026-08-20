@@ -316,9 +316,9 @@ public actor SSHTunnel {
         mkdir -p "$dir" && chmod 700 "$dir"
         find "$dir" -type f -mtime +7 -delete 2>/dev/null || true
         tmp="$dir/.\(remoteFilename).part"
-        path="$dir/\(remoteFilename)"
-        if cat > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$path"; then
-            printf '%s\\n' "$path"
+        dest="$dir/\(remoteFilename)"
+        if cat > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$dest"; then
+            printf '%s\\n' "$dest"
         else
             rm -f "$tmp"
             exit 1
@@ -336,7 +336,10 @@ public actor SSHTunnel {
                     "-o", "ConnectTimeout=8",
                     "-o", "ServerAliveInterval=15",
                     sshDestination(target),
-                    command,
+                    // Under sh explicitly: the login shell may be zsh (where a
+                    // `path=` assignment would clobber PATH) or fish (no `var=`
+                    // assignments at all).
+                    "exec /bin/sh -c \(HerdrService.shellQuoted(command))",
                 ]
                 proc.environment = ProcessInfo.processInfo.environment.merging(authentication.environment) { _, new in new }
                 let output = Pipe()

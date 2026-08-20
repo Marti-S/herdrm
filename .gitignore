@@ -5,3 +5,4 @@ HerdrM.xcodeproj/
 Packages/HerdrKit/.build/
 Sources/HerdrM/Info.plist
 *.xcuserstate
+build-rel/
