@@ -242,6 +242,49 @@ public actor HerdrService {
         }
     }
 
+    /// "~" and "~/…" resolve against this device's home; anything else passes through.
+    public func absolutePath(_ path: String) async throws -> String {
+        if path == "~" { return try await homeDirectory() }
+        if path.hasPrefix("~/") { return try await homeDirectory() + "/" + path.dropFirst(2) }
+        return path
+    }
+
+    /// The visible subdirectories of a directory on this device ("~"-relative paths
+    /// allowed), sorted the way Finder sorts. Feeds the New Space directory browser.
+    /// Throws when the directory can't be read — callers decide how quiet to be.
+    public func listDirectories(at path: String) async throws -> [String] {
+        let absolute = try await absolutePath(path)
+        let names: [String]
+        switch device.kind {
+        case .local:
+            let manager = FileManager.default
+            names = try manager.contentsOfDirectory(atPath: absolute).filter { name in
+                guard !name.hasPrefix(".") else { return false }
+                var isDirectory: ObjCBool = false
+                // fileExists follows symlinks, so a linked project directory still lists.
+                return manager.fileExists(atPath: "\(absolute)/\(name)", isDirectory: &isDirectory)
+                    && isDirectory.boolValue
+            }
+        case .ssh(let target):
+            let output = try await SSHTunnel.runSSH(
+                target: target,
+                command: "cd \(Self.shellQuoted(absolute)) && LC_ALL=C ls -1p",
+                timeout: 15,
+                credentialID: device.id
+            )
+            names = output.split(separator: "\n").compactMap { line in
+                line.hasSuffix("/") ? String(line.dropLast()) : nil
+            }
+        }
+        return names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// Wraps a path for the remote shell. Single quotes so nothing inside expands;
+    /// the quote dance survives sh, zsh, and fish login shells alike.
+    static func shellQuoted(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// Creates a workspace (herdr "space") rooted at a directory.
     /// Returns its id and the root pane (a bare shell terminal).
     public func createWorkspace(label: String?, cwd: String?) async throws -> (workspaceID: String, rootPaneID: String?) {
