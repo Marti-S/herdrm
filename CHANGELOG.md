@@ -7,6 +7,8 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-20
+
 ### Added
 - Custom SSH ports: enter the device target as `user@host:port` (or an
   `ssh://` URI); plain targets and `~/.ssh/config` aliases work as before.
