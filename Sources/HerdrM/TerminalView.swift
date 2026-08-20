@@ -411,6 +411,11 @@ struct AttachTerminalView: NSViewRepresentable {
     /// requested mouse reporting (Shift+drag bypasses it either way).
     var mouseReporting: Bool = true
     var onAttachmentError: (String) -> Void = { _ in }
+    /// Called on the main queue when the attach process exits: the pane was taken
+    /// over by another client, the SSH connection dropped, or herdr went away. A
+    /// dead session otherwise keeps its last frame and silently eats every
+    /// keystroke, which reads as a freeze.
+    var onExit: ((Int32?) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -420,6 +425,7 @@ struct AttachTerminalView: NSViewRepresentable {
         view.handlesRemoteFilePaste = !device.isLocal && ["claude", "copilot"].contains(agentKind)
         view.onAttachmentError = onAttachmentError
         view.processDelegate = context.coordinator
+        context.coordinator.onExit = onExit
         configureAppearance(view)
 
         let service = HerdrService(device: device)
@@ -445,10 +451,13 @@ struct AttachTerminalView: NSViewRepresentable {
         if let view = nsView as? LineBreakTerminalView {
             view.onAttachmentError = onAttachmentError
         }
+        context.coordinator.onExit = onExit
         configureAppearance(nsView)
     }
 
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
+        // A view being torn down must not report its own terminate() as an exit.
+        coordinator.onExit = nil
         nsView.terminate()
     }
 
@@ -471,6 +480,7 @@ struct AttachTerminalView: NSViewRepresentable {
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         var authorizationID: UUID?
+        var onExit: ((Int32?) -> Void)?
 
         deinit {
             discardAuthorization()
@@ -493,6 +503,9 @@ struct AttachTerminalView: NSViewRepresentable {
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
         func processTerminated(source: TerminalView, exitCode: Int32?) {
             discardAuthorization()
+            let callback = onExit
+            onExit = nil  // report once
+            DispatchQueue.main.async { callback?(exitCode) }
         }
     }
 }

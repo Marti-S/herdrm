@@ -535,6 +535,11 @@ public actor HerdrService {
                 args: ["-tt"] + authentication.arguments + [
                     "-o", "StrictHostKeyChecking=accept-new",
                     "-o", "ConnectTimeout=10",
+                    // Same keepalives as the tunnel: without them a dropped network
+                    // path leaves the terminal frozen on its last frame, eating input
+                    // forever, because ssh never learns the peer is gone.
+                    "-o", "ServerAliveInterval=15",
+                    "-o", "ServerAliveCountMax=3",
                     SSHTunnel.sshDestination(target), remote,
                 ],
                 environment: authentication.environment,
