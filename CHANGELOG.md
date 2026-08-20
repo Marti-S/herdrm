@@ -7,6 +7,14 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- Paste files and images straight into a Claude Code or Copilot pane. On a
+  remote device the file is streamed over SSH into a private cache under
+  `~/.cache/herdrm/attachments` (0700, entries dropped after seven days) and
+  its remote path is pasted into the agent; on a local device the paste is
+  forwarded as Ctrl+V so the agent reads the clipboard itself. Uploads are
+  capped at 50 MB and show an indicator while they run.
+
 ### Fixed
 - Settings → Terminal: the preview no longer sits indented by the form's label
   column, and the mouse-reporting description no longer truncates.

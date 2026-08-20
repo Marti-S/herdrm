@@ -478,11 +478,14 @@ public actor HerdrService {
     /// Makes a local file readable by this device and returns the device-local path.
     /// Remote files are streamed over SSH into the user's private cache.
     public func stageAttachment(from localURL: URL) async throws -> String {
+        try SSHTunnel.validateUploadCandidate(localURL)
         switch device.kind {
         case .local:
             return localURL.path
         case .ssh:
-            guard let tunnel else { throw HerdrError.tunnelFailed("missing tunnel") }
+            guard let tunnel else {
+                throw HerdrError.fileTransferFailed("no SSH connection for this device")
+            }
             return try await tunnel.uploadFile(from: localURL)
         }
     }

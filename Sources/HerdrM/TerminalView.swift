@@ -231,10 +231,12 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
     var handlesRemoteFilePaste = false
     var attachmentService: HerdrService?
     var onAttachmentError: ((String) -> Void)?
-    private var remotePasteTask: Task<Void, Never>?
+    var onAttachmentUploadingChanged: ((Bool) -> Void)?
+    private var pendingUploads: [[ClipboardFile]] = []
+    private var uploadTask: Task<Void, Never>?
 
     deinit {
-        remotePasteTask?.cancel()
+        uploadTask?.cancel()
     }
 
     override func paste(_ sender: Any) {
@@ -278,38 +280,47 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
 
     private func enqueueRemotePaste(_ files: [ClipboardFile]) {
         guard let attachmentService else {
+            discardTemporaries(in: files)
             reportAttachmentError(ClipboardFileError.transferUnavailable)
             return
         }
-        let previousTask = remotePasteTask
-        remotePasteTask = Task { [weak self] in
-            defer {
-                for file in files where file.removeAfterUpload {
-                    try? FileManager.default.removeItem(at: file.localURL)
-                }
-            }
-            await previousTask?.value
-            guard !Task.isCancelled else { return }
+        pendingUploads.append(files)
+        guard uploadTask == nil else { return }
+        onAttachmentUploadingChanged?(true)
+        uploadTask = Task { [weak self] in
+            await self?.drainUploads(using: attachmentService)
+        }
+    }
 
+    /// Uploads one paste at a time so paths reach the agent in paste order.
+    @MainActor
+    private func drainUploads(using service: HerdrService) async {
+        while !pendingUploads.isEmpty {
+            let files = pendingUploads.removeFirst()
+            defer { discardTemporaries(in: files) }
             do {
                 var remotePaths: [String] = []
                 for file in files {
                     try Task.checkCancellation()
-                    remotePaths.append(
-                        try await attachmentService.stageAttachment(from: file.localURL)
-                    )
+                    remotePaths.append(try await service.stageAttachment(from: file.localURL))
                 }
                 try Task.checkCancellation()
-                await MainActor.run { [weak self] in
-                    self?.sendPastedText(remotePaths.joined(separator: " "))
-                }
+                sendPastedText(remotePaths.joined(separator: " "))
             } catch is CancellationError {
-                return
+                break
             } catch {
-                await MainActor.run { [weak self] in
-                    self?.reportAttachmentError(error)
-                }
+                reportAttachmentError(error)
             }
+        }
+        pendingUploads.forEach(discardTemporaries(in:))
+        pendingUploads.removeAll()
+        uploadTask = nil
+        onAttachmentUploadingChanged?(false)
+    }
+
+    private func discardTemporaries(in files: [ClipboardFile]) {
+        for file in files where file.removeAfterUpload {
+            try? FileManager.default.removeItem(at: file.localURL)
         }
     }
 
@@ -327,7 +338,7 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
     }
 
     private func reportAttachmentError(_ error: Error) {
-        onAttachmentError?("Remote paste failed: \(error.localizedDescription)")
+        onAttachmentError?(error.localizedDescription)
     }
 
     private static func clipboardFiles(in pasteboard: NSPasteboard) throws -> [ClipboardFile]? {
@@ -344,10 +355,12 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
             }
         }
 
-        guard let image = pasteboard.readObjects(
-            forClasses: [NSImage.self],
-            options: nil
-        )?.first as? NSImage else {
+        guard !hasText(in: pasteboard),
+              let image = pasteboard.readObjects(
+                  forClasses: [NSImage.self],
+                  options: nil
+              )?.first as? NSImage
+        else {
             return nil
         }
         guard let tiff = image.tiffRepresentation,
@@ -378,7 +391,7 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
     }
 
     private static func containsImage(in pasteboard: NSPasteboard) -> Bool {
-        if pasteboard.canReadObject(forClasses: [NSImage.self], options: nil) {
+        if !hasText(in: pasteboard), pasteboard.canReadObject(forClasses: [NSImage.self], options: nil) {
             return true
         }
         guard let fileURLs = pasteboard.readObjects(
@@ -394,6 +407,12 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
             return contentType.conforms(to: .image)
         }
     }
+
+    /// Keynote, Excel and Preview attach a TIFF snapshot to copied text, so a
+    /// pasteboard only counts as an image when it carries no text at all.
+    private static func hasText(in pasteboard: NSPasteboard) -> Bool {
+        pasteboard.canReadObject(forClasses: [NSString.self], options: nil)
+    }
 }
 
 /// Embeds a SwiftTerm terminal running `herdr agent attach` (directly or over ssh).
@@ -402,7 +421,8 @@ struct AttachTerminalView: NSViewRepresentable {
     let paneID: String
     /// The device's herdr server version, so attach picks a matching CLI binary.
     var serverVersion: String?
-    let agentKind: String
+    /// nil until herdr finishes detecting the agent in a freshly started pane.
+    let agentKind: String?
     var fontName: String = ""
     var fontSize: Double = TerminalDefaults.defaultFontSize
     /// From SwiftUI's environment so theme switches re-render immediately.
@@ -411,14 +431,13 @@ struct AttachTerminalView: NSViewRepresentable {
     /// requested mouse reporting (Shift+drag bypasses it either way).
     var mouseReporting: Bool = true
     var onAttachmentError: (String) -> Void = { _ in }
+    var onAttachmentUploadingChanged: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
         let view = LineBreakTerminalView(frame: .zero)
-        view.forwardsLocalImagePaste = device.isLocal
-        view.handlesRemoteFilePaste = !device.isLocal && ["claude", "copilot"].contains(agentKind)
-        view.onAttachmentError = onAttachmentError
+        configurePasteHandling(view)
         view.processDelegate = context.coordinator
         configureAppearance(view)
 
@@ -443,9 +462,19 @@ struct AttachTerminalView: NSViewRepresentable {
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
         if let view = nsView as? LineBreakTerminalView {
-            view.onAttachmentError = onAttachmentError
+            configurePasteHandling(view)
         }
         configureAppearance(nsView)
+    }
+
+    /// Re-applied on update: herdr reports the agent kind as nil until detection
+    /// lands, and the view identity doesn't change when it does.
+    private func configurePasteHandling(_ view: LineBreakTerminalView) {
+        let acceptsAttachments = AgentInfo.acceptsPastedAttachments(agentKind: agentKind)
+        view.forwardsLocalImagePaste = device.isLocal && acceptsAttachments
+        view.handlesRemoteFilePaste = !device.isLocal && acceptsAttachments
+        view.onAttachmentError = onAttachmentError
+        view.onAttachmentUploadingChanged = onAttachmentUploadingChanged
     }
 
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {

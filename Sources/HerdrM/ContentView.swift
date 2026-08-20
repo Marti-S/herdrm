@@ -201,6 +201,7 @@ struct DetailView: View {
     @AppStorage(TerminalDefaults.fontSizeKey) private var terminalFontSize = TerminalDefaults.defaultFontSize
     @AppStorage("terminal.mouseReporting") private var terminalMouseReporting = true
     @Environment(\.colorScheme) private var colorScheme
+    @State private var uploadingAttachment = false
 
     @ViewBuilder
     private var terminal: some View {
@@ -209,18 +210,23 @@ struct DetailView: View {
                 device: entry.device,
                 paneID: entry.agent.paneID,
                 serverVersion: model.serverVersion(deviceID: entry.device.id),
-                agentKind: entry.agent.agent,
+                agentKind: entry.agent.agentKindRaw,
                 fontName: terminalFontName,
                 fontSize: terminalFontSize,
                 dark: colorScheme == .dark,
                 mouseReporting: terminalMouseReporting,
-                onAttachmentError: { model.actionError = $0 }
+                onAttachmentError: { model.actionError = $0 },
+                onAttachmentUploadingChanged: { uploadingAttachment = $0 }
             )
                 .id("attach-\(entry.id)-\(colorScheme)")
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Theme.terminalBackground)
+                .overlay(alignment: .bottomTrailing) {
+                    if uploadingAttachment { uploadIndicator }
+                }
+                .onChange(of: entry.id) { uploadingAttachment = false }
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "terminal")
@@ -244,6 +250,20 @@ struct DetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.terminalBackground)
         }
+    }
+
+    private var uploadIndicator: some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text("Uploading…")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: Capsule())
+        .padding(.trailing, 20)
+        .padding(.bottom, 18)
     }
 
     private var showsStartAgentShortcut: Bool {
