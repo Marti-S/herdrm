@@ -2,7 +2,8 @@ import HerdrKit
 import SwiftUI
 
 struct RootView: View {
-    @StateObject private var model = AppModel()
+    // Owned by AppDelegate so it outlives the window — see AppDelegate in HerdrMApp.swift.
+    @ObservedObject var model: AppModel
     // Deliberately not persisted: the app always launches with the sidebar visible.
     @State private var sidebarCollapsed = false
 

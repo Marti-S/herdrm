@@ -5,8 +5,29 @@ import Sparkle
 import SwiftUI
 import UserNotifications
 
+/// Holds app termination open long enough to tear the SSH tunnels down: without
+/// `.terminateLater` the process dies before the teardown task gets to run, and the
+/// `ssh` children survive with PPID 1 along with their sockets.
+///
+/// The delegate owns the model rather than borrowing it from the window: closing the
+/// last window (⌘W) would otherwise drop the only strong reference, and the quit that
+/// follows would find nothing left to tear down.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let model = AppModel()
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Task { @MainActor in
+            await model.shutdownAllSessions()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+}
+
 @main
 struct HerdrMApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @AppStorage("app.theme") private var themePreference = "system"
 
     private let updaterController: SPUStandardUpdaterController
@@ -25,7 +46,7 @@ struct HerdrMApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(model: appDelegate.model)
                 .onAppear { Self.applyTheme(themePreference) }
                 .onChange(of: themePreference) { _, newValue in
                     Self.applyTheme(newValue)
