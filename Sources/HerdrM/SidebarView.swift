@@ -223,7 +223,7 @@ struct SidebarView: View {
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    statusGlyph(agent.status)
+                    AgentStatusGlyph(status: agent.status)
                 }
                 HStack(spacing: 5) {
                     AgentKindBadge(kind: agent.agent)
@@ -255,25 +255,6 @@ struct SidebarView: View {
     /// Tinted name chip marking which device a row belongs to.
     private func deviceBadge(_ device: Device) -> some View {
         DeviceChip(device: device)
-    }
-
-    @ViewBuilder
-    private func statusGlyph(_ status: AgentStatus) -> some View {
-        switch status {
-        case .working:
-            SpinnerView(color: Theme.working)
-                .frame(width: 12, height: 12)
-        case .blocked:
-            Image(systemName: "exclamationmark.circle")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.warning)
-        case .done:
-            Image(systemName: "checkmark")
-                .font(.system(size: 10.5, weight: .bold))
-                .foregroundStyle(Theme.success)
-        case .idle, .unknown:
-            EmptyView()
-        }
     }
 
     @ViewBuilder

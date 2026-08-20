@@ -67,3 +67,27 @@ enum Theme {
         }
     }
 }
+
+/// Status marker shared by the sidebar rows and the ⌘K search results, so both
+/// surfaces speak the same visual language for "working / needs input / done".
+struct AgentStatusGlyph: View {
+    let status: AgentStatus
+
+    var body: some View {
+        switch status {
+        case .working:
+            SpinnerView(color: Theme.working)
+                .frame(width: 12, height: 12)
+        case .blocked:
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.warning)
+        case .done:
+            Image(systemName: "checkmark")
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(Theme.success)
+        case .idle, .unknown:
+            EmptyView()
+        }
+    }
+}

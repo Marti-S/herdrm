@@ -13,6 +13,9 @@ the Sparkle update description — a release without a section here fails CI.
   Claude Code's bold text especially — look heavy and smudged; **Weight**
   (Light/Regular/Medium) for the system monospaced font; and **Line spacing**
   (100%–140%). (#4)
+- ⌘K now lists agents in the same order as the sidebar — the ones waiting on you
+  first, then done, working and idle — and each row carries its status glyph plus
+  a "needs input" label, so the agent that needs you is the first thing you see. (#6)
 
 ## [0.3.7] - 2026-08-20
 
