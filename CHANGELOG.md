@@ -7,6 +7,13 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- Dragging in the terminal now selects text locally, like a native text view —
+  no Shift needed — and a plain click dismisses the selection; copy with ⌘C.
+  Clicks and the scroll wheel still reach the TUI. Previously herdr's attach
+  stream captured every mouse event (including Shift+drag via XTSHIFTESCAPE),
+  so nothing could be selected or copied at all. (#17)
+
 ### Fixed
 - Connecting to a remote whose herdr isn't running used to fail with
   `malformed response: empty reply` — the tunnel comes up fine and ssh only

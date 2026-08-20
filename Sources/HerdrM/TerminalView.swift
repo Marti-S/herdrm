@@ -95,6 +95,52 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
         }
     }
 
+    // Dragging always selects text locally, like a native text view. With mouse
+    // reporting on, SwiftTerm forwards every mouse event to the TUI (herdr's
+    // attach stream requests the mouse, and via XTSHIFTESCAPE even Shift+drag),
+    // leaving no way to select or copy anything. Clicks and the scroll wheel
+    // still reach the TUI — only drags (and Shift/double/triple clicks, which
+    // only mean selection) are kept local by parking mouse reporting for the
+    // duration of the event.
+    private func withLocalSelection(_ event: NSEvent, _ forward: (NSEvent) -> Void) {
+        let saved = allowMouseReporting
+        allowMouseReporting = false
+        forward(event)
+        allowMouseReporting = saved
+    }
+
+    private func isSelectionGesture(_ event: NSEvent) -> Bool {
+        event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift)
+            || event.clickCount > 1
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // A plain click deactivates any selection. SwiftTerm's own branch for
+        // that is unreachable while mouse reporting forwards the click, so do
+        // it here — then let the click reach the TUI as usual.
+        if !isSelectionGesture(event), selection.active {
+            selection.selectNone()
+            needsDisplay = true
+        }
+        if isSelectionGesture(event) {
+            withLocalSelection(event) { super.mouseDown(with: $0) }
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        withLocalSelection(event) { super.mouseDragged(with: $0) }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if isSelectionGesture(event) {
+            withLocalSelection(event) { super.mouseUp(with: $0) }
+        } else {
+            super.mouseUp(with: event)
+        }
+    }
+
     override func interpretKeyEvents(_ eventArray: [NSEvent]) {
         if eventArray.count == 1,
            let event = eventArray.first,
