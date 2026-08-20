@@ -86,6 +86,13 @@ final class AppModel: ObservableObject {
         sessions[id] ?? DeviceSessionState()
     }
 
+    /// The herdr version the device's server reported on its last successful
+    /// ping; the terminal attach uses it to pick a protocol-matching CLI binary.
+    func serverVersion(deviceID: UUID) -> String? {
+        if case .connected(let version) = session(deviceID).connection { return version }
+        return nil
+    }
+
     var filteredDevice: Device? {
         deviceFilter.flatMap(device)
     }

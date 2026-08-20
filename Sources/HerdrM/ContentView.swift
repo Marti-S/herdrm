@@ -208,6 +208,7 @@ struct DetailView: View {
             AttachTerminalView(
                 device: entry.device,
                 paneID: entry.agent.paneID,
+                serverVersion: model.serverVersion(deviceID: entry.device.id),
                 fontName: terminalFontName,
                 fontSize: terminalFontSize,
                 dark: colorScheme == .dark,

@@ -104,3 +104,32 @@ final class SSHDestinationTests: XCTestCase {
         XCTAssertEqual(SSHTunnel.sshDestination("host:"), "host:")
     }
 }
+
+final class AttachBinarySelectionTests: XCTestCase {
+    func testKnownServerVersionProbesForAnExactMatch() {
+        let fragment = HerdrService.attachBinarySelection(serverVersion: "0.8.2")
+        XCTAssertTrue(fragment.contains("for d in $PATH"))
+        XCTAssertTrue(fragment.contains("'0.8.2'"))
+        XCTAssertTrue(fragment.contains("hb=herdr"), "first-found binary must stay the fallback")
+    }
+
+    func testUnknownOrUnsafeServerVersionFallsBackToPlainHerdr() {
+        XCTAssertEqual(HerdrService.attachBinarySelection(serverVersion: nil), "hb=herdr")
+        XCTAssertEqual(HerdrService.attachBinarySelection(serverVersion: ""), "hb=herdr")
+        // Anything but digits and dots must not reach the shell.
+        XCTAssertEqual(HerdrService.attachBinarySelection(serverVersion: "0.8'; rm -rf /"), "hb=herdr")
+    }
+
+    func testAttachCommandsRunTheSelectedBinaryThroughSh() {
+        let local = HerdrService(device: Device(name: "L", kind: .local), localServer: nil)
+            .attachCommand(paneID: "w1:p1", serverVersion: "0.8.2")
+        XCTAssertEqual(local.executable, "/bin/sh")
+        XCTAssertTrue(local.args.last?.contains("exec \"$hb\" agent attach 'w1:p1'") == true)
+
+        let remote = HerdrService(device: Device(name: "R", kind: .ssh(target: "u@h")), localServer: nil)
+            .attachCommand(paneID: "w1:p1", serverVersion: "0.8.2")
+        XCTAssertEqual(remote.executable, "/usr/bin/ssh")
+        // The whole script must run under sh on the far side, not the login shell.
+        XCTAssertTrue(remote.args.last?.hasPrefix("exec /bin/sh -c '") == true)
+    }
+}

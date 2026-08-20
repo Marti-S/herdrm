@@ -483,15 +483,40 @@ public actor HerdrService {
 
     // MARK: - Terminal attach
 
+    /// Shell fragment that picks the herdr binary to attach with. herdr's attach
+    /// stream requires the CLI and server protocol versions to match exactly, so
+    /// when several herdr binaries share the PATH (a stale copy in ~/.local/bin
+    /// next to an updated /usr/local/bin install), blindly taking the first one
+    /// yields `protocol_mismatch`. When the server version is known, every PATH
+    /// candidate is tried for an exact `--version` match first; the first-found
+    /// binary stays the fallback either way.
+    static func attachBinarySelection(serverVersion: String?) -> String {
+        guard let serverVersion, !serverVersion.isEmpty,
+              serverVersion.allSatisfy({ $0.isNumber || $0 == "." })
+        else { return "hb=herdr" }
+        // A manual PATH walk: `command -v -a` isn't POSIX and silently returns
+        // only the first match under macOS /bin/sh.
+        return "hb=''; oldifs=$IFS; IFS=:; for d in $PATH; do c=\"$d/herdr\"; [ -x \"$c\" ] || continue; "
+            + "[ \"$(\"$c\" --version 2>/dev/null | awk '{print $NF}')\" = '\(serverVersion)' ] && { hb=\"$c\"; break; }; "
+            + "done; IFS=$oldifs; [ -n \"$hb\" ] || hb=herdr"
+    }
+
     /// The command the embedded terminal should spawn to attach to a pane.
-    public nonisolated func attachCommand(paneID: String) -> AttachCommand {
+    /// `serverVersion` (from the device's last successful ping) lets the attach
+    /// pick a herdr binary whose protocol matches the server's — see
+    /// `attachBinarySelection`.
+    public nonisolated func attachCommand(paneID: String, serverVersion: String? = nil) -> AttachCommand {
+        // GUI apps launched from Finder don't inherit a login-shell PATH, and
+        // sshd exec is not a login shell either — hence the PATH export.
+        let script = "\(SSHTunnel.remotePathExport); \(Self.attachBinarySelection(serverVersion: serverVersion)); "
+            + "exec \"$hb\" agent attach '\(paneID)' --takeover"
         switch device.kind {
         case .local:
-            // GUI apps launched from Finder don't inherit a login-shell PATH.
-            let local = "\(SSHTunnel.remotePathExport); exec herdr agent attach '\(paneID)' --takeover"
-            return AttachCommand(executable: "/bin/sh", args: ["-c", local], environment: [:], authorizationID: nil)
+            return AttachCommand(executable: "/bin/sh", args: ["-c", script], environment: [:], authorizationID: nil)
         case .ssh(let target):
-            let remote = "\(SSHTunnel.remotePathExport); exec herdr agent attach '\(paneID)' --takeover"
+            // Wrapped in sh explicitly: the ssh remote command runs in the user's
+            // login shell, and the script's sh syntax must not depend on it.
+            let remote = "exec /bin/sh -c \(Self.shellQuoted(script))"
             let authentication = SSHTunnel.authenticationConfiguration(for: device.id)
             return AttachCommand(
                 executable: "/usr/bin/ssh",

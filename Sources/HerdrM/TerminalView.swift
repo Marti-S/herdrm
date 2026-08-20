@@ -212,6 +212,8 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
 struct AttachTerminalView: NSViewRepresentable {
     let device: Device
     let paneID: String
+    /// The device's herdr server version, so attach picks a matching CLI binary.
+    var serverVersion: String?
     var fontName: String = ""
     var fontSize: Double = TerminalDefaults.defaultFontSize
     /// From SwiftUI's environment so theme switches re-render immediately.
@@ -228,7 +230,7 @@ struct AttachTerminalView: NSViewRepresentable {
         configureAppearance(view)
 
         let service = HerdrService(device: device)
-        let command = service.attachCommand(paneID: paneID)
+        let command = service.attachCommand(paneID: paneID, serverVersion: serverVersion)
         var environment = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         environment.append("LANG=en_US.UTF-8")
         for (key, value) in command.environment {
