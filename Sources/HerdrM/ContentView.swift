@@ -201,23 +201,38 @@ struct DetailView: View {
     @AppStorage(TerminalDefaults.fontSizeKey) private var terminalFontSize = TerminalDefaults.defaultFontSize
     @AppStorage("terminal.mouseReporting") private var terminalMouseReporting = true
     @Environment(\.colorScheme) private var colorScheme
+    /// The entry whose attach process exited, and how. Keyed by entry id so a stale
+    /// exit from a previously selected pane never covers a live terminal.
+    @State private var endedAttachKey: String?
+    @State private var endedAttachCode: Int32?
+    @State private var attachRetry = 0
 
     @ViewBuilder
     private var terminal: some View {
         if let entry = model.selectedEntry {
-            AttachTerminalView(
-                device: entry.device,
-                paneID: entry.agent.paneID,
-                fontName: terminalFontName,
-                fontSize: terminalFontSize,
-                dark: colorScheme == .dark,
-                mouseReporting: terminalMouseReporting
-            )
-                .id("attach-\(entry.id)-\(colorScheme)")
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.terminalBackground)
+            ZStack {
+                AttachTerminalView(
+                    device: entry.device,
+                    paneID: entry.agent.paneID,
+                    fontName: terminalFontName,
+                    fontSize: terminalFontSize,
+                    dark: colorScheme == .dark,
+                    mouseReporting: terminalMouseReporting,
+                    onExit: { code in
+                        endedAttachKey = entry.id
+                        endedAttachCode = code
+                    }
+                )
+                    .id("attach-\(entry.id)-\(colorScheme)-\(attachRetry)")
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                if endedAttachKey == entry.id {
+                    attachEndedOverlay(entry)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.terminalBackground)
+            .onChange(of: entry.id) { _, _ in endedAttachKey = nil }
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "terminal")
@@ -241,6 +256,33 @@ struct DetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.terminalBackground)
         }
+    }
+
+    /// ssh exits 255 for transport failures; everything else is the far end closing
+    /// (takeover by another client, the pane going away, herdr stopping).
+    private func attachEndedOverlay(_ entry: AppModel.AgentEntry) -> some View {
+        let dropped = endedAttachCode == 255
+        return VStack(spacing: 10) {
+            Image(systemName: dropped ? "bolt.horizontal.circle" : "rectangle.slash")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(Theme.textGhost)
+            Text(dropped ? "Connection to \(entry.device.name) dropped" : "Terminal session ended")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.text)
+            Text(dropped
+                ? "The SSH connection behind this terminal went away."
+                : "Another client took this pane over, or the attach closed.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.textTertiary)
+            Button("Reconnect") {
+                endedAttachKey = nil
+                attachRetry += 1
+            }
+            .controlSize(.small)
+            .keyboardShortcut(.defaultAction)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.terminalBackground.opacity(0.94))
     }
 
     private var showsStartAgentShortcut: Bool {
