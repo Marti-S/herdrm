@@ -7,6 +7,13 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- The New Space sheet's DIRECTORY field now carries an inline folder browser:
+  type freely, click a folder to descend, arrow-up to the parent, and typing a
+  partial name filters the listing as you go. Works on remote devices too
+  (listed over one-shot SSH); local devices keep the native Browse… panel.
+  (#20, thanks @lcandy2!)
+
 ## [0.3.5] - 2026-08-20
 
 ### Added
