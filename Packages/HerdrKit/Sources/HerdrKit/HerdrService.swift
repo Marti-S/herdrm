@@ -42,7 +42,16 @@ public actor HerdrService {
             socketPath = try await tunnel.ensureUp()
         }
         let client = SocketRPC(socketPath: socketPath)
-        let pong = try await ping(client, socketPath: socketPath)
+        let pong: PingResult
+        do {
+            pong = try await ping(client, socketPath: socketPath)
+        } catch let error as HerdrError where Self.isSilentForward(error) {
+            guard let tunnel, let diagnosis = await tunnel.diagnoseSilentForward() else {
+                throw error
+            }
+            await tunnel.tearDown()
+            throw diagnosis
+        }
         guard pong.protocolVersion >= Self.minimumProtocolVersion else {
             throw HerdrError.incompatibleProtocol(pong.protocolVersion)
         }
@@ -89,6 +98,17 @@ public actor HerdrService {
             return reason.contains("connect():") && reason.contains("Connection refused")
         default: return false
         }
+    }
+
+    /// The shape a dead SSH forward takes: the tunnel is up, ssh accepts the local
+    /// connection, fails to open the remote side, and closes it — the first read hits
+    /// EOF and the reply comes back empty. Matched on the text
+    /// `SocketRPC.decodeResponse` builds, the way `isServerDown` matches `connect()`'s
+    /// wording. Everything else proves somebody replied (or the local socket itself
+    /// failed) and must surface unchanged.
+    static func isSilentForward(_ error: HerdrError) -> Bool {
+        if case .malformedResponse("empty reply") = error { return true }
+        return false
     }
 
     public func disconnect() async {
