@@ -7,6 +7,10 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Settings → Terminal: the preview no longer sits indented by the form's label
+  column, and the mouse-reporting description no longer truncates.
+
 ## [0.3.6] - 2026-08-20
 
 ### Fixed
