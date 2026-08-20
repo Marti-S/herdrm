@@ -464,6 +464,9 @@ final class LocalServerTests: XCTestCase {
         XCTAssertFalse(HerdrService.isServerDown(.incompatibleProtocol(3)))
         XCTAssertFalse(HerdrService.isServerDown(.tunnelFailed("ssh exited 255")))
         XCTAssertFalse(HerdrService.isServerDown(.herdrNotInstalled))
+        XCTAssertFalse(HerdrService.isServerDown(
+            .remoteHerdrDown(target: "vincent@10.10.10.87", socketPath: "/home/vincent/.config/herdr/herdr.sock")
+        ))
     }
 
     // MARK: - Helpers
