@@ -194,6 +194,52 @@ public actor SSHTunnel {
         errorBuffer = nil
     }
 
+    // MARK: - Silent-forward diagnosis
+
+    /// Explains a forward that answers with silence: ssh accepted the local connection,
+    /// failed to open the far side, and closed it, so the first read hit EOF before any
+    /// reply. The session itself is fine — the home probe and the tunnel both came up —
+    /// which points at the remote end of the forward. One extra round-trip tells the two
+    /// cases apart: no socket file (herdr isn't running over there, by far the common
+    /// case) vs a socket that exists but stays mute. OpenSSH's own stderr can't be
+    /// relied on here: a stock remote sshd reports the failed channel as just
+    /// "connect failed: open failed", and when the user's ssh config muxes the
+    /// connection (ControlMaster), the message lands on the master's stderr, not ours.
+    public func diagnoseSilentForward() async -> HerdrError? {
+        guard let remoteSock = try? await remoteSocketPath(),
+              let output = try? await Self.runSSH(
+                  target: target,
+                  command: "test -S \"\(remoteSock)\" && echo exists || echo missing",
+                  timeout: 10,
+                  credentialID: credentialID
+              )
+        else { return nil }
+        return Self.silentForwardDiagnosis(
+            probeOutput: output,
+            target: target,
+            remoteSocketPath: remoteSock
+        )
+    }
+
+    static func silentForwardDiagnosis(
+        probeOutput: String,
+        target: String,
+        remoteSocketPath: String
+    ) -> HerdrError? {
+        switch probeOutput.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "missing":
+            return .remoteHerdrDown(target: target, socketPath: remoteSocketPath)
+        case "exists":
+            return .tunnelFailed(
+                "\(remoteSocketPath) exists on \(target) but forwarded connections get no reply"
+                    + " — herdr may have left a stale socket, or sshd forbids Unix-socket"
+                    + " forwards (AllowStreamLocalForwarding)"
+            )
+        default:
+            return nil
+        }
+    }
+
     /// Sniffs the remote OS: "macos", an os-release ID like "ubuntu"/"debian", or a uname fallback.
     public static func probeOS(target: String, credentialID: UUID? = nil) async throws -> String {
         let command = """

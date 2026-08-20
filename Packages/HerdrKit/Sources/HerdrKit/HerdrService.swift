@@ -46,9 +46,21 @@ public actor HerdrService {
         do {
             pong = try await ping(client, socketPath: socketPath)
         } catch {
-            if let tunnel, let forwardingFailure = await tunnel.forwardingFailure() {
-                await tunnel.tearDown()
-                throw HerdrError.tunnelFailed(forwardingFailure)
+            // Two diagnosis routes compose here. The probe is definitive (it asks the
+            // remote whether the socket exists) but only fits the silent-forward shape;
+            // ssh's captured stderr is the generic fallback — often just
+            // "connect failed: open failed", and blind when ControlMaster muxes the
+            // host, which is exactly what the probe covers.
+            if let tunnel {
+                if let herdrError = error as? HerdrError, Self.isSilentForward(herdrError),
+                   let diagnosis = await tunnel.diagnoseSilentForward() {
+                    await tunnel.tearDown()
+                    throw diagnosis
+                }
+                if let forwardingFailure = await tunnel.forwardingFailure() {
+                    await tunnel.tearDown()
+                    throw HerdrError.tunnelFailed(forwardingFailure)
+                }
             }
             throw error
         }
@@ -98,6 +110,17 @@ public actor HerdrService {
             return reason.contains("connect():") && reason.contains("Connection refused")
         default: return false
         }
+    }
+
+    /// The shape a dead SSH forward takes: the tunnel is up, ssh accepts the local
+    /// connection, fails to open the remote side, and closes it — the first read hits
+    /// EOF and the reply comes back empty. Matched on the text
+    /// `SocketRPC.decodeResponse` builds, the way `isServerDown` matches `connect()`'s
+    /// wording. Everything else proves somebody replied (or the local socket itself
+    /// failed) and must surface unchanged.
+    static func isSilentForward(_ error: HerdrError) -> Bool {
+        if case .malformedResponse("empty reply") = error { return true }
+        return false
     }
 
     public func disconnect() async {
