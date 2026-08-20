@@ -135,48 +135,54 @@ struct TerminalSettingsView: View {
     private let families = TerminalDefaults.monospacedFamilies()
 
     var body: some View {
-        Form {
-            Picker("Font", selection: $fontName) {
-                Text("System Mono (SF Mono)").tag("")
-                Divider()
-                ForEach(families, id: \.self) { family in
-                    Text(family).tag(family)
+        VStack(alignment: .leading, spacing: 14) {
+            Form {
+                Picker("Font", selection: $fontName) {
+                    Text("System Mono (SF Mono)").tag("")
+                    Divider()
+                    ForEach(families, id: \.self) { family in
+                        Text(family).tag(family)
+                    }
                 }
-            }
 
-            HStack {
-                Slider(value: $fontSize, in: 9...22, step: 0.5) {
-                    Text("Size")
-                }
-                Text(String(format: "%.1f pt", fontSize))
-                    .font(.system(size: 11.5).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 52, alignment: .trailing)
-                Stepper("", value: $fontSize, in: 9...22, step: 0.5)
-                    .labelsHidden()
-            }
-
-            Toggle(isOn: $mouseReporting) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Mouse reporting")
-                    Text("Forwards clicks and drags to TUI apps that ask for them. Turn off to always select text with the mouse — Shift-drag selects either way.")
-                        .font(.system(size: 10.5))
+                HStack {
+                    Slider(value: $fontSize, in: 9...22, step: 0.5) {
+                        Text("Size")
+                    }
+                    Text(String(format: "%.1f pt", fontSize))
+                        .font(.system(size: 11.5).monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .frame(width: 52, alignment: .trailing)
+                    Stepper("", value: $fontSize, in: 9...22, step: 0.5)
+                        .labelsHidden()
+                }
+
+                Toggle(isOn: $mouseReporting) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Mouse reporting")
+                        Text("Forwards clicks and drags to TUI apps that ask for them. Turn off to always select text with the mouse — Shift-drag selects either way.")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Button("Reset to Defaults") {
+                    fontName = ""
+                    fontSize = TerminalDefaults.defaultFontSize
+                    mouseReporting = true
                 }
             }
 
-            Button("Reset to Defaults") {
-                fontName = ""
-                fontSize = TerminalDefaults.defaultFontSize
-                mouseReporting = true
-            }
-
-            Section {
+            // Outside the Form: its two-column layout has no label for these
+            // rows and would indent them by the whole label column.
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Preview")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Text("❯ herdr agent attach w1:p1 — 中文 ABC 0123")
                     .font(Font(TerminalDefaults.font(name: fontName, size: fontSize)))
+                    .lineLimit(1)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.terminalBackground, in: RoundedRectangle(cornerRadius: 6))
