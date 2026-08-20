@@ -24,13 +24,18 @@ public struct LocalHerdrServer: Sendable {
     }
 
     /// PATH used to find the herdr CLI. GUI apps launched from Finder don't inherit a
-    /// login-shell PATH, hence the same export the SSH side uses, plus mise's shim
-    /// directory: `mise use -g herdr` is one of herdr's install methods and its shims sit
-    /// in none of the other directories. `SSHTunnel.remotePathExport` stays untouched on
-    /// purpose — it is shared with the tunnel and the terminal attach, where the extra
-    /// directory would belong to the remote user, not to this Mac.
-    public static let localPathExport =
-        "\(SSHTunnel.remotePathExport); export PATH=\"$HOME/.local/share/mise/shims:$PATH\""
+    /// login-shell PATH, hence the same export the SSH side uses, plus local version
+    /// manager paths. `SSHTunnel.remotePathExport` stays untouched on purpose — these
+    /// directories belong to this Mac, not to an SSH device.
+    public static let localPathExport = """
+    \(SSHTunnel.remotePathExport); export PATH="$HOME/.local/share/mise/shims:$PATH"; \
+    nvm_dir="${NVM_DIR:-$HOME/.nvm}"; \
+    if [ -d "${NVM_BIN:-}" ]; then PATH="$NVM_BIN:$PATH"; export PATH; \
+    elif [ -s "$nvm_dir/nvm.sh" ]; then \
+        nvm_node=$(NVM_DIR="$nvm_dir"; export NVM_DIR; . "$nvm_dir/nvm.sh" >/dev/null 2>&1; nvm which default 2>/dev/null); \
+        case "$nvm_node" in */node) PATH="${nvm_node%/node}:$PATH"; export PATH;; esac; \
+    fi
+    """
 
     /// Grace given to the socket after the spawned process exits. `herdr server` also exits
     /// non-zero when another process won the race to bind the socket — that server is

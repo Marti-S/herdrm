@@ -150,11 +150,18 @@ public actor HerdrService {
         return try await client().request(method: "workspace.list", as: Envelope.self).workspaces
     }
 
+    /// Agent manifests and runtime capabilities reported by this device's server.
+    public func agentManifests() async throws -> [AgentManifestInfo] {
+        struct Envelope: Decodable { let manifests: [AgentManifestInfo] }
+        return try await client().request(
+            method: "server.agent_manifests",
+            as: Envelope.self
+        ).manifests
+    }
+
     /// Agent kinds this herdr server knows how to detect/start ("claude", "codex", …).
     public func agentKinds() async throws -> [String] {
-        let result = try await client().request(method: "server.agent_manifests")
-        guard let list = result["manifests"]?.arrayValue else { return [] }
-        return list.compactMap { $0["agent"]?.stringValue }
+        try await agentManifests().map(\.agent)
     }
 
     /// The CLI binary a kind installs as (usually the kind itself).
@@ -183,15 +190,15 @@ public actor HerdrService {
     public func installedAgentKinds(from kinds: [String]) async throws -> [String] {
         guard !kinds.isEmpty else { return [] }
         let binaries = kinds.map(Self.binaryName)
-        let script = "\(SSHTunnel.remotePathExport); for b in \(binaries.joined(separator: " ")); do command -v \"$b\" >/dev/null 2>&1 && echo \"$b\"; done"
+        let probe = "for b in \(binaries.joined(separator: " ")); do command -v \"$b\" >/dev/null 2>&1 && echo \"$b\"; done"
         let output: String
         switch device.kind {
         case .local:
-            output = try await Self.runLocalShell(script)
+            output = try await Self.runLocalShell("\(LocalHerdrServer.localPathExport); \(probe)")
         case .ssh(let target):
             output = try await SSHTunnel.runSSH(
                 target: target,
-                command: script,
+                command: "\(SSHTunnel.remotePathExport); \(probe)",
                 timeout: 15,
                 credentialID: device.id
             )
@@ -200,12 +207,16 @@ public actor HerdrService {
         return kinds.filter { found.contains(Self.binaryName(for: $0)) }
     }
 
-    static func runLocalShell(_ command: String) async throws -> String {
+    static func runLocalShell(
+        _ command: String,
+        environment: [String: String]? = nil
+    ) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/bin/sh")
                 proc.arguments = ["-c", command]
+                if let environment { proc.environment = environment }
                 let out = Pipe()
                 proc.standardOutput = out
                 proc.standardError = FileHandle.nullDevice

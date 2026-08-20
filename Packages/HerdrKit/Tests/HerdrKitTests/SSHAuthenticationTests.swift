@@ -229,14 +229,175 @@ final class SSHFileTransferTests: XCTestCase {
     }
 }
 
-final class AgentAttachmentSupportTests: XCTestCase {
-    func testAcceptsPastedAttachmentsCoversVendorPrefixedKinds() {
-        for kind in ["claude", "claude-code", "claude_code", "Claude", "copilot", "github-copilot"] {
-            XCTAssertTrue(AgentInfo.acceptsPastedAttachments(agentKind: kind), kind)
-        }
-        for kind in ["codex", "gemini", "cursor-agent", "agent", ""] {
-            XCTAssertFalse(AgentInfo.acceptsPastedAttachments(agentKind: kind), kind)
-        }
-        XCTAssertFalse(AgentInfo.acceptsPastedAttachments(agentKind: nil))
+final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
+    private let pathCapabilities = AgentAttachmentCapabilities(
+        nativeClipboardImageData: true,
+        imagePath: .shellQuoted,
+        filePath: .shellQuoted
+    )
+    private let nativeImageFileCapabilities = AgentAttachmentCapabilities(
+        nativeClipboardImageData: true,
+        nativeClipboardImageFiles: true,
+        imagePath: .shellQuoted
+    )
+
+    func testManifestDecodingAndAliasRegistry() throws {
+        let data = Data(
+            """
+            [
+              {
+                "agent": "codex",
+                "aliases": ["openai-codex", "codex_cli"],
+                "capabilities": {
+                  "attachments": {
+                    "native_clipboard_image_data": true,
+                    "native_clipboard_image_files": true,
+                    "image_path": "shell_quoted"
+                  }
+                },
+                "source": "bundled"
+              },
+              { "agent": "legacy" }
+            ]
+            """.utf8
+        )
+        let manifests = try JSONDecoder().decode([AgentManifestInfo].self, from: data)
+        let registry = AgentAttachmentCapabilityRegistry(manifests: manifests)
+
+        XCTAssertEqual(registry.capabilities(for: "codex"), nativeImageFileCapabilities)
+        XCTAssertEqual(registry.capabilities(for: "OPENAI-CODEX"), nativeImageFileCapabilities)
+        XCTAssertEqual(registry.capabilities(for: "codex_cli"), nativeImageFileCapabilities)
+        XCTAssertNil(registry.capabilities(for: "legacy"))
+        XCTAssertNil(registry.capabilities(for: nil))
+    }
+
+    func testLegacyServerFallbackOnlyAppliesWhenNoManifestAdvertisesCapabilities() throws {
+        let legacyData = Data(
+            """
+            [
+              { "agent": "claude" },
+              { "agent": "codex" },
+              { "agent": "copilot" }
+            ]
+            """.utf8
+        )
+        let legacyRegistry = AgentAttachmentCapabilityRegistry(
+            manifests: try JSONDecoder().decode([AgentManifestInfo].self, from: legacyData)
+        )
+        XCTAssertEqual(legacyRegistry.capabilities(for: "claude_code"), pathCapabilities)
+        XCTAssertEqual(
+            legacyRegistry.capabilities(for: "OPENAI-CODEX"),
+            nativeImageFileCapabilities
+        )
+        XCTAssertEqual(legacyRegistry.capabilities(for: "github-copilot"), pathCapabilities)
+
+        let capabilityAwareData = Data(
+            """
+            [
+              {
+                "agent": "codex",
+                "capabilities": {
+                  "attachments": {
+                    "native_clipboard_image_data": true,
+                    "image_path": "future_syntax"
+                  }
+                }
+              },
+              { "agent": "claude" }
+            ]
+            """.utf8
+        )
+        let capabilityAwareRegistry = AgentAttachmentCapabilityRegistry(
+            manifests: try JSONDecoder().decode(
+                [AgentManifestInfo].self,
+                from: capabilityAwareData
+            )
+        )
+        XCTAssertEqual(
+            capabilityAwareRegistry.capabilities(for: "codex"),
+            AgentAttachmentCapabilities(nativeClipboardImageData: true)
+        )
+        XCTAssertNil(capabilityAwareRegistry.capabilities(for: "claude"))
+    }
+
+    func testLocalDeliveryAccountsForClipboardSource() {
+        XCTAssertEqual(
+            AgentAttachmentDeliveryPolicy.action(
+                capabilities: pathCapabilities,
+                deviceKind: .local,
+                source: .imageData
+            ),
+            .nativeClipboard
+        )
+        XCTAssertEqual(
+            AgentAttachmentDeliveryPolicy.action(
+                capabilities: pathCapabilities,
+                deviceKind: .local,
+                source: .files(allImages: true)
+            ),
+            .devicePaths(.shellQuoted)
+        )
+        XCTAssertEqual(
+            AgentAttachmentDeliveryPolicy.action(
+                capabilities: nativeImageFileCapabilities,
+                deviceKind: .local,
+                source: .files(allImages: true)
+            ),
+            .nativeClipboard
+        )
+        XCTAssertEqual(
+            AgentAttachmentDeliveryPolicy.action(
+                capabilities: nativeImageFileCapabilities,
+                deviceKind: .local,
+                source: .files(allImages: false)
+            ),
+            .unsupported
+        )
+    }
+
+    func testRemoteDeliveryUsesDevicePathsForSupportedAgents() {
+        let remote = Device.Kind.ssh(target: "user@example.test")
+        XCTAssertEqual(
+            AgentAttachmentDeliveryPolicy.action(
+                capabilities: nativeImageFileCapabilities,
+                deviceKind: remote,
+                source: .imageData
+            ),
+            .devicePaths(.shellQuoted)
+        )
+        XCTAssertEqual(
+            AgentAttachmentDeliveryPolicy.action(
+                capabilities: nativeImageFileCapabilities,
+                deviceKind: remote,
+                source: .files(allImages: true)
+            ),
+            .devicePaths(.shellQuoted)
+        )
+        XCTAssertEqual(
+            AgentAttachmentDeliveryPolicy.action(
+                capabilities: pathCapabilities,
+                deviceKind: remote,
+                source: .files(allImages: false)
+            ),
+            .devicePaths(.shellQuoted)
+        )
+    }
+
+    func testMissingCapabilitiesRemainUnsupported() {
+        XCTAssertEqual(
+            AgentAttachmentDeliveryPolicy.action(
+                capabilities: nil,
+                deviceKind: .ssh(target: "user@example.test"),
+                source: .imageData
+            ),
+            .unsupported
+        )
+    }
+
+    func testShellQuotedPathSyntaxEscapesApostrophes() {
+        XCTAssertEqual(
+            AgentAttachmentPathSyntax.shellQuoted.format("/tmp/it's here/image.png"),
+            "'/tmp/it'\\''s here/image.png'"
+        )
     }
 }

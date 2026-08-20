@@ -28,6 +28,7 @@ struct DeviceSessionState {
     var panes: [PaneInfo] = []
     var agentKinds: [String] = []
     var installedAgentKinds: [String] = []
+    var attachmentCapabilities = AgentAttachmentCapabilityRegistry()
 }
 
 struct SSHAuthenticationRequest: Identifiable {
@@ -91,6 +92,13 @@ final class AppModel: ObservableObject {
     func serverVersion(deviceID: UUID) -> String? {
         if case .connected(let version) = session(deviceID).connection { return version }
         return nil
+    }
+
+    func attachmentCapabilities(
+        deviceID: UUID,
+        agentKind: String?
+    ) -> AgentAttachmentCapabilities? {
+        session(deviceID).attachmentCapabilities.capabilities(for: agentKind)
     }
 
     var filteredDevice: Device? {
@@ -247,9 +255,11 @@ final class AppModel: ObservableObject {
                         self.probeOSIfNeeded(current)
                     }
                     await self.refresh(device.id)
-                    if self.sessions[device.id]?.agentKinds.isEmpty ?? true {
-                        let kinds = (try? await service.agentKinds()) ?? []
+                    if let manifests = try? await service.agentManifests() {
+                        let kinds = manifests.map(\.agent)
                         self.sessions[device.id]?.agentKinds = kinds
+                        self.sessions[device.id]?.attachmentCapabilities =
+                            AgentAttachmentCapabilityRegistry(manifests: manifests)
                         self.sessions[device.id]?.installedAgentKinds =
                             (try? await service.installedAgentKinds(from: kinds)) ?? []
                     }
@@ -561,7 +571,12 @@ final class AppModel: ObservableObject {
     /// New Agent: a fresh tab in the space plus agent.start. Agent names are
     /// session-global in herdr, so collisions retry with a unique suffix.
     /// `bypass` appends the kind's skip-permissions flag when one is known.
-    func startNewAgent(device: Device, kind: String, workspaceID: String?, bypass: Bool) {
+    func startNewAgent(
+        device: Device,
+        kind: String,
+        workspaceID: String?,
+        bypass: Bool
+    ) {
         let args = bypass ? (HerdrService.bypassFlags(for: kind) ?? []) : []
         Task {
             let service = service(for: device)
