@@ -7,6 +7,14 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- When an SSH tunnel comes up but the remote herdr socket is missing (herdr
+  not running, or Tailscale SSH older than 1.98.0 without Unix-socket
+  forwarding), herdrm now reports OpenSSH's actual channel error instead of
+  `malformed response: empty reply` — the forwarding failure only hits ssh's
+  stderr after a client uses the socket, so it's now captured continuously
+  and checked when the first request fails. (#16, thanks @0xrsydn!)
+
 ## [0.3.3] - 2026-08-20
 
 ### Fixed
