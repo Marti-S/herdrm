@@ -497,6 +497,10 @@ struct DirectoryPickerField: View {
     /// The directory whose children are on screen. Clicks resolve against it, so a
     /// half-typed path keeps showing (and completing from) its parent's folders.
     @State private var listedRoot = ""
+    /// The device `listedRoot`/`entries` belong to. Without this, switching the
+    /// device picker while the path still reads "~" matches the stale root and
+    /// keeps showing the previous device's folders.
+    @State private var listedDeviceID: UUID?
     @State private var entries: [String] = []
     /// Case-insensitive prefix applied to `entries` while the last typed segment
     /// isn't a directory of its own.
@@ -608,6 +612,12 @@ struct DirectoryPickerField: View {
     @MainActor
     private func refreshListing() async {
         let service = model.service(for: device)
+        if listedDeviceID != device.id {
+            listedDeviceID = device.id
+            listedRoot = ""
+            entries = []
+            filter = ""
+        }
         let typed = path.trimmingCharacters(in: .whitespaces)
         let root = Self.normalized(typed.isEmpty ? "~" : typed)
         if root == listedRoot {
