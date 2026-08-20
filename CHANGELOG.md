@@ -7,20 +7,26 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-20
+
 ### Added
+- herdrm now starts the local herdr server itself when nothing is listening on
+  the socket, instead of asking you to go run `herdr` in a terminal. (#8,
+  thanks @FacuVCanale!)
 - Shift+Enter in the agent terminal inserts a line break instead of submitting
   — sent as ESC+CR, which coding-agent TUIs already understand. Inert when a
   TUI negotiates the kitty keyboard protocol (it already distinguishes the
-  modifier).
+  modifier). (#14, thanks @ccyisafool!)
 - File menu commands with keyboard shortcuts: **New Agent** (⌘N) and **New
   Space** (⇧⌘N), reachable while the focus is inside an agent's terminal.
   ⌘N replaces *New Window* — herdrm is a single-window console, so a second
-  window would only duplicate the device tree.
+  window would only duplicate the device tree. (#10, thanks @alejodelosrios!)
 
 ### Fixed
 - SSH tunnels are torn down when the app quits. Each launch used to leave its
   `ssh` processes running (reparented to `launchd`) and their forwarded sockets
-  in place, so tunnels piled up across quit/relaunch cycles.
+  in place, so tunnels piled up across quit/relaunch cycles. (#11, thanks
+  @alejodelosrios!)
 
 ## [0.3.0] - 2026-08-19
 
