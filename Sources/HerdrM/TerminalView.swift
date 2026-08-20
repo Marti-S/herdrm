@@ -476,6 +476,15 @@ struct AttachTerminalView: NSViewRepresentable {
             args: command.args,
             environment: environment
         )
+        // SwiftUI throws this view away and builds a new one whenever the selected
+        // agent changes (the `.id("attach-…")` in ContentView), and a fresh NSView is
+        // never first responder — so keystrokes went nowhere until the user clicked.
+        // The hop to the next runloop pass is required: while `makeNSView` runs the
+        // view has no `window` yet.
+        DispatchQueue.main.async { [weak view] in
+            guard let view, let window = view.window else { return }
+            window.makeFirstResponder(view)
+        }
         return view
     }
 

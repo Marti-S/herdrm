@@ -14,6 +14,11 @@ the Sparkle update description — a release without a section here fails CI.
   (Light/Regular/Medium) for the system monospaced font; and **Line spacing**
   (100%–140%). (#4)
 
+### Fixed
+- Jumping to an agent — from ⌘K, the sidebar, or a notification — now leaves the
+  keyboard focus in its terminal. It used to take a mouse click before you could
+  type, and the agent's TUI rendered its cursor as unfocused. (#5)
+
 ## [0.3.7] - 2026-08-20
 
 ### Added
