@@ -7,6 +7,15 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Changed
+- Attachment paste is now agent-aware: Codex joins Claude Code and Copilot,
+  pasting a Finder file into a local agent inserts its (shell-quoted) local
+  path instead of uploading, and remote paths are shell-quoted too so spaces
+  survive. Which agents take attachments now comes from a capability registry
+  that herdr's agent manifests can drive once they advertise it — with
+  today's servers, a built-in fallback covers the three known CLIs. (#33,
+  thanks @ljxw88!)
+
 ## [0.3.8] - 2026-08-20
 
 ### Added
