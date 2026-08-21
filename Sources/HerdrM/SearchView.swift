@@ -40,7 +40,15 @@ struct SearchSheet: View {
                 || entry.workspace.label.lowercased().contains(q)
                 || entry.device.name.lowercased().contains(q)
         }
-        return agents.map(Result.agent) + spaces.map(Result.space)
+        // Same ordering as the sidebar (AppModel.visibleAgents): whoever needs the
+        // user first, then most recently updated inside each bucket.
+        let ranked = agents.sorted {
+            if $0.agent.status.sortBucket != $1.agent.status.sortBucket {
+                return $0.agent.status.sortBucket < $1.agent.status.sortBucket
+            }
+            return ($0.agent.revision ?? 0) > ($1.agent.revision ?? 0)
+        }
+        return ranked.map(Result.agent) + spaces.map(Result.space)
     }
 
     var body: some View {
@@ -141,7 +149,13 @@ struct SearchSheet: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
+                AgentStatusGlyph(status: entry.agent.status)
                 Spacer(minLength: 8)
+                if entry.agent.status == .blocked {
+                    Text("needs input")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.warning)
+                }
                 trailing(
                     "\(entry.agent.agent) · \(model.spaceName(deviceID: entry.device.id, workspaceID: entry.agent.workspaceID))",
                     device: entry.device
