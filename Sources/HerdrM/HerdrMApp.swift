@@ -49,6 +49,7 @@ struct HerdrMApp: App {
             Self.runSSHAskPass()
         }
         SSHCredentialStore.purgeAuthorizations()
+        TerminalDefaults.registerBundledFonts()
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
@@ -97,7 +98,7 @@ struct HerdrMApp: App {
                     .disabled(focusedModel?.selectedEntry == nil)
             }
             CommandGroup(replacing: .saveItem) {
-                // ⌘W prioriza el split — mismo trade-off que ⌘N con New Agent.
+                // ⌘W prefers the split — same trade-off as ⌘N taking New Window.
                 Button(focusedModel?.shellSplitAxis != nil ? "Close Split" : "Close") {
                     if let model = focusedModel, model.shellSplitAxis != nil {
                         model.shellSplitAxis = nil

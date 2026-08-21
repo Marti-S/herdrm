@@ -40,6 +40,14 @@ struct SidebarView: View {
                 actionRow(icon: "square.and.pencil", label: "New Agent") {
                     model.showNewAgent = true
                 }
+                // Opens the split shell beside the selected agent (same as ⌘D);
+                // a second click closes it again. Needs a selected agent — the
+                // split renders inside the agent's terminal container.
+                actionRow(icon: "terminal", label: "New Terminal") {
+                    guard model.selectedEntry != nil else { return }
+                    model.shellSplitAxis = model.shellSplitAxis == nil ? .vertical : nil
+                }
+                .opacity(model.selectedEntry == nil ? 0.4 : 1)
                 actionRow(icon: "magnifyingglass", label: "Search") {
                     model.showSearch = true
                 }

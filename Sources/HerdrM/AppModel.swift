@@ -38,7 +38,7 @@ struct SSHAuthenticationRequest: Identifiable {
     var id: UUID { deviceID }
 }
 
-/// vertical = panes lado a lado, divisor vertical (convención iTerm2).
+/// vertical = panes side by side with a vertical divider (iTerm2's convention).
 enum SplitAxis { case vertical, horizontal }
 
 @MainActor

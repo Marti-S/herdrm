@@ -46,8 +46,8 @@ struct SplitContainer<First: View, Second: View>: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // ponytail: a gesture cancelled without onEnded leaves a stale
-            // anchor; clearing on axis change covers the case that shows.
+            // A gesture cancelled without onEnded leaves a stale anchor;
+            // clearing on axis change covers the case that shows.
             .onChange(of: axis) { _, _ in dragStartRatio = nil }
         }
     }

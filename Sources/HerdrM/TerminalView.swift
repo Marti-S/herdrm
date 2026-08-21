@@ -64,11 +64,36 @@ enum TerminalDefaults {
         )
     }
 
+    /// Bundled Nerd Font symbols (MIT, github.com/ryanoasis/nerd-fonts), used
+    /// as a fallback for the icon glyphs agent TUIs draw.
+    static let symbolFallbackFamily = "Symbols Nerd Font Mono"
+
+    /// Registers the bundled symbols font for this process. Call once at launch.
+    static func registerBundledFonts() {
+        guard let url = Bundle.main.url(forResource: "SymbolsNerdFontMono-Regular", withExtension: "ttf") else { return }
+        CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }
+
     static func font(name: String, size: Double, weight: Double = defaultFontWeight) -> NSFont {
+        let base: NSFont
         if !name.isEmpty, let custom = NSFont(name: name, size: size) {
-            return custom
+            base = custom
+        } else {
+            base = NSFont.monospacedSystemFont(ofSize: size, weight: NSFont.Weight(weight))
         }
-        return NSFont.monospacedSystemFont(ofSize: size, weight: NSFont.Weight(weight))
+        return withSymbolFallback(base, size: size)
+    }
+
+    /// Nerd Font icons live in Unicode's Private Use Area, which CoreText's
+    /// default cascade never resolves — agent TUIs like pi's powerfooter came
+    /// out as tofu boxes unless the user's chosen terminal font happened to be
+    /// a patched Nerd Font. A cascade entry pointing at the bundled symbols
+    /// font resolves PUA glyphs for every terminal font; the system cascade
+    /// still runs after it, so emoji and CJK fallback stay untouched.
+    private static func withSymbolFallback(_ base: NSFont, size: Double) -> NSFont {
+        let fallback = NSFontDescriptor(fontAttributes: [.family: symbolFallbackFamily])
+        let descriptor = base.fontDescriptor.addingAttributes([.cascadeList: [fallback]])
+        return NSFont(descriptor: descriptor, size: size) ?? base
     }
 
     /// Fixed-pitch font families available on this Mac, for the settings picker.
@@ -736,7 +761,23 @@ struct ShellTerminalView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
         coordinator.onExit = nil
+        let shellPid = nsView.process?.shellPid ?? 0
         nsView.terminate()
+        // terminate() sends SIGTERM, which interactive shells ignore — a closed
+        // split left a live orphaned zsh, not the expected zombie. SIGHUP is the
+        // "terminal went away" signal shells exit on; reap it, escalating to
+        // SIGKILL if something (a stuck foreground job) holds the shell up.
+        guard shellPid > 0 else { return }
+        kill(shellPid, SIGHUP)
+        DispatchQueue.global(qos: .utility).async {
+            var status: Int32 = 0
+            for _ in 0..<20 {
+                if waitpid(shellPid, &status, WNOHANG) != 0 { return }
+                usleep(100_000)
+            }
+            kill(shellPid, SIGKILL)
+            waitpid(shellPid, &status, 0)
+        }
     }
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
