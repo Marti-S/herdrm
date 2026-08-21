@@ -7,6 +7,14 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- The terminal pane can now split to run a local login shell alongside the
+  agent attach — ⌘D splits vertically, ⇧⌘D horizontally, and the divider
+  drags with a persisted ratio. Splitting moves the keyboard to the new shell,
+  and closing the split hands it back to the agent. ⌘W closes the split first
+  and only closes the window once it's gone. First phase of a series; keyboard
+  focus/resize controls and a remote shell over SSH follow in later issues.
+
 ## [0.3.9] - 2026-08-21
 
 ### Changed

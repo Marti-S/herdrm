@@ -38,6 +38,9 @@ struct SSHAuthenticationRequest: Identifiable {
     var id: UUID { deviceID }
 }
 
+/// vertical = panes lado a lado, divisor vertical (convención iTerm2).
+enum SplitAxis { case vertical, horizontal }
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var devices: [Device]
@@ -51,6 +54,7 @@ final class AppModel: ObservableObject {
     @Published var showNewAgent = false
     @Published var showNewSpace = false
     @Published var showSearch = false
+    @Published var shellSplitAxis: SplitAxis?
     /// In-window device panel (NSPopover crashes in ViewBridge on macOS 26+ betas).
     @Published var showDevicePanel = false
     @Published var deviceToEdit: Device?
