@@ -101,12 +101,19 @@ macOS window on top of it, and it's grown well past "attach to a terminal":
 
 ## 🤔 Why herdrm?
 
-If you run more than one coding agent, or one agent on more than one machine, you know the
-friction: a grid of terminal tabs with no shared sense of who's blocked, a chat UI that can't
-show you the actual TUI, and no way to know an agent finished until you tab back over.
+You already run agents through herdr because the model is right — spaces, live status, real
+PTYs, not a chat window pretending to be one. But living in `herdr attach` and a wall of
+terminal panes is its own skill, and not everyone wants to be a tmux person to get the benefit.
+herdrm is the same model, built for people who'd rather click:
 
+- **Herdr's mechanics, an Apple-native interface.** Every space and agent is a sidebar row you
+  click, not a session name you type — built in SwiftUI, so it looks and moves like a
+  first-party Mac app, not a terminal skin bolted on top.
+- **Native means fast.** No Electron, no browser engine underneath — herdrm launches instantly
+  and stays light, the kind of responsiveness only a truly native app gets.
+- **Still the real terminal when it matters.** Click an agent and you're on its actual PTY, full
+  TUI, nothing summarized — you just don't have to live inside a multiplexer to get there.
 - **One console, every machine.** Laptop, dev box, home server — all rows in the same sidebar.
-- **The real terminal, not a summary of it.** herdrm attaches to the agent's actual PTY.
 - **You stop polling.** Status lives in the sidebar and in notifications, not in your head.
 - **It gets out of the way.** ⌘K, ⌘N, paste-to-attach — no new mental model to learn.
 
