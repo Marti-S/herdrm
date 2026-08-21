@@ -64,11 +64,36 @@ enum TerminalDefaults {
         )
     }
 
+    /// Bundled Nerd Font symbols (MIT, github.com/ryanoasis/nerd-fonts), used
+    /// as a fallback for the icon glyphs agent TUIs draw.
+    static let symbolFallbackFamily = "Symbols Nerd Font Mono"
+
+    /// Registers the bundled symbols font for this process. Call once at launch.
+    static func registerBundledFonts() {
+        guard let url = Bundle.main.url(forResource: "SymbolsNerdFontMono-Regular", withExtension: "ttf") else { return }
+        CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }
+
     static func font(name: String, size: Double, weight: Double = defaultFontWeight) -> NSFont {
+        let base: NSFont
         if !name.isEmpty, let custom = NSFont(name: name, size: size) {
-            return custom
+            base = custom
+        } else {
+            base = NSFont.monospacedSystemFont(ofSize: size, weight: NSFont.Weight(weight))
         }
-        return NSFont.monospacedSystemFont(ofSize: size, weight: NSFont.Weight(weight))
+        return withSymbolFallback(base, size: size)
+    }
+
+    /// Nerd Font icons live in Unicode's Private Use Area, which CoreText's
+    /// default cascade never resolves — agent TUIs like pi's powerfooter came
+    /// out as tofu boxes unless the user's chosen terminal font happened to be
+    /// a patched Nerd Font. A cascade entry pointing at the bundled symbols
+    /// font resolves PUA glyphs for every terminal font; the system cascade
+    /// still runs after it, so emoji and CJK fallback stay untouched.
+    private static func withSymbolFallback(_ base: NSFont, size: Double) -> NSFont {
+        let fallback = NSFontDescriptor(fontAttributes: [.family: symbolFallbackFamily])
+        let descriptor = base.fontDescriptor.addingAttributes([.cascadeList: [fallback]])
+        return NSFont(descriptor: descriptor, size: size) ?? base
     }
 
     /// Fixed-pitch font families available on this Mac, for the settings picker.
@@ -478,6 +503,33 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
     }
 }
 
+/// Hands the keyboard back to whichever terminal is left after a split closes. The
+/// shell view that held first responder is gone by then, and AppKit falls back to the
+/// window itself, which reads as a dead keyboard until the user clicks.
+func focusRemainingTerminal() {
+    DispatchQueue.main.async {
+        guard let window = NSApp.keyWindow,
+              let terminal = window.contentView?.firstTerminalDescendant()
+        else { return }
+        // Only fill a focus vacuum. If the shell died on its own while the user was
+        // typing in the sidebar filter or in Search, that field is still first
+        // responder and yanking the keyboard into a live agent session is worse than
+        // doing nothing.
+        guard window.firstResponder === window else { return }
+        window.makeFirstResponder(terminal)
+    }
+}
+
+private extension NSView {
+    func firstTerminalDescendant() -> LocalProcessTerminalView? {
+        if let terminal = self as? LocalProcessTerminalView { return terminal }
+        for subview in subviews {
+            if let found = subview.firstTerminalDescendant() { return found }
+        }
+        return nil
+    }
+}
+
 /// Embeds a SwiftTerm terminal running `herdr agent attach` (directly or over ssh).
 struct AttachTerminalView: NSViewRepresentable {
     let device: Device
@@ -568,32 +620,16 @@ struct AttachTerminalView: NSViewRepresentable {
     }
 
     private func configureAppearance(_ view: LocalProcessTerminalView) {
-        let font = TerminalDefaults.font(name: fontName, size: fontSize, weight: fontWeight)
-        if view.font != font {
-            view.font = font
-        }
-        view.allowMouseReporting = mouseReporting
-        // Compared against the inverted value on purpose: thinStrokes on means
-        // smoothing off. The setter only stores the flag, so repaint by hand.
-        if view.fontSmoothing == thinStrokes {
-            view.fontSmoothing = !thinStrokes
-            view.needsDisplay = true
-        }
-        // This setter calls resetFont(), which recomputes metrics and resizes the
-        // terminal, so it is only assigned when it actually changes.
-        if view.lineSpacing != CGFloat(lineSpacing) {
-            view.lineSpacing = CGFloat(lineSpacing)
-        }
-        // Everything below is theme-only and returns early; keep font work above it.
-        guard let view = view as? LineBreakTerminalView,
-              view.appliedDarkAppearance != dark
-        else { return }
-        view.appliedDarkAppearance = dark
-        view.usesLightColors = !dark
-        view.nativeBackgroundColor = dark ? TerminalDefaults.darkBackground : TerminalDefaults.lightBackground
-        view.nativeForegroundColor = dark ? TerminalDefaults.darkForeground : TerminalDefaults.lightForeground
-        view.installColors(dark ? TerminalDefaults.darkPalette : TerminalDefaults.lightPalette)
-        view.needsDisplay = true
+        applyTerminalAppearance(
+            view,
+            fontName: fontName,
+            fontSize: fontSize,
+            thinStrokes: thinStrokes,
+            fontWeight: fontWeight,
+            lineSpacing: lineSpacing,
+            dark: dark,
+            mouseReporting: mouseReporting
+        )
     }
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
@@ -621,6 +657,136 @@ struct AttachTerminalView: NSViewRepresentable {
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
         func processTerminated(source: TerminalView, exitCode: Int32?) {
             discardAuthorization()
+            let callback = onExit
+            onExit = nil  // report once
+            DispatchQueue.main.async { callback?(exitCode) }
+        }
+    }
+}
+
+func applyTerminalAppearance(
+    _ view: LocalProcessTerminalView,
+    fontName: String, fontSize: Double, thinStrokes: Bool,
+    fontWeight: Double, lineSpacing: Double, dark: Bool, mouseReporting: Bool
+) {
+    let font = TerminalDefaults.font(name: fontName, size: fontSize, weight: fontWeight)
+    if view.font != font {
+        view.font = font
+    }
+    view.allowMouseReporting = mouseReporting
+    // Compared against the inverted value on purpose: thinStrokes on means
+    // smoothing off. The setter only stores the flag, so repaint by hand.
+    if view.fontSmoothing == thinStrokes {
+        view.fontSmoothing = !thinStrokes
+        view.needsDisplay = true
+    }
+    // This setter calls resetFont(), which recomputes metrics and resizes the
+    // terminal, so it is only assigned when it actually changes.
+    if view.lineSpacing != CGFloat(lineSpacing) {
+        view.lineSpacing = CGFloat(lineSpacing)
+    }
+    // Everything below is theme-only and returns early; keep font work above it.
+    guard let view = view as? LineBreakTerminalView,
+          view.appliedDarkAppearance != dark
+    else { return }
+    view.appliedDarkAppearance = dark
+    view.usesLightColors = !dark
+    view.nativeBackgroundColor = dark ? TerminalDefaults.darkBackground : TerminalDefaults.lightBackground
+    view.nativeForegroundColor = dark ? TerminalDefaults.darkForeground : TerminalDefaults.lightForeground
+    view.installColors(dark ? TerminalDefaults.darkPalette : TerminalDefaults.lightPalette)
+    view.needsDisplay = true
+}
+
+/// A local login shell, side by side with the agent attach — no herdr pane and no
+/// attachment paste. It does take first responder when it appears, so splitting hands the
+/// keyboard to the new shell; closing the split gives it back via `focusRemainingTerminal`.
+struct ShellTerminalView: NSViewRepresentable {
+    var fontName: String = ""
+    var fontSize: Double = TerminalDefaults.defaultFontSize
+    var thinStrokes: Bool = true
+    var fontWeight: Double = TerminalDefaults.defaultFontWeight
+    var lineSpacing: Double = TerminalDefaults.defaultLineSpacing
+    var dark: Bool = false
+    var mouseReporting: Bool = true
+    var onExit: ((Int32?) -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> LocalProcessTerminalView {
+        let view = LineBreakTerminalView(frame: .zero)
+        view.processDelegate = context.coordinator
+        context.coordinator.onExit = onExit
+        applyTerminalAppearance(
+            view,
+            fontName: fontName,
+            fontSize: fontSize,
+            thinStrokes: thinStrokes,
+            fontWeight: fontWeight,
+            lineSpacing: lineSpacing,
+            dark: dark,
+            mouseReporting: mouseReporting
+        )
+
+        var environment = Terminal.getEnvironmentVariables(termName: "xterm-256color")
+        environment.append("LANG=en_US.UTF-8")
+        view.startProcess(
+            executable: "/bin/sh",
+            args: ["-c", "cd \"$HOME\"; exec \"${SHELL:-/bin/zsh}\" -l"],
+            environment: environment
+        )
+        // Splitting hands the keyboard to the new shell: `makeNSView` runs only when
+        // the split opens (the `.id` is stable across theme changes), so this fires
+        // once per split and never steals focus back afterwards. The hop to the next
+        // runloop pass is required — the view has no `window` yet while this runs.
+        DispatchQueue.main.async { [weak view] in
+            guard let view, let window = view.window else { return }
+            window.makeFirstResponder(view)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
+        context.coordinator.onExit = onExit
+        applyTerminalAppearance(
+            nsView,
+            fontName: fontName,
+            fontSize: fontSize,
+            thinStrokes: thinStrokes,
+            fontWeight: fontWeight,
+            lineSpacing: lineSpacing,
+            dark: dark,
+            mouseReporting: mouseReporting
+        )
+    }
+
+    static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
+        coordinator.onExit = nil
+        let shellPid = nsView.process?.shellPid ?? 0
+        nsView.terminate()
+        // terminate() sends SIGTERM, which interactive shells ignore — a closed
+        // split left a live orphaned zsh, not the expected zombie. SIGHUP is the
+        // "terminal went away" signal shells exit on; reap it, escalating to
+        // SIGKILL if something (a stuck foreground job) holds the shell up.
+        guard shellPid > 0 else { return }
+        kill(shellPid, SIGHUP)
+        DispatchQueue.global(qos: .utility).async {
+            var status: Int32 = 0
+            for _ in 0..<20 {
+                if waitpid(shellPid, &status, WNOHANG) != 0 { return }
+                usleep(100_000)
+            }
+            kill(shellPid, SIGKILL)
+            waitpid(shellPid, &status, 0)
+        }
+    }
+
+    final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
+        var onExit: ((Int32?) -> Void)?
+
+        func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+        func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+        func processTerminated(source: TerminalView, exitCode: Int32?) {
             let callback = onExit
             onExit = nil  // report once
             DispatchQueue.main.async { callback?(exitCode) }

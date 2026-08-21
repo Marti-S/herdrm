@@ -108,6 +108,11 @@ struct DetailView: View {
             Rectangle().fill(Theme.hairline).frame(height: 1)
             terminal
                 .clipped()
+                // Losing the selected agent tears the SplitContainer down without
+                // resetting the axis, which would leave the same phantom split.
+                .onChange(of: model.selectedEntry?.id) { _, id in
+                    if id == nil { model.shellSplitAxis = nil }
+                }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.contentBackground.ignoresSafeArea())
@@ -203,6 +208,7 @@ struct DetailView: View {
     @AppStorage(TerminalDefaults.fontWeightKey) private var terminalFontWeight = TerminalDefaults.defaultFontWeight
     @AppStorage(TerminalDefaults.lineSpacingKey) private var terminalLineSpacing = TerminalDefaults.defaultLineSpacing
     @AppStorage("terminal.mouseReporting") private var terminalMouseReporting = true
+    @AppStorage("terminal.splitRatio") private var splitRatio = 0.5
     @Environment(\.colorScheme) private var colorScheme
     /// The entry whose attach process exited, and how. Keyed by entry id so a stale
     /// exit from a previously selected pane never covers a live terminal.
@@ -214,15 +220,39 @@ struct DetailView: View {
     @ViewBuilder
     private var terminal: some View {
         if let entry = model.selectedEntry {
-            ZStack {
-                AttachTerminalView(
-                    device: entry.device,
-                    paneID: entry.agent.paneID,
-                    serverVersion: model.serverVersion(deviceID: entry.device.id),
-                    attachmentCapabilities: model.attachmentCapabilities(
-                        deviceID: entry.device.id,
-                        agentKind: entry.agent.agentKindRaw
-                    ),
+            SplitContainer(axis: model.shellSplitAxis, ratio: $splitRatio) {
+                ZStack {
+                    AttachTerminalView(
+                        device: entry.device,
+                        paneID: entry.agent.paneID,
+                        serverVersion: model.serverVersion(deviceID: entry.device.id),
+                        attachmentCapabilities: model.attachmentCapabilities(
+                            deviceID: entry.device.id,
+                            agentKind: entry.agent.agentKindRaw
+                        ),
+                        fontName: terminalFontName,
+                        fontSize: terminalFontSize,
+                        thinStrokes: terminalThinStrokes,
+                        fontWeight: terminalFontWeight,
+                        lineSpacing: terminalLineSpacing,
+                        dark: colorScheme == .dark,
+                        mouseReporting: terminalMouseReporting,
+                        onAttachmentError: { model.actionError = $0 },
+                        onAttachmentUploadingChanged: { uploadingAttachment = $0 },
+                        onExit: { code in
+                            endedAttachKey = entry.id
+                            endedAttachCode = code
+                        }
+                    )
+                        .id("attach-\(entry.id)-\(colorScheme)-\(attachRetry)")
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                    if endedAttachKey == entry.id {
+                        attachEndedOverlay(entry)
+                    }
+                }
+            } second: {
+                ShellTerminalView(
                     fontName: terminalFontName,
                     fontSize: terminalFontSize,
                     thinStrokes: terminalThinStrokes,
@@ -230,19 +260,15 @@ struct DetailView: View {
                     lineSpacing: terminalLineSpacing,
                     dark: colorScheme == .dark,
                     mouseReporting: terminalMouseReporting,
-                    onAttachmentError: { model.actionError = $0 },
-                    onAttachmentUploadingChanged: { uploadingAttachment = $0 },
-                    onExit: { code in
-                        endedAttachKey = entry.id
-                        endedAttachCode = code
-                    }
+                    onExit: { _ in model.shellSplitAxis = nil }
                 )
-                    .id("attach-\(entry.id)-\(colorScheme)-\(attachRetry)")
+                    // Deliberately not keyed on colorScheme like the attach above:
+                    // a new id tears the view down and kills the shell with whatever
+                    // was running in it, and unlike a herdr pane a local shell has no
+                    // server-side state to reattach to. updateNSView re-themes it.
+                    .id("shell")
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                if endedAttachKey == entry.id {
-                    attachEndedOverlay(entry)
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.terminalBackground)
@@ -252,6 +278,11 @@ struct DetailView: View {
             .onChange(of: entry.id) { _, _ in
                 endedAttachKey = nil
                 uploadingAttachment = false
+            }
+            // Splitting moves the keyboard to the shell, so closing the split has to
+            // hand it back — by ⌘W or by the shell exiting on its own.
+            .onChange(of: model.shellSplitAxis) { _, axis in
+                if axis == nil { focusRemainingTerminal() }
             }
         } else {
             VStack(spacing: 10) {

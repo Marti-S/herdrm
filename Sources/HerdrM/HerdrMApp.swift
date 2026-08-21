@@ -49,6 +49,7 @@ struct HerdrMApp: App {
             Self.runSSHAskPass()
         }
         SSHCredentialStore.purgeAuthorizations()
+        TerminalDefaults.registerBundledFonts()
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
@@ -82,6 +83,30 @@ struct HerdrMApp: App {
                 Button("Check for Updates…") {
                     updaterController.checkForUpdates(nil)
                 }
+            }
+
+            CommandMenu("Terminal") {
+                // Guarded on selectedEntry, not just on the model: with the placeholder
+                // on screen there is no SplitContainer to render into, so a split would
+                // be invisible yet leave shellSplitAxis non-nil — and the next ⌘W would
+                // "close" that phantom instead of the window.
+                Button("Split Vertically") { focusedModel?.shellSplitAxis = .vertical }
+                    .keyboardShortcut("d", modifiers: .command)
+                    .disabled(focusedModel?.selectedEntry == nil)
+                Button("Split Horizontally") { focusedModel?.shellSplitAxis = .horizontal }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+                    .disabled(focusedModel?.selectedEntry == nil)
+            }
+            CommandGroup(replacing: .saveItem) {
+                // ⌘W prefers the split — same trade-off as ⌘N taking New Window.
+                Button(focusedModel?.shellSplitAxis != nil ? "Close Split" : "Close") {
+                    if let model = focusedModel, model.shellSplitAxis != nil {
+                        model.shellSplitAxis = nil
+                    } else {
+                        NSApp.keyWindow?.performClose(nil)
+                    }
+                }
+                .keyboardShortcut("w", modifiers: .command)
             }
         }
 
