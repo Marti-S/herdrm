@@ -235,7 +235,8 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
     private let nativeImageFileCapabilities = AgentAttachmentCapabilities(
         nativeClipboardImageData: true,
         nativeClipboardImageFiles: true,
-        imagePath: .shellQuoted
+        imagePath: .shellQuoted,
+        filePath: .shellQuoted
     )
 
     func testManifestDecodingAndAliasRegistry() throws {
@@ -249,7 +250,8 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
                   "attachments": {
                     "native_clipboard_image_data": true,
                     "native_clipboard_image_files": true,
-                    "image_path": "shell_quoted"
+                                        "image_path": "shell_quoted",
+                                        "file_path": "shell_quoted"
                   }
                 },
                 "source": "bundled"
@@ -348,7 +350,7 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
                 deviceKind: .local,
                 source: .files(allImages: false)
             ),
-            .unsupported
+            .devicePaths(.shellQuoted)
         )
     }
 
@@ -372,7 +374,7 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(
-                capabilities: pathCapabilities,
+                capabilities: nativeImageFileCapabilities,
                 deviceKind: remote,
                 source: .files(allImages: false)
             ),

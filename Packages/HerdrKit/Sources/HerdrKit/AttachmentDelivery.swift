@@ -132,7 +132,8 @@ public struct AgentAttachmentCapabilityRegistry: Sendable, Equatable {
             AgentAttachmentCapabilities(
                 nativeClipboardImageData: true,
                 nativeClipboardImageFiles: true,
-                imagePath: .shellQuoted
+                imagePath: .shellQuoted,
+                filePath: .shellQuoted
             )
         ),
         (
