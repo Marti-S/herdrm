@@ -13,8 +13,12 @@ final class AgentDiscoveryTests: XCTestCase {
         try FileManager.default.createDirectory(at: nvmBin, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: grokBin, withIntermediateDirectories: true)
 
-        let codex = nvmBin.appendingPathComponent("codex")
-        let grok = grokBin.appendingPathComponent("grok")
+        // Unique names: the export also prepends real machine directories
+        // (/opt/homebrew/bin and friends), so a genuine codex/grok install on
+        // the test machine would shadow the fixtures and break hermeticity.
+        let marker = UUID().uuidString.lowercased().prefix(8)
+        let codex = nvmBin.appendingPathComponent("hkt-codex-\(marker)")
+        let grok = grokBin.appendingPathComponent("hkt-grok-\(marker)")
         for executable in [codex, grok] {
             XCTAssertTrue(FileManager.default.createFile(atPath: executable.path, contents: Data()))
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
@@ -24,7 +28,7 @@ final class AgentDiscoveryTests: XCTestCase {
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = [
             "-c",
-            "\(SSHTunnel.remotePathExport); command -v codex; command -v grok",
+            "\(SSHTunnel.remotePathExport); command -v \(codex.lastPathComponent); command -v \(grok.lastPathComponent)",
         ]
         process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
         let output = Pipe()

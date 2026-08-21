@@ -7,6 +7,12 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Actions fired while a device is disconnected no longer fail with the bare
+  "connection failed: not connected": the alert now says which device is
+  unreachable and why — still connecting, or the reconnect loop's actual
+  error. (#21)
+
 ### Added
 - Terminal legibility settings: **Thin strokes** (on by default) turns off the
   macOS font smoothing that thickens glyph stems and makes agent output —
