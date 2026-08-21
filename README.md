@@ -14,177 +14,148 @@
 
 <p align="center">
   <a href="https://github.com/missuo/herdrm/releases/latest"><img src="https://img.shields.io/github/v/release/missuo/herdrm" alt="Latest release" /></a>
-  <a href="#requirements"><img src="https://img.shields.io/badge/macOS-14%2B-brightgreen" alt="macOS 14+" /></a>
+  <a href="#-requirements"><img src="https://img.shields.io/badge/macOS-14%2B-brightgreen" alt="macOS 14+" /></a>
   <a href="https://github.com/missuo/herdrm/releases"><img src="https://img.shields.io/github/downloads/missuo/herdrm/total" alt="Downloads" /></a>
-  <a href="#contributing"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome" /></a>
+  <a href="#-status"><img src="https://img.shields.io/badge/status-early--stage-f59e0b" alt="Status: early stage" /></a>
+  <a href="#-contributing"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome" /></a>
+</p>
+
+<p align="center">
+  <a href="#-what-it-does">What it does</a> ·
+  <a href="#-why-herdrm">Why herdrm?</a> ·
+  <a href="#-install">Install</a> ·
+  <a href="#-quick-start">Quick Start</a> ·
+  <a href="#-architecture">Architecture</a>
 </p>
 
 ---
-
-> [!WARNING]
-> Early stage software without full test coverage — expect bugs. PRs are very welcome!
 
 <p align="center">
   <img src=".github/assets/screenshot.png" alt="herdrm — device switcher and a live claude terminal" />
 </p>
 
-## What it does
+## ✨ What it does
 
-[herdr](https://herdr.dev) is the runtime your coding agents live on: a background server
-that owns their terminals, keeps them running, and knows which one is working, blocked, or
-done. **herdrm** puts a native macOS window on top of it, and it already does a lot more than
-"attach to a terminal":
+[herdr](https://herdr.dev) is the runtime your coding agents live on — a background server that
+owns their terminals and knows which one is working, blocked, or done. **herdrm** is a native
+macOS window on top of it, and it's grown well past "attach to a terminal":
+
+| | |
+|---|---|
+| 🖥️ **Every device** | Local + remote over SSH — keys, Tailscale, or a Keychain password — with auto-reconnect |
+| 🧭 **Live status** | Spaces & Agents sorted by urgency: blocked → done → working → idle |
+| ⌨️ **Real terminal** | Full PTY attach, not a chat wrapper — native selection, legible fonts, resilient sessions |
+| 📎 **Paste anything** | Files and images land straight in the agent's pane, locally or over SSH |
+| 🔔 **Notifications** | A system alert the moment an agent needs you — click it to jump right there |
+| 🔍 **⌘K search** | Every agent, on every device, one keystroke away |
+
+<details>
+<summary><strong>See the full feature list</strong></summary>
 
 ### Every machine, one sidebar
-- **All your devices, in parallel** — local herdr plus any number of remote machines over SSH
-  (the remote socket is forwarded through `ssh -L`, so everything works identically). Every
-  device stays connected on its own reconnect loop (1s → 30s backoff) with OS detection that
-  retries on every successful connection; the sidebar aggregates them all with a tinted OS
-  badge marking where each row lives, and the bottom-left switcher filters by device.
-- **Flexible SSH targets** — `user@host`, `user@host:port` (or a bare `ssh://` URI), and
-  `~/.ssh/config` aliases all work. Auth falls back through OpenSSH keys/agent → **Tailscale
-  SSH** (1.98.0+, for Unix-socket forwarding over the tailnet) → an in-app password prompt
-  that's stored in the **macOS login Keychain**, never in a file or a process argument.
-- **Diagnosable failures, not dead ends** — a remote whose herdr isn't running reports exactly
-  that ("herdr isn't running on `<host>` — start it by running `herdr`"), a stale socket or
-  `AllowStreamLocalForwarding` misconfiguration is called out by name, and an action against a
-  disconnected device says *why* it's unreachable instead of a bare "not connected".
+- **All your devices, in parallel** — remote sockets forwarded over `ssh -L`, each on its own
+  reconnect loop (1s → 30s backoff). The sidebar aggregates every device with a tinted OS badge;
+  the bottom-left switcher filters by device.
+- **Flexible SSH targets** — `user@host`, `user@host:port`, `ssh://` URIs, and `~/.ssh/config`
+  aliases. Auth falls back OpenSSH keys/agent → **Tailscale SSH** (1.98.0+) → an in-app password
+  prompt stored in the **macOS login Keychain**, never in a file.
+- **Diagnosable failures** — "herdr isn't running on `<host>`", a misconfigured
+  `AllowStreamLocalForwarding`, or *why* a disconnected device is unreachable — never a bare
+  "not connected".
 
 ### Spaces & Agents, always current
-- **Spaces & Agents sidebar** — every herdr workspace and every agent (claude, codex, gemini,
-  grok, opencode, …) with live status: blocked agents bubble to the top, working ones spin,
-  done ones get a check — the same canonical order the ⌘K palette uses.
-- **New Agent, New Space** — the picker only offers CLIs actually installed on that device
-  (including ones installed via NVM or a user-level installer, even when herdrm starts outside
-  a login shell), and enables each agent's own bypass-permissions flag by default (e.g.
-  `--dangerously-skip-permissions` for claude). New Space ships an inline directory browser —
-  type, click to descend, arrow-up to the parent, filter as you type — that works over SSH too.
-  Both are one keystroke away: **⌘N** for a new agent, **⇧⌘N** for a new space.
-- Spaces can be renamed straight from the sidebar's context menu.
+- **Spaces & Agents sidebar** — every workspace and agent (claude, codex, gemini, grok,
+  opencode, …), same canonical order the ⌘K palette uses.
+- **New Agent / New Space** — the picker only lists CLIs actually installed on that device
+  (NVM and user-level installs included), and enables each agent's bypass-permissions flag by
+  default. **⌘N** for a new agent, **⇧⌘N** for a new space. New Space includes an inline
+  directory browser that works over SSH.
+- Spaces rename straight from the sidebar's context menu.
 
 ### A real terminal, not a chat wrapper
-- **Live terminal** — selecting an agent attaches directly to its PTY (`herdr agent attach`).
-  Full TUI, precise cursor, no chat wrapper — and the terminal grabs keyboard focus the moment
-  you jump to an agent from ⌘K, the sidebar, or a notification.
-- **Native text selection** — drag to select like a normal text view, no Shift required; a
-  plain click clears the selection; ⌘C copies. Right-click gives you Copy / Paste / Select All,
-  plus Open Link / Copy Link Address when the selection is a URL (double-click selects the
-  whole link, ⌘-click opens it).
-- **Legibility controls** — Thin strokes (on by default) turns off the macOS font smoothing
-  that makes agent output look heavy and smudged, plus a font Weight (Light/Regular/Medium) and
-  Line spacing (100%–140%) setting.
-- **Shift+Enter inserts a line break** instead of submitting, and colors adapt correctly in
-  Light mode — truecolor and 256-color output is luminance-flipped so nothing goes invisible on
-  a white background, while colors that already read well (red, blue, magenta, black) keep
-  their original hue.
-- **Resilient sessions** — a dropped SSH connection or a takeover by another client covers the
-  pane with an explanation and a Reconnect button instead of freezing on the last frame while
-  still eating your keystrokes; a mixed-version PATH (two `herdr` binaries) no longer breaks
-  attach with `protocol_mismatch`.
+- **Live terminal** — attaches directly to the agent's PTY (`herdr agent attach`); grabs
+  keyboard focus the moment you jump in from ⌘K, the sidebar, or a notification.
+- **Native text selection** — drag to select, no Shift needed; right-click for Copy/Paste/Select
+  All plus link actions (⌘-click opens a URL).
+- **Legibility controls** — Thin strokes, font Weight, and Line spacing settings.
+- **Shift+Enter** inserts a line break instead of submitting; colors adapt correctly in Light
+  mode instead of washing out.
+- **Resilient sessions** — a dropped connection or a takeover shows a Reconnect button instead
+  of freezing on the last frame; mixed-version `herdr` binaries no longer break attach.
 
 ### Files, search, and staying in the loop
-- **Paste files and images** straight into a Claude Code, Codex, or Copilot pane. Local devices
-  forward the paste as Ctrl+V so the agent reads the clipboard itself; remote devices stream
-  the file over SSH into a private, self-pruning cache (`~/.cache/herdrm/attachments`, 7-day
-  retention, 50 MB cap) and paste the resulting path, shell-quoted so spaces survive. Which
-  agents accept attachments comes from a capability registry, agent-aware out of the box.
-- **Search** — ⌘K command palette across agents and spaces on every device, ordered by urgency
-  (needs input → done → working → idle) with a status glyph per row, scrolling to follow the
-  keyboard selection and always reopening at the top.
-- **Notifications** — a system notification (with its own sound) when any agent on any device
-  finishes or needs your input; clicking it jumps straight to that agent. Agents you're
-  actively watching never notify, and Settings surfaces the OS permission state with a
-  one-click request.
+- **Paste files and images** into Claude Code, Codex, or Copilot. Local pastes forward as
+  Ctrl+V; remote pastes stream over SSH into a self-pruning cache (7-day retention, 50 MB cap).
+- **Search** — ⌘K across every device, ordered by urgency, scrolling to follow your selection.
+- **Notifications** — a sound and a system alert when any agent finishes or needs input;
+  clicking jumps straight to it. Agents you're already watching stay quiet.
 
 ### Built like a native Mac app
 - **Universal binary** — Apple Silicon and Intel, one download.
 - **Light & dark**, auto-updates via [Sparkle](https://sparkle-project.org), signed and
   notarized.
-- **HerdrKit** — the socket-RPC/SSH/device layer ships as its own Swift package
-  (`Packages/HerdrKit`), independent of the SwiftUI app, so the protocol and transport code is
-  reusable and unit-testable on its own.
+- **HerdrKit** — the socket-RPC/SSH/device layer ships as its own, independently testable Swift
+  package (`Packages/HerdrKit`).
 
-## Why herdrm?
+</details>
 
-If you run more than one coding agent, or one agent on more than one machine, you already know
-the friction: a grid of terminal tabs with no shared sense of who's blocked, a chat UI that
-can't show you the actual TUI, and no way to know an agent finished until you tab back over.
+## 🤔 Why herdrm?
 
-- **One console, every machine.** Your laptop, your dev box, a home server — herdrm treats them
-  as rows in the same sidebar, not separate terminal windows you have to remember to check.
-- **The real terminal, not a summary of it.** herdrm attaches to the agent's actual PTY. What
-  you see is exactly what `herdr agent attach` would show you in a shell — cursor position,
-  color, TUI redraws — because that's what it is.
-- **You stop polling.** Status lives in the sidebar and in system notifications instead of in
-  your head. Blocked-and-waiting-on-you agents surface automatically, everywhere: sidebar, ⌘K,
-  and the notification center.
-- **It gets out of the way.** ⌘K to jump anywhere, ⌘N/⇧⌘N to start something new, paste a
-  screenshot straight into the pane you're looking at. No new mental model to learn on top of
-  the terminal you already know.
+If you run more than one coding agent, or one agent on more than one machine, you know the
+friction: a grid of terminal tabs with no shared sense of who's blocked, a chat UI that can't
+show you the actual TUI, and no way to know an agent finished until you tab back over.
 
-## Requirements
+- **One console, every machine.** Laptop, dev box, home server — all rows in the same sidebar.
+- **The real terminal, not a summary of it.** herdrm attaches to the agent's actual PTY.
+- **You stop polling.** Status lives in the sidebar and in notifications, not in your head.
+- **It gets out of the way.** ⌘K, ⌘N, paste-to-attach — no new mental model to learn.
+
+## 📋 Requirements
 
 - macOS 14+
-- [herdr](https://herdr.dev) installed locally — herdrm starts the local server itself if it
-  isn't already running — and running on your remote machines
-- For remote devices: OpenSSH access through your SSH config/agent, Tailscale SSH (1.98.0+ on
-  the remote host), or a password stored in the macOS login Keychain. Targets accept
-  `user@host`, `user@host:port`, and `~/.ssh/config` aliases.
+- [herdr](https://herdr.dev) installed locally (herdrm starts it if it isn't running) and on
+  your remote machines
+- For remote devices: OpenSSH access, Tailscale SSH (1.98.0+), or a Keychain-stored password
 
-## Install
+## 📦 Install
 
-### Homebrew
-
+**Homebrew**
 ```sh
 brew install owo-network/brew/herdrm
 ```
 
-### Manual
+**Manual** — download `herdrm-x.y.z.zip` from [Releases](https://github.com/missuo/herdrm/releases),
+unzip, drag `herdrm.app` into `/Applications`. Either way it self-updates from then on — **HerdrM
+→ Check for Updates…**, or **HerdrM → About HerdrM** for the version you're running.
 
-Download the latest `herdrm-x.y.z.zip` from
-[Releases](https://github.com/missuo/herdrm/releases), unzip, and drag `herdrm.app` into
-`/Applications`. Either way the app updates itself from then on — check **HerdrM → Check for
-Updates…** any time, or **HerdrM → About HerdrM** for the version you're running.
+## ⚡ Quick Start
 
-## Quick Start
-
-1. **Launch herdrm.** No local herdr running yet? herdrm starts it for you.
-2. **Add a remote device** (optional) — bottom-left device switcher → Add Device — with any of:
-   ```sh
-   # a plain SSH target
-   you@dev-box
-   # a custom port
-   you@dev-box:2222
-   # a Tailscale machine (Tailscale SSH, no keys needed)
-   you@my-tailnet-host
-   ```
-3. **Start an agent** — ⌘N, pick a device and a CLI (only what's actually installed there shows
-   up), and you're attached to its live terminal.
-4. **Jump around** — ⌘K to find any agent across every device, or just watch the sidebar: it'll
-   tell you the moment one is blocked on you.
-
-## Architecture
-
-```
-   herdr (background server, owns the PTYs)
-        ▲  NDJSON-over-Unix-socket RPC, and `herdr agent attach` for the live stream
-        │
-   Packages/HerdrKit   — Swift package: RPC client, SSH tunneling, device store
-        ▲
-        │  SwiftUI bindings
-   Sources/HerdrM       — the app: sidebar, terminal embed, notifications, search
+```text
+1. Launch herdrm            → no local herdr running? herdrm starts it for you
+2. Add a device (optional)  → you@dev-box · you@dev-box:2222 · a Tailscale machine
+3. ⌘N                       → pick a device + a CLI, you're attached to its live terminal
+4. ⌘K                       → jump to any agent on any device, any time
 ```
 
-- **[herdr](https://herdr.dev)** is the daemon: it owns every agent's PTY, persists spaces, and
-  answers over a local Unix socket (forwarded from remote machines with `ssh -L`).
-- **`Packages/HerdrKit`** is the transport and domain layer — the RPC client, `SSHTunnel`,
-  device persistence — kept independent of any UI so it's unit-tested on its own
-  (`make kit-test`).
-- **`Sources/HerdrM`** is the SwiftUI shell: the Spaces/Agents sidebar, the
-  [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)-backed terminal embed, notifications,
-  and the ⌘K search.
+## 🏗️ Architecture
 
-## Build from source
+```mermaid
+flowchart LR
+    A(["🖥️ herdr<br/>background server, owns the PTYs"]) -->|"Unix-socket RPC +<br/>herdr agent attach"| B[["Packages/HerdrKit<br/>RPC client · SSH tunnel · device store"]]
+    B -->|SwiftUI bindings| C(["Sources/HerdrM<br/>sidebar · terminal · search · notifications"])
+    style A fill:#161b22,stroke:#E2795B,color:#e6edf3
+    style B fill:#1f2630,stroke:#3B82F6,color:#e6edf3
+    style C fill:#161b22,stroke:#2FA35F,color:#e6edf3
+```
+
+- **[herdr](https://herdr.dev)** — the daemon: owns every agent's PTY, persists spaces, answers
+  over a local Unix socket.
+- **`Packages/HerdrKit`** — transport and domain layer, UI-independent and unit-tested on its
+  own (`make kit-test`).
+- **`Sources/HerdrM`** — the SwiftUI shell built on
+  [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
+
+## 🔨 Build from source
 
 ```sh
 brew install xcodegen
@@ -193,33 +164,31 @@ make run
 make kit-test  # HerdrKit integration tests (needs a running local herdr)
 ```
 
-## Contributing
+## 🤝 Contributing
 
-This is early-stage software and PRs are genuinely welcome — small, single-purpose ones land
-fastest.
+Early-stage software, PRs genuinely welcome — small and single-purpose lands fastest.
 
-- **Found a bug?** [Open an issue](https://github.com/missuo/herdrm/issues/new) with your
-  macOS version, the herdr version (`herdr --version`), and the steps that trigger it.
-- **Have a feature in mind?** Open an issue describing the workflow it unblocks before sending
-  a large PR — it's the fastest way to find out if it fits the project's direction.
-- **Sending a PR:** fork, branch, `make build` and `make kit-test` locally (there's no CI gate
-  yet, so this is the bar), and add a line under `## [Unreleased]` in `CHANGELOG.md` — release
-  automation extracts that section for the GitHub release notes and the Sparkle update
-  description, and fails the build without it.
+- **Bug?** [Open an issue](https://github.com/missuo/herdrm/issues/new) with your macOS
+  version, `herdr --version`, and repro steps.
+- **Feature idea?** Open an issue first for anything beyond a small PR.
+- **Sending a PR:** `make build` + `make kit-test` locally (no CI gate yet — this is the bar),
+  plus a line under `## [Unreleased]` in `CHANGELOG.md` (release automation requires it).
 
-## Credits
+## 🙏 Credits
 
-- [herdr](https://herdr.dev) — the terminal workspace manager for coding agents that this app
-  is a console for.
-- [Heeler](https://github.com/ZingerLittleBee/Heeler) — the iOS herdr client; herdrm borrows
-  its domain model and transport patterns.
-- [waku](https://github.com/egoist/waku) — the sidebar design reference.
+- [herdr](https://herdr.dev) — the agent runtime this app is a console for.
+- [Heeler](https://github.com/ZingerLittleBee/Heeler) — iOS herdr client; domain model and
+  transport patterns.
+- [waku](https://github.com/egoist/waku) — sidebar design reference.
 - [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) — terminal emulation.
 - [Sparkle](https://sparkle-project.org) — auto-updates.
-- [Lobe Icons](https://github.com/lobehub/lobe-icons) and
-  [Simple Icons](https://simpleicons.org) — agent and OS brand icons.
+- [Lobe Icons](https://github.com/lobehub/lobe-icons) / [Simple Icons](https://simpleicons.org) — brand icons.
 
-## Star History
+## <a name="-status"></a>⚠️ Status
+
+**Early stage**, without full test coverage — expect bugs. Issues and PRs are very welcome.
+
+## ⭐ Star History
 
 <p align="center">
   <a href="https://star-history.com/#missuo/herdrm&Date">
