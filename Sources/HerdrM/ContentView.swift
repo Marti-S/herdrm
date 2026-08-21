@@ -219,7 +219,10 @@ struct DetailView: View {
                     device: entry.device,
                     paneID: entry.agent.paneID,
                     serverVersion: model.serverVersion(deviceID: entry.device.id),
-                    agentKind: entry.agent.agentKindRaw,
+                    attachmentCapabilities: model.attachmentCapabilities(
+                        deviceID: entry.device.id,
+                        agentKind: entry.agent.agentKindRaw
+                    ),
                     fontName: terminalFontName,
                     fontSize: terminalFontSize,
                     thinStrokes: terminalThinStrokes,

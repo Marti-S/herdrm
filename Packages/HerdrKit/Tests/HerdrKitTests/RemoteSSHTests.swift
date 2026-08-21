@@ -63,7 +63,7 @@ final class RemoteSSHTests: XCTestCase {
         XCTAssertTrue(remotePath.hasPrefix("/"))
         XCTAssertTrue(remotePath.hasSuffix(".txt"))
 
-        let quotedPath = shellQuote(remotePath)
+        let quotedPath = HerdrService.shellQuoted(remotePath)
         let output = try await SSHTunnel.runSSH(
             target: target,
             command: "cat \(quotedPath); rm -f \(quotedPath)",
@@ -111,7 +111,4 @@ final class RemoteSSHTests: XCTestCase {
         await service.disconnect()
     }
 
-    private func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
 }

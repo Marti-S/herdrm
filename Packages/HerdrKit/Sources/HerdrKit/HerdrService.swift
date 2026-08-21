@@ -150,11 +150,13 @@ public actor HerdrService {
         return try await client().request(method: "workspace.list", as: Envelope.self).workspaces
     }
 
-    /// Agent kinds this herdr server knows how to detect/start ("claude", "codex", …).
-    public func agentKinds() async throws -> [String] {
-        let result = try await client().request(method: "server.agent_manifests")
-        guard let list = result["manifests"]?.arrayValue else { return [] }
-        return list.compactMap { $0["agent"]?.stringValue }
+    /// Agent manifests and runtime capabilities reported by this device's server.
+    public func agentManifests() async throws -> [AgentManifestInfo] {
+        struct Envelope: Decodable { let manifests: [AgentManifestInfo] }
+        return try await client().request(
+            method: "server.agent_manifests",
+            as: Envelope.self
+        ).manifests
     }
 
     /// The CLI binary a kind installs as (usually the kind itself).
@@ -183,15 +185,15 @@ public actor HerdrService {
     public func installedAgentKinds(from kinds: [String]) async throws -> [String] {
         guard !kinds.isEmpty else { return [] }
         let binaries = kinds.map(Self.binaryName)
-        let script = "\(SSHTunnel.remotePathExport); for b in \(binaries.joined(separator: " ")); do command -v \"$b\" >/dev/null 2>&1 && echo \"$b\"; done"
+        let probe = "for b in \(binaries.joined(separator: " ")); do command -v \"$b\" >/dev/null 2>&1 && echo \"$b\"; done"
         let output: String
         switch device.kind {
         case .local:
-            output = try await Self.runLocalShell(script)
+            output = try await Self.runLocalShell("\(LocalHerdrServer.localPathExport); \(probe)")
         case .ssh(let target):
             output = try await SSHTunnel.runSSH(
                 target: target,
-                command: script,
+                command: "\(SSHTunnel.remotePathExport); \(probe)",
                 timeout: 15,
                 credentialID: device.id
             )

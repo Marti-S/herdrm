@@ -31,10 +31,13 @@ final class LocalSocketTests: XCTestCase {
         let snapshot = try await service.snapshot()
         let agents = try await service.agents()
         let workspaces = try await service.workspaces()
+        let manifests = try await service.agentManifests()
 
         // snapshot and dedicated list endpoints must agree
         XCTAssertEqual(Set(snapshot.agents.map(\.paneID)), Set(agents.map(\.paneID)))
         XCTAssertEqual(Set(snapshot.workspaces.map(\.workspaceID)), Set(workspaces.map(\.workspaceID)))
+        XCTAssertFalse(manifests.isEmpty)
+        _ = AgentAttachmentCapabilityRegistry(manifests: manifests)
         // every agent belongs to a listed workspace
         let workspaceIDs = Set(workspaces.map(\.workspaceID))
         for agent in agents {
