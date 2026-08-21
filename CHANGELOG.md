@@ -22,6 +22,12 @@ the Sparkle update description — a release without a section here fails CI.
   keyboard focus in its terminal. It used to take a mouse click before you could
   type, and the agent's TUI rendered its cursor as unfocused. (#5)
 
+### Fixed
+- The ⌘K result list now scrolls to follow the keyboard selection. Arrowing past
+  the eighth row used to move the highlight out of view and leave the list
+  standing still; typing a new query, or reopening the sheet, now also brings the
+  list back to the top. (#7)
+
 ## [0.3.7] - 2026-08-20
 
 ### Added
