@@ -7,6 +7,8 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-08-21
+
 ### Changed
 - Attachment paste is now agent-aware: Codex joins Claude Code and Copilot,
   pasting a Finder file into a local agent inserts its (shell-quoted) local
