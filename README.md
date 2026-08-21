@@ -1,9 +1,11 @@
 <p align="center">
-  <img src="Resources/AppIcon/herdrm-icon-rounded.png" width="120" alt="herdrm icon" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/herdrm-banner.png" />
+    <source media="(prefers-color-scheme: light)" srcset=".github/assets/herdrm-banner-light.png" />
+    <img src=".github/assets/herdrm-banner.png" alt="herdrm — every coding agent, every machine, one native terminal" />
+  </picture>
 </p>
 
-<h1 align="center">herdrm</h1>
-<p align="center"><strong>Every coding agent, every machine, one native terminal.</strong></p>
 <p align="center">
   The native macOS console for <a href="https://herdr.dev">herdr</a> — see Claude Code, Codex,
   Gemini, Grok and OpenCode across your Mac and every SSH box you own, and jump into any one
