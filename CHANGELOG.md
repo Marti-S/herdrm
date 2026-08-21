@@ -7,12 +7,36 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Actions fired while a device is disconnected no longer fail with the bare
+  "connection failed: not connected": the alert now says which device is
+  unreachable and why — still connecting, or the reconnect loop's actual
+  error. (#21)
+
 ### Added
 - Terminal legibility settings: **Thin strokes** (on by default) turns off the
   macOS font smoothing that thickens glyph stems and makes agent output —
   Claude Code's bold text especially — look heavy and smudged; **Weight**
   (Light/Regular/Medium) for the system monospaced font; and **Line spacing**
   (100%–140%). (#4)
+- ⌘K now lists agents in the same order as the sidebar — the ones waiting on you
+  first, then done, working and idle — and each row carries its status glyph plus
+  a "needs input" label, so the agent that needs you is the first thing you see. (#6)
+
+### Fixed
+- Jumping to an agent — from ⌘K, the sidebar, or a notification — now leaves the
+  keyboard focus in its terminal. It used to take a mouse click before you could
+  type, and the agent's TUI rendered its cursor as unfocused. (#5)
+
+### Fixed
+- The ⌘K result list now scrolls to follow the keyboard selection. Arrowing past
+  the eighth row used to move the highlight out of view and leave the list
+  standing still; typing a new query, or reopening the sheet, now also brings the
+  list back to the top. (#7)
+
+### Fixed
+- The New Agent picker now finds CLIs installed by NVM, plus Grok's user-level
+  installer, when herdrm starts outside a login shell locally or over SSH.
 
 ## [0.3.7] - 2026-08-20
 

@@ -40,7 +40,15 @@ struct SearchSheet: View {
                 || entry.workspace.label.lowercased().contains(q)
                 || entry.device.name.lowercased().contains(q)
         }
-        return agents.map(Result.agent) + spaces.map(Result.space)
+        // Same ordering as the sidebar (AppModel.visibleAgents): whoever needs the
+        // user first, then most recently updated inside each bucket.
+        let ranked = agents.sorted {
+            if $0.agent.status.sortBucket != $1.agent.status.sortBucket {
+                return $0.agent.status.sortBucket < $1.agent.status.sortBucket
+            }
+            return ($0.agent.revision ?? 0) > ($1.agent.revision ?? 0)
+        }
+        return ranked.map(Result.agent) + spaces.map(Result.space)
     }
 
     var body: some View {
@@ -79,17 +87,30 @@ struct SearchSheet: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
             } else {
-                ScrollView {
-                    VStack(spacing: 1) {
-                        ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
-                            row(result, isHighlighted: index == highlighted)
-                                .onTapGesture { choose(result) }
-                                .onHover { if $0 { highlighted = index } }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 1) {
+                            ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
+                                row(result, isHighlighted: index == highlighted)
+                                    .onTapGesture { choose(result) }
+                                    .onHover { if $0 { highlighted = index } }
+                            }
                         }
+                        .padding(8)
                     }
-                    .padding(8)
+                    .frame(maxHeight: 320)
+                    // anchor: nil moves the minimum to reveal the row — a no-op when it
+                    // is already visible, so hovering never yanks the scroll position.
+                    .onChange(of: highlighted) { _, index in
+                        guard results.indices.contains(index) else { return }
+                        proxy.scrollTo(results[index].id, anchor: nil)
+                    }
+                    // Reopening ⌘K starts at the top even if the sheet was left
+                    // scrolled to the bottom.
+                    .onAppear {
+                        if let first = results.first { proxy.scrollTo(first.id, anchor: .top) }
+                    }
                 }
-                .frame(maxHeight: 320)
             }
 
             Rectangle().fill(Theme.hairline).frame(height: 1)
@@ -141,7 +162,13 @@ struct SearchSheet: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
+                AgentStatusGlyph(status: entry.agent.status)
                 Spacer(minLength: 8)
+                if entry.agent.status == .blocked {
+                    Text("needs input")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.warning)
+                }
                 trailing(
                     "\(entry.agent.agent) · \(model.spaceName(deviceID: entry.device.id, workspaceID: entry.agent.workspaceID))",
                     device: entry.device
