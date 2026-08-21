@@ -159,11 +159,6 @@ public actor HerdrService {
         ).manifests
     }
 
-    /// Agent kinds this herdr server knows how to detect/start ("claude", "codex", …).
-    public func agentKinds() async throws -> [String] {
-        try await agentManifests().map(\.agent)
-    }
-
     /// The CLI binary a kind installs as (usually the kind itself).
     public static func binaryName(for kind: String) -> String {
         kind == "cursor" ? "cursor-agent" : kind
@@ -207,16 +202,12 @@ public actor HerdrService {
         return kinds.filter { found.contains(Self.binaryName(for: $0)) }
     }
 
-    static func runLocalShell(
-        _ command: String,
-        environment: [String: String]? = nil
-    ) async throws -> String {
+    static func runLocalShell(_ command: String) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/bin/sh")
                 proc.arguments = ["-c", command]
-                if let environment { proc.environment = environment }
                 let out = Pipe()
                 proc.standardOutput = out
                 proc.standardError = FileHandle.nullDevice

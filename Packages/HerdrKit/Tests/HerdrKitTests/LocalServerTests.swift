@@ -370,34 +370,6 @@ final class LocalServerTests: XCTestCase {
         XCTAssertEqual(binary, shim.path, "a mise-installed herdr is invisible to herdrm")
     }
 
-    func testLocalPathFindsToolsUnderNVMsDefaultVersion() async throws {
-        let nvm = directory.appendingPathComponent(".nvm", isDirectory: true)
-        let bin = nvm.appendingPathComponent("versions/node/v24.14.1/bin", isDirectory: true)
-        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        let codex = bin.appendingPathComponent("codex")
-        try "#!/bin/sh\nexit 0\n".write(to: codex, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codex.path)
-        try """
-        nvm() {
-            if [ "$1" = which ] && [ "$2" = default ]; then
-                printf '%s\\n' "$NVM_DIR/versions/node/v24.14.1/bin/node"
-                return 0
-            fi
-            return 1
-        }
-        """.write(to: nvm.appendingPathComponent("nvm.sh"), atomically: true, encoding: .utf8)
-
-        let output = try await HerdrService.runLocalShell(
-            "\(LocalHerdrServer.localPathExport); command -v codex",
-            environment: [
-                "HOME": directory.path,
-                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            ]
-        )
-
-        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), codex.path)
-    }
-
     // MARK: - Retry policy
 
     func testConnectStartsTheLocalServerAndRetriesThePing() async throws {

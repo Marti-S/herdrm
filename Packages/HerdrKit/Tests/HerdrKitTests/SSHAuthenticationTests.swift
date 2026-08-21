@@ -150,8 +150,8 @@ final class SSHFileTransferTests: XCTestCase {
 
         let script = """
         #!/bin/sh
-        printf '%s\\n' "$@" > \(shellQuote(argumentsURL.path))
-        cat > \(shellQuote(capturedURL.path))
+        printf '%s\\n' "$@" > \(HerdrService.shellQuoted(argumentsURL.path))
+        cat > \(HerdrService.shellQuoted(capturedURL.path))
         printf '/home/test/.cache/herdrm/attachments/test.png\\n'
         """
         try script.write(to: executableURL, atomically: true, encoding: .utf8)
@@ -224,9 +224,6 @@ final class SSHFileTransferTests: XCTestCase {
         XCTAssertEqual(try SSHTunnel.validateUploadCandidate(fileURL), 1)
     }
 
-    private func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
 }
 
 final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
