@@ -14,6 +14,10 @@ the Sparkle update description — a release without a section here fails CI.
   (Light/Regular/Medium) for the system monospaced font; and **Line spacing**
   (100%–140%). (#4)
 
+### Fixed
+- The New Agent picker now finds CLIs installed by NVM, plus Grok's user-level
+  installer, when herdrm starts outside a login shell locally or over SSH.
+
 ## [0.3.7] - 2026-08-20
 
 ### Added
