@@ -485,6 +485,27 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// An action fired while the device session is down surfaces the bare
+    /// "connection failed: not connected", which points at nothing. The
+    /// reconnect loop already knows why the device is unreachable — say that
+    /// instead. (#21)
+    func actionErrorMessage(_ error: Error, device: Device) -> String {
+        guard let herdrError = error as? HerdrError,
+              case .connectionFailed(let reason) = herdrError,
+              reason == "not connected"
+        else { return error.localizedDescription }
+        switch session(device.id).connection {
+        case .connecting:
+            return "Still connecting to \(device.name) — try again in a moment."
+        case .failed(let reason):
+            return "\(device.name) is unreachable: \(reason)"
+        case .idle:
+            return "\(device.name) isn't connected."
+        case .connected:
+            return "\(device.name) just reconnected — try again."
+        }
+    }
+
     // MARK: - Closing
 
     func requestCloseSpace(_ entry: SpaceEntry) {
@@ -500,7 +521,7 @@ final class AppModel: ObservableObject {
                     if self.selectedSpace == entry.ref { self.selectedSpace = nil }
                     await self.refresh(entry.device.id)
                 } catch {
-                    self.actionError = error.localizedDescription
+                    self.actionError = self.actionErrorMessage(error, device: entry.device)
                 }
             }
         }
@@ -519,7 +540,7 @@ final class AppModel: ObservableObject {
                     if self.selectedPane == ref { self.selectedPane = nil }
                     await self.refresh(device.id)
                 } catch {
-                    self.actionError = error.localizedDescription
+                    self.actionError = self.actionErrorMessage(error, device: device)
                 }
             }
         }
@@ -538,7 +559,7 @@ final class AppModel: ObservableObject {
                 )
                 await refresh(entry.device.id)
             } catch {
-                actionError = error.localizedDescription
+                actionError = actionErrorMessage(error, device: entry.device)
             }
         }
     }
@@ -563,7 +584,7 @@ final class AppModel: ObservableObject {
                 selectedSpace = SpaceRef(deviceID: device.id, workspaceID: created.workspaceID)
                 showNewAgent = true
             } catch {
-                actionError = error.localizedDescription
+                actionError = actionErrorMessage(error, device: device)
             }
         }
     }
@@ -608,7 +629,7 @@ final class AppModel: ObservableObject {
                 if let createdPane {
                     try? await service.closePane(paneID: createdPane)
                 }
-                actionError = error.localizedDescription
+                actionError = actionErrorMessage(error, device: device)
             }
         }
     }
