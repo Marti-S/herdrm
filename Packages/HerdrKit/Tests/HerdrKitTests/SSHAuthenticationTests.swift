@@ -232,12 +232,6 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         imagePath: .shellQuoted,
         filePath: .shellQuoted
     )
-    private let nativeImageFileCapabilities = AgentAttachmentCapabilities(
-        nativeClipboardImageData: true,
-        nativeClipboardImageFiles: true,
-        imagePath: .shellQuoted,
-        filePath: .shellQuoted
-    )
 
     func testManifestDecodingAndAliasRegistry() throws {
         let data = Data(
@@ -249,7 +243,6 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
                 "capabilities": {
                   "attachments": {
                     "native_clipboard_image_data": true,
-                    "native_clipboard_image_files": true,
                                         "image_path": "shell_quoted",
                                         "file_path": "shell_quoted"
                   }
@@ -263,9 +256,9 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         let manifests = try JSONDecoder().decode([AgentManifestInfo].self, from: data)
         let registry = AgentAttachmentCapabilityRegistry(manifests: manifests)
 
-        XCTAssertEqual(registry.capabilities(for: "codex"), nativeImageFileCapabilities)
-        XCTAssertEqual(registry.capabilities(for: "OPENAI-CODEX"), nativeImageFileCapabilities)
-        XCTAssertEqual(registry.capabilities(for: "codex_cli"), nativeImageFileCapabilities)
+        XCTAssertEqual(registry.capabilities(for: "codex"), pathCapabilities)
+        XCTAssertEqual(registry.capabilities(for: "OPENAI-CODEX"), pathCapabilities)
+        XCTAssertEqual(registry.capabilities(for: "codex_cli"), pathCapabilities)
         XCTAssertNil(registry.capabilities(for: "legacy"))
         XCTAssertNil(registry.capabilities(for: nil))
     }
@@ -286,7 +279,7 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         XCTAssertEqual(legacyRegistry.capabilities(for: "claude_code"), pathCapabilities)
         XCTAssertEqual(
             legacyRegistry.capabilities(for: "OPENAI-CODEX"),
-            nativeImageFileCapabilities
+            pathCapabilities
         )
         XCTAssertEqual(legacyRegistry.capabilities(for: "github-copilot"), pathCapabilities)
 
@@ -319,7 +312,7 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         XCTAssertNil(capabilityAwareRegistry.capabilities(for: "claude"))
     }
 
-    func testLocalDeliveryAccountsForClipboardSource() {
+    func testLocalDeliveryUsesNativeClipboardOnlyForImageData() {
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(
                 capabilities: pathCapabilities,
@@ -338,15 +331,7 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(
-                capabilities: nativeImageFileCapabilities,
-                deviceKind: .local,
-                source: .files(allImages: true)
-            ),
-            .nativeClipboard
-        )
-        XCTAssertEqual(
-            AgentAttachmentDeliveryPolicy.action(
-                capabilities: nativeImageFileCapabilities,
+                capabilities: pathCapabilities,
                 deviceKind: .local,
                 source: .files(allImages: false)
             ),
@@ -358,7 +343,7 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         let remote = Device.Kind.ssh(target: "user@example.test")
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(
-                capabilities: nativeImageFileCapabilities,
+                capabilities: pathCapabilities,
                 deviceKind: remote,
                 source: .imageData
             ),
@@ -366,7 +351,7 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(
-                capabilities: nativeImageFileCapabilities,
+                capabilities: pathCapabilities,
                 deviceKind: remote,
                 source: .files(allImages: true)
             ),
@@ -374,7 +359,7 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(
-                capabilities: nativeImageFileCapabilities,
+                capabilities: pathCapabilities,
                 deviceKind: remote,
                 source: .files(allImages: false)
             ),

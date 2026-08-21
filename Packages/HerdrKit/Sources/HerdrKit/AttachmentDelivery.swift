@@ -20,25 +20,21 @@ public enum AgentAttachmentPathSyntax: String, Decodable, Sendable, Equatable {
 
 public struct AgentAttachmentCapabilities: Decodable, Sendable, Equatable {
     public let nativeClipboardImageData: Bool
-    public let nativeClipboardImageFiles: Bool
     public let imagePath: AgentAttachmentPathSyntax?
     public let filePath: AgentAttachmentPathSyntax?
 
     public init(
         nativeClipboardImageData: Bool = false,
-        nativeClipboardImageFiles: Bool = false,
         imagePath: AgentAttachmentPathSyntax? = nil,
         filePath: AgentAttachmentPathSyntax? = nil
     ) {
         self.nativeClipboardImageData = nativeClipboardImageData
-        self.nativeClipboardImageFiles = nativeClipboardImageFiles
         self.imagePath = imagePath
         self.filePath = filePath
     }
 
     enum CodingKeys: String, CodingKey {
         case nativeClipboardImageData = "native_clipboard_image_data"
-        case nativeClipboardImageFiles = "native_clipboard_image_files"
         case imagePath = "image_path"
         case filePath = "file_path"
     }
@@ -48,10 +44,6 @@ public struct AgentAttachmentCapabilities: Decodable, Sendable, Equatable {
         nativeClipboardImageData = try container.decodeIfPresent(
             Bool.self,
             forKey: .nativeClipboardImageData
-        ) ?? false
-        nativeClipboardImageFiles = try container.decodeIfPresent(
-            Bool.self,
-            forKey: .nativeClipboardImageFiles
         ) ?? false
         imagePath = try container.decodeIfPresent(String.self, forKey: .imagePath)
             .flatMap(AgentAttachmentPathSyntax.init(rawValue:))
@@ -120,24 +112,11 @@ public struct AgentAttachmentCapabilityRegistry: Sendable, Equatable {
     /// any manifest advertises capabilities, the server becomes authoritative.
     private static let legacyFallbacks: [([String], AgentAttachmentCapabilities)] = [
         (
-            ["claude", "claude-code"],
-            AgentAttachmentCapabilities(
-                nativeClipboardImageData: true,
-                imagePath: .shellQuoted,
-                filePath: .shellQuoted
-            )
-        ),
-        (
-            ["codex", "codex-cli", "openai-codex"],
-            AgentAttachmentCapabilities(
-                nativeClipboardImageData: true,
-                nativeClipboardImageFiles: true,
-                imagePath: .shellQuoted,
-                filePath: .shellQuoted
-            )
-        ),
-        (
-            ["copilot", "github-copilot", "ghcs"],
+            [
+                "claude", "claude-code",
+                "codex", "codex-cli", "openai-codex",
+                "copilot", "github-copilot", "ghcs",
+            ],
             AgentAttachmentCapabilities(
                 nativeClipboardImageData: true,
                 imagePath: .shellQuoted,
@@ -172,9 +151,6 @@ public enum AgentAttachmentDeliveryPolicy {
             return capabilities.imagePath.map(AgentAttachmentDeliveryAction.devicePaths)
                 ?? .unsupported
         case .files(allImages: true):
-            if isLocal, capabilities.nativeClipboardImageFiles {
-                return .nativeClipboard
-            }
             let pathSyntax = capabilities.imagePath ?? capabilities.filePath
             return pathSyntax.map(AgentAttachmentDeliveryAction.devicePaths) ?? .unsupported
         case .files(allImages: false):
