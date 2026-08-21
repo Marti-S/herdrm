@@ -700,7 +700,33 @@ func applyTerminalAppearance(
 /// A local login shell, side by side with the agent attach — no herdr pane and no
 /// attachment paste. It does take first responder when it appears, so splitting hands the
 /// keyboard to the new shell; closing the split gives it back via `focusRemainingTerminal`.
+/// Standalone shell views stay in the hierarchy while deselected (a local shell
+/// has no server side to reattach to), so re-selecting one needs a way to hand
+/// it the keyboard again — the registry maps session ids to their live views.
+@MainActor
+enum ShellViewRegistry {
+    private struct WeakView { weak var view: LocalProcessTerminalView? }
+    private static var views: [UUID: WeakView] = [:]
+
+    static func register(_ view: LocalProcessTerminalView, for id: UUID) {
+        views[id] = WeakView(view: view)
+    }
+
+    static func unregister(_ id: UUID) {
+        views[id] = nil
+    }
+
+    static func focus(_ id: UUID) {
+        DispatchQueue.main.async {
+            guard let view = views[id]?.view, let window = view.window else { return }
+            window.makeFirstResponder(view)
+        }
+    }
+}
+
 struct ShellTerminalView: NSViewRepresentable {
+    /// Session identity for the registry; nil for the ⌘D split shell.
+    var sessionID: UUID?
     var fontName: String = ""
     var fontSize: Double = TerminalDefaults.defaultFontSize
     var thinStrokes: Bool = true
@@ -716,6 +742,7 @@ struct ShellTerminalView: NSViewRepresentable {
         let view = LineBreakTerminalView(frame: .zero)
         view.processDelegate = context.coordinator
         context.coordinator.onExit = onExit
+        context.coordinator.sessionID = sessionID
         applyTerminalAppearance(
             view,
             fontName: fontName,
@@ -734,10 +761,13 @@ struct ShellTerminalView: NSViewRepresentable {
             args: ["-c", "cd \"$HOME\"; exec \"${SHELL:-/bin/zsh}\" -l"],
             environment: environment
         )
-        // Splitting hands the keyboard to the new shell: `makeNSView` runs only when
-        // the split opens (the `.id` is stable across theme changes), so this fires
-        // once per split and never steals focus back afterwards. The hop to the next
-        // runloop pass is required — the view has no `window` yet while this runs.
+        if let sessionID {
+            ShellViewRegistry.register(view, for: sessionID)
+        }
+        // Opening a shell hands it the keyboard: `makeNSView` runs once per shell
+        // (the `.id` is stable across theme changes), so this never steals focus
+        // back afterwards. The hop to the next runloop pass is required — the
+        // view has no `window` yet while this runs.
         DispatchQueue.main.async { [weak view] in
             guard let view, let window = view.window else { return }
             window.makeFirstResponder(view)
@@ -761,6 +791,9 @@ struct ShellTerminalView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
         coordinator.onExit = nil
+        if let sessionID = coordinator.sessionID {
+            ShellViewRegistry.unregister(sessionID)
+        }
         let shellPid = nsView.process?.shellPid ?? 0
         nsView.terminate()
         // terminate() sends SIGTERM, which interactive shells ignore — a closed
@@ -782,6 +815,7 @@ struct ShellTerminalView: NSViewRepresentable {
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         var onExit: ((Int32?) -> Void)?
+        var sessionID: UUID?
 
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
         func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}

@@ -40,14 +40,11 @@ struct SidebarView: View {
                 actionRow(icon: "square.and.pencil", label: "New Agent") {
                     model.showNewAgent = true
                 }
-                // Opens the split shell beside the selected agent (same as ⌘D);
-                // a second click closes it again. Needs a selected agent — the
-                // split renders inside the agent's terminal container.
+                // Every click opens another standalone local shell, listed under
+                // TERMINALS below — the ⌘D split beside an agent is separate.
                 actionRow(icon: "terminal", label: "New Terminal") {
-                    guard model.selectedEntry != nil else { return }
-                    model.shellSplitAxis = model.shellSplitAxis == nil ? .vertical : nil
+                    model.newShellSession()
                 }
-                .opacity(model.selectedEntry == nil ? 0.4 : 1)
                 actionRow(icon: "magnifyingglass", label: "Search") {
                     model.showSearch = true
                 }
@@ -111,6 +108,19 @@ struct SidebarView: View {
                                     model.requestClosePane(entry.ref, name: entry.agent.title)
                                 }
                             }
+                    }
+
+                    if !model.shellSessions.isEmpty {
+                        Spacer().frame(height: 10)
+                        groupHeader("Terminals")
+                        ForEach(model.shellSessions) { session in
+                            shellRow(session)
+                                .contextMenu {
+                                    Button("Close Terminal", role: .destructive) {
+                                        model.closeShellSession(session.id)
+                                    }
+                                }
+                        }
                     }
                 }
                 .padding(.horizontal, 10)
@@ -220,9 +230,10 @@ struct SidebarView: View {
 
     private func agentRow(_ entry: AppModel.AgentEntry) -> some View {
         let agent = entry.agent
-        let selected = model.selectedPane == entry.ref
+        let selected = model.selectedPane == entry.ref && model.selectedShellID == nil
         return Button {
             model.selectedPane = entry.ref
+            model.selectedShellID = nil
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -255,6 +266,32 @@ struct SidebarView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
             .frame(height: 51)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarRowButtonStyle(selected: selected))
+    }
+
+    private func shellRow(_ session: ShellSession) -> some View {
+        let selected = model.selectedShellID == session.id
+        return Button {
+            model.selectShell(session.id)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textTertiary)
+                Text(session.title)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("Local")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textGhost)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(height: 34)
             .contentShape(Rectangle())
         }
         .buttonStyle(SidebarRowButtonStyle(selected: selected))

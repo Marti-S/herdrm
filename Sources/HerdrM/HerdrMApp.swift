@@ -98,10 +98,13 @@ struct HerdrMApp: App {
                     .disabled(focusedModel?.selectedEntry == nil)
             }
             CommandGroup(replacing: .saveItem) {
-                // ⌘W prefers the split — same trade-off as ⌘N taking New Window.
-                Button(focusedModel?.shellSplitAxis != nil ? "Close Split" : "Close") {
+                // ⌘W closes the most local thing first: the split, then the
+                // selected standalone terminal, then the window.
+                Button(closeButtonTitle) {
                     if let model = focusedModel, model.shellSplitAxis != nil {
                         model.shellSplitAxis = nil
+                    } else if let model = focusedModel, let shell = model.selectedShell {
+                        model.closeShellSession(shell.id)
                     } else {
                         NSApp.keyWindow?.performClose(nil)
                     }
@@ -113,6 +116,12 @@ struct HerdrMApp: App {
         Settings {
             SettingsView()
         }
+    }
+
+    private var closeButtonTitle: String {
+        if focusedModel?.shellSplitAxis != nil { return "Close Split" }
+        if focusedModel?.selectedShell != nil { return "Close Terminal" }
+        return "Close"
     }
 
     static func applyTheme(_ preference: String) {

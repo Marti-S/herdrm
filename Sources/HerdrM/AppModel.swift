@@ -41,6 +41,13 @@ struct SSHAuthenticationRequest: Identifiable {
 /// vertical = panes side by side with a vertical divider (iTerm2's convention).
 enum SplitAxis { case vertical, horizontal }
 
+/// A standalone local shell shown as its own sidebar entry — not a herdr pane
+/// (herdr refuses to attach agent-less panes) and not the ⌘D split.
+struct ShellSession: Identifiable, Equatable {
+    let id: UUID
+    var title: String
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var devices: [Device]
@@ -55,6 +62,10 @@ final class AppModel: ObservableObject {
     @Published var showNewSpace = false
     @Published var showSearch = false
     @Published var shellSplitAxis: SplitAxis?
+    /// Standalone local terminals. Their views stay alive while deselected —
+    /// unlike agents, a local shell has no server side to reattach to.
+    @Published var shellSessions: [ShellSession] = []
+    @Published var selectedShellID: UUID?
     /// In-window device panel (NSPopover crashes in ViewBridge on macOS 26+ betas).
     @Published var showDevicePanel = false
     @Published var deviceToEdit: Device?
@@ -195,6 +206,7 @@ final class AppModel: ObservableObject {
 
     func selectSpace(_ ref: SpaceRef?) {
         selectedSpace = ref
+        selectedShellID = nil
         if let entry = selectedEntry {
             if ref == nil { return }
             if entry.device.id == ref!.deviceID && entry.agent.workspaceID == ref!.workspaceID { return }
@@ -219,6 +231,33 @@ final class AppModel: ObservableObject {
         }
         selectedSpace = nil
         selectedPane = ref
+        selectedShellID = nil
+    }
+
+    // MARK: - Shell terminals
+
+    var selectedShell: ShellSession? {
+        selectedShellID.flatMap { id in shellSessions.first { $0.id == id } }
+    }
+
+    /// Every click opens another terminal, like New Agent opens another agent.
+    func newShellSession() {
+        let session = ShellSession(id: UUID(), title: "Terminal \(shellSessions.count + 1)")
+        shellSessions.append(session)
+        selectShell(session.id)
+    }
+
+    func selectShell(_ id: UUID) {
+        selectedShellID = id
+        ShellViewRegistry.focus(id)
+    }
+
+    func closeShellSession(_ id: UUID) {
+        shellSessions.removeAll { $0.id == id }
+        if selectedShellID == id {
+            selectedShellID = shellSessions.last?.id
+            if let remaining = selectedShellID { ShellViewRegistry.focus(remaining) }
+        }
     }
 
     // MARK: - Lifecycle

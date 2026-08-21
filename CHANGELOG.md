@@ -14,8 +14,10 @@ the Sparkle update description — a release without a section here fails CI.
   touching emoji or CJK fallback. (#34)
 
 ### Added
-- A **New Terminal** action in the sidebar opens the split shell beside the
-  selected agent (same as ⌘D); clicking it again closes the split.
+- **New Terminal** in the sidebar opens a standalone local shell as its own
+  entry under a TERMINALS section — full pane, selectable like an agent, and
+  it keeps running while you switch away. Every click opens another one;
+  close from the context menu, with ⌘W, or by exiting the shell.
 - The terminal pane can now split to run a local login shell alongside the
   agent attach — ⌘D splits vertically, ⇧⌘D horizontally, and the divider
   drags with a persisted ratio. Splitting moves the keyboard to the new shell,

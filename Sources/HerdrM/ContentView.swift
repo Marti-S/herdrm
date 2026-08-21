@@ -128,7 +128,18 @@ struct DetailView: View {
                     sidebarCollapsed = false
                 }
             }
-            if let entry = model.selectedEntry {
+            if let shell = model.selectedShell {
+                Image(systemName: "terminal")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+                Text(shell.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                Text("Local")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textTertiary)
+                Spacer()
+            } else if let entry = model.selectedEntry {
                 let agent = entry.agent
                 statusGlyph(agent.status)
                 Text(agent.title)
@@ -219,6 +230,35 @@ struct DetailView: View {
 
     @ViewBuilder
     private var terminal: some View {
+        ZStack {
+            agentTerminal
+            // Standalone shells stay in the hierarchy while deselected: unlike a
+            // herdr pane, a local shell has no server side to reattach to, so
+            // tearing the view down would kill whatever is running in it.
+            ForEach(model.shellSessions) { session in
+                ShellTerminalView(
+                    sessionID: session.id,
+                    fontName: terminalFontName,
+                    fontSize: terminalFontSize,
+                    thinStrokes: terminalThinStrokes,
+                    fontWeight: terminalFontWeight,
+                    lineSpacing: terminalLineSpacing,
+                    dark: colorScheme == .dark,
+                    mouseReporting: terminalMouseReporting,
+                    onExit: { _ in model.closeShellSession(session.id) }
+                )
+                    .id("shell-\(session.id)")
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .opacity(model.selectedShellID == session.id ? 1 : 0)
+                    .allowsHitTesting(model.selectedShellID == session.id)
+            }
+        }
+        .background(Theme.terminalBackground)
+    }
+
+    @ViewBuilder
+    private var agentTerminal: some View {
         if let entry = model.selectedEntry {
             SplitContainer(axis: model.shellSplitAxis, ratio: $splitRatio) {
                 ZStack {
