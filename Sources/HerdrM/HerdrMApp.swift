@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import HerdrKit
 import Sparkle
+import SwiftTerm
 import SwiftUI
 import UserNotifications
 
@@ -29,10 +30,25 @@ private struct AppModelFocusedValueKey: FocusedValueKey {
     typealias Value = AppModel
 }
 
+/// The split axis travels as its own focused value, not read off the model. `Commands`
+/// gets the AppModel by reference and never subscribes to its objectWillChange, so
+/// `focusedModel?.shellSplitAxis` was evaluated once and stuck: the menu items stayed
+/// disabled with a split open, and a disabled NSMenuItem does not fire its key
+/// equivalent. A value type changes identity, which does invalidate the commands body —
+/// that is also what lets the shortcuts follow the current axis.
+private struct SplitAxisFocusedValueKey: FocusedValueKey {
+    typealias Value = SplitAxis
+}
+
 extension FocusedValues {
     var appModel: AppModel? {
         get { self[AppModelFocusedValueKey.self] }
         set { self[AppModelFocusedValueKey.self] = newValue }
+    }
+
+    var splitAxis: SplitAxis? {
+        get { self[SplitAxisFocusedValueKey.self] }
+        set { self[SplitAxisFocusedValueKey.self] = newValue }
     }
 }
 
@@ -41,6 +57,7 @@ struct HerdrMApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @AppStorage("app.theme") private var themePreference = "system"
     @FocusedValue(\.appModel) private var focusedModel
+    @FocusedValue(\.splitAxis) private var focusedSplitAxis
 
     private let updaterController: SPUStandardUpdaterController
 
@@ -96,6 +113,62 @@ struct HerdrMApp: App {
                 Button("Split Horizontally") { focusedModel?.shellSplitAxis = .horizontal }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
                     .disabled(focusedModel?.selectedEntry == nil)
+
+                Divider()
+
+                // Eight items with FIXED shortcuts, enabled per axis — deliberately not
+                // four items whose shortcut follows the axis. Measured: `.disabled` IS
+                // revalidated when the menu opens, but a key equivalent already registered
+                // in the NSMenu is NOT reassigned when the commands body re-evaluates, so
+                // the arrows stayed frozen on the axis that was current at launch.
+                // Labels name the direction so no two rows read the same.
+                //
+                // Focus is directional and idempotent: the left/top pane is always the
+                // agent, the right/bottom one always the shell.
+                Button("Focus Left Pane") {
+                    if let model = focusedModel { focusSplitSide(.agent, in: model) }
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                .disabled(focusedSplitAxis != .vertical)
+                Button("Focus Right Pane") {
+                    if let model = focusedModel { focusSplitSide(.shell, in: model) }
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                .disabled(focusedSplitAxis != .vertical)
+                Button("Focus Top Pane") {
+                    if let model = focusedModel { focusSplitSide(.agent, in: model) }
+                }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(focusedSplitAxis != .horizontal)
+                Button("Focus Bottom Pane") {
+                    if let model = focusedModel { focusSplitSide(.shell, in: model) }
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .disabled(focusedSplitAxis != .horizontal)
+
+                Divider()
+
+                // Resize moves the divider by 5% relative to the active pane.
+                Button("Widen Active Pane") {
+                    if let model = focusedModel { resizeSplit(grow: true, in: model) }
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+                .disabled(focusedSplitAxis != .vertical)
+                Button("Narrow Active Pane") {
+                    if let model = focusedModel { resizeSplit(grow: false, in: model) }
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+                .disabled(focusedSplitAxis != .vertical)
+                Button("Grow Active Pane") {
+                    if let model = focusedModel { resizeSplit(grow: true, in: model) }
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .control])
+                .disabled(focusedSplitAxis != .horizontal)
+                Button("Shrink Active Pane") {
+                    if let model = focusedModel { resizeSplit(grow: false, in: model) }
+                }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .control])
+                .disabled(focusedSplitAxis != .horizontal)
             }
             CommandGroup(replacing: .saveItem) {
                 // ⌘W closes the most local thing first: the split, then the
@@ -130,6 +203,23 @@ struct HerdrMApp: App {
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         default: NSApp.appearance = nil
         }
+    }
+
+    // MARK: - Split commands
+
+    private func focusSplitSide(_ side: SplitSide, in model: AppModel) {
+        guard model.shellSplitAxis != nil else { return }
+        let target = (side == .agent) ? model.splitAgentView : model.splitShellView
+        guard let target, let window = target.window else { return }
+        window.makeFirstResponder(target)
+    }
+
+    private func resizeSplit(grow: Bool, in model: AppModel) {
+        guard model.shellSplitAxis != nil else { return }
+        let step = 0.05
+        let signed = (model.activeSplitSide == .agent) ? step : -step
+        let delta = grow ? signed : -signed
+        model.splitRatio = min(0.8, max(0.2, model.splitRatio + delta))
     }
 
     private static func runSSHAskPass() -> Never {
