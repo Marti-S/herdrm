@@ -49,7 +49,8 @@ public actor SSHTunnel {
 
     /// PATH prepended on the remote side; sshd exec is not a login shell (mirrors Heeler).
     public static let remotePathExport =
-        "export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\""
+        "for d in \"$HOME\"/.nvm/versions/node/*/bin; do [ -d \"$d\" ] && PATH=\"$d:$PATH\"; done; "
+        + "export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.grok/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\""
 
     public init(target: String, credentialID: UUID? = nil) {
         self.target = target
