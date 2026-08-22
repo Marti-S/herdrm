@@ -14,6 +14,10 @@ the Sparkle update description — a release without a section here fails CI.
   touching emoji or CJK fallback. (#34)
 
 ### Added
+- Spaces in the sidebar can be drag-reordered. The drop calls herdr's
+  `workspace.move_block` (same RPC the TUI uses) so the order is the
+  session's, not a herdrm-only list; worktree groups move as a block.
+  Cross-device drops are ignored. (#38)
 - **New Terminal** in the sidebar opens a standalone local shell as its own
   entry under a TERMINALS section — full pane, selectable like an agent, and
   it keeps running while you switch away. Every click opens another one;

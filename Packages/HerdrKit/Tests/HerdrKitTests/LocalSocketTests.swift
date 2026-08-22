@@ -127,6 +127,31 @@ final class LocalSocketTests: XCTestCase {
         let result = try await withTimeout(seconds: 10) { try await collector.value }
         XCTAssertFalse(result.isEmpty, "no events received for tab lifecycle")
     }
+
+    func testMoveWorkspaceBlockReordersTemporarySpaces() async throws {
+        try requireLocalHerdr()
+        let service = HerdrService(device: .local, autoStartLocalServer: false)
+        _ = try await service.connect()
+        let cwd = NSTemporaryDirectory()
+        let first = try await service.createWorkspace(label: "herdrm-reorder-a", cwd: cwd)
+        let second = try await service.createWorkspace(label: "herdrm-reorder-b", cwd: cwd)
+        do {
+            try await service.moveWorkspaceBlock(
+                workspaceIDs: [second.workspaceID],
+                beforeWorkspaceID: first.workspaceID
+            )
+            let ids = try await service.workspaces().map(\.workspaceID)
+            let a = try XCTUnwrap(ids.firstIndex(of: first.workspaceID))
+            let b = try XCTUnwrap(ids.firstIndex(of: second.workspaceID))
+            XCTAssertEqual(b + 1, a)
+            try await service.closeWorkspace(workspaceID: first.workspaceID)
+            try await service.closeWorkspace(workspaceID: second.workspaceID)
+        } catch {
+            try? await service.closeWorkspace(workspaceID: first.workspaceID)
+            try? await service.closeWorkspace(workspaceID: second.workspaceID)
+            throw error
+        }
+    }
 }
 
 func withTimeout<T: Sendable>(seconds: TimeInterval, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
