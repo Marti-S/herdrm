@@ -214,7 +214,11 @@ final class ShellEnvironmentTests: XCTestCase {
     }
 
     func testCapturedPathFindsABinaryTheProcessPathCannotSee() throws {
-        let bin = try bin("agent-bin", command: "codex")
+        // A unique name: searchDirectories always appends the real machine's
+        // well-known prefixes, so a genuine codex in /opt/homebrew/bin would
+        // satisfy (or break) assertions about a fixture named after it.
+        let command = "hkt-agent-\(UUID().uuidString.lowercased().prefix(8))"
+        let bin = try bin("agent-bin", command: command)
         try #"export PATH="$HOME/agent-bin:$PATH""#
             .write(to: directory.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
 
@@ -226,12 +230,12 @@ final class ShellEnvironmentTests: XCTestCase {
         ])
 
         XCTAssertEqual(
-            snapshot.findExecutable("codex", processPath: "/usr/bin:/bin", home: directory.path),
-            bin.appendingPathComponent("codex").path
+            snapshot.findExecutable(command, processPath: "/usr/bin:/bin", home: directory.path),
+            bin.appendingPathComponent(command).path
         )
         XCTAssertNil(
             ShellEnvironment.empty.findExecutable(
-                "codex",
+                command,
                 processPath: "/usr/bin:/bin",
                 home: NSTemporaryDirectory()
             )
