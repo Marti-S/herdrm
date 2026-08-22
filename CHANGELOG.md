@@ -7,6 +7,12 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Dragging a Space in the sidebar actually reorders it. The 0.4.0 rows were
+  SwiftUI `Button`s, and on macOS that swallows mouseDown so `.onDrag` never
+  started (click-to-select still worked). Space rows now use an AppKit drag
+  session after a few points of movement.
+
 ## [0.4.0] - 2026-08-22
 
 ### Added

@@ -1,7 +1,6 @@
 import AppKit
 import HerdrKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct VisualEffectView: NSViewRepresentable {
     var material: NSVisualEffectView.Material = .sidebar
@@ -83,37 +82,12 @@ struct SidebarView: View {
                     .frame(height: 28)
                     allSpacesRow
                     ForEach(model.visibleSpaces) { entry in
-                        spaceRow(entry)
-                            .opacity(draggingSpaceID == entry.id ? 0.4 : 1)
-                            .overlay(alignment: (spaceDrop?.after ?? false) ? .bottom : .top) {
-                                if spaceDrop?.id == entry.id {
-                                    Rectangle()
-                                        .fill(Theme.accent)
-                                        .frame(height: 2)
-                                }
-                            }
-                            .onDrag {
-                                draggingSpaceID = entry.id
-                                return NSItemProvider(object: entry.id as NSString)
-                            }
-                            .onDrop(
-                                of: [.utf8PlainText, .text],
-                                delegate: SpaceRowDropDelegate(
-                                    entry: entry,
-                                    model: model,
-                                    draggingSpaceID: $draggingSpaceID,
-                                    spaceDrop: $spaceDrop
-                                )
-                            )
-                            .contextMenu {
-                                Button("Rename Space…") {
-                                    model.spaceToRename = entry
-                                }
-                                Divider()
-                                Button("Close Space \"\(entry.workspace.label)\"…", role: .destructive) {
-                                    model.requestCloseSpace(entry)
-                                }
-                            }
+                        SpaceRowView(
+                            entry: entry,
+                            model: model,
+                            draggingSpaceID: $draggingSpaceID,
+                            spaceDrop: $spaceDrop
+                        )
                     }
 
                     Spacer().frame(height: 10)
@@ -215,34 +189,6 @@ struct SidebarView: View {
                     .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
                 Spacer()
                 Text("\(model.scopeAgentCount)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.textGhost)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 30)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarRowButtonStyle(selected: selected))
-    }
-
-    private func spaceRow(_ entry: AppModel.SpaceEntry) -> some View {
-        let selected = model.selectedSpace == entry.ref
-        return Button {
-            model.selectSpace(entry.ref)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "folder")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(selected ? Theme.textSecondary : Theme.textTertiary)
-                Text(entry.workspace.label)
-                    .font(.system(size: 13))
-                    .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
-                    .lineLimit(1)
-                Spacer()
-                if model.showsDeviceBadges {
-                    deviceBadge(entry.device)
-                }
-                Text("\(model.agentCount(in: entry))")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.textGhost)
             }
@@ -615,43 +561,76 @@ struct SidebarRowButtonStyle: ButtonStyle {
     }
 }
 
-private struct SpaceRowDropDelegate: DropDelegate {
+/// Not a `Button`: on macOS, `Button` consumes mouseDown so SwiftUI `.onDrag`
+/// never starts. Click and reorder go through `SpaceRowDragHost`.
+private struct SpaceRowView: View {
     let entry: AppModel.SpaceEntry
-    let model: AppModel
+    @ObservedObject var model: AppModel
     @Binding var draggingSpaceID: String?
     @Binding var spaceDrop: (id: String, after: Bool)?
+    @State private var hovered = false
 
-    func validateDrop(info: DropInfo) -> Bool {
-        info.hasItemsConforming(to: [.utf8PlainText, .text])
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        let after = info.location.y > 15
-        DispatchQueue.main.async {
-            spaceDrop = (entry.id, after)
+    var body: some View {
+        let selected = model.selectedSpace == entry.ref
+        HStack(spacing: 8) {
+            Image(systemName: "folder")
+                .font(.system(size: 11.5))
+                .foregroundStyle(selected ? Theme.textSecondary : Theme.textTertiary)
+            Text(entry.workspace.label)
+                .font(.system(size: 13))
+                .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
+                .lineLimit(1)
+            Spacer()
+            if model.showsDeviceBadges {
+                DeviceChip(device: entry.device)
+            }
+            Text("\(model.agentCount(in: entry))")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textGhost)
         }
-        return DropProposal(operation: .move)
-    }
-
-    func dropExited(info: DropInfo) {
-        DispatchQueue.main.async {
-            if spaceDrop?.id == entry.id { spaceDrop = nil }
+        .padding(.horizontal, 8)
+        .frame(height: 30)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(selected || hovered ? AnyShapeStyle(Theme.itemWashSelected) : AnyShapeStyle(.clear))
+        )
+        .onHover { hovered = $0 }
+        .opacity(draggingSpaceID == entry.id ? 0.4 : 1)
+        .overlay(alignment: (spaceDrop?.after ?? false) ? .bottom : .top) {
+            if spaceDrop?.id == entry.id {
+                Rectangle()
+                    .fill(Theme.accent)
+                    .frame(height: 2)
+            }
         }
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        let after = info.location.y > 15
-        let target = entry
-        let sourceID = draggingSpaceID
-        Task { @MainActor in
-            draggingSpaceID = nil
-            spaceDrop = nil
-            guard let sourceID,
-                  let source = model.visibleSpaces.first(where: { $0.id == sourceID })
-            else { return }
-            model.moveSpace(source, onto: target, placeAfter: after)
+        .overlay {
+            SpaceRowDragHost(
+                entryID: entry.id,
+                label: entry.workspace.label,
+                onClick: { model.selectSpace(entry.ref) },
+                onRename: { model.spaceToRename = entry },
+                onClose: { model.requestCloseSpace(entry) },
+                onDragStart: { draggingSpaceID = $0 },
+                onDragEnd: {
+                    draggingSpaceID = nil
+                    spaceDrop = nil
+                },
+                onDropHover: { after in spaceDrop = (entry.id, after) },
+                onHoverExit: {
+                    if spaceDrop?.id == entry.id { spaceDrop = nil }
+                },
+                onDrop: { sourceID, after in
+                    draggingSpaceID = nil
+                    spaceDrop = nil
+                    guard let source = model.visibleSpaces.first(where: { $0.id == sourceID })
+                    else { return }
+                    model.moveSpace(source, onto: entry, placeAfter: after)
+                }
+            )
         }
-        return true
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(entry.workspace.label)
     }
 }
 
