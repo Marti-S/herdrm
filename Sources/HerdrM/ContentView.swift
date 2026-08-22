@@ -49,6 +49,7 @@ struct RootView: View {
                 .hidden()
         )
         .focusedSceneValue(\.appModel, model)
+        .focusedSceneValue(\.splitAxis, model.shellSplitAxis)
         .sheet(isPresented: $model.showSearch) { SearchSheet(model: model) }
         .ignoresSafeArea(.container, edges: .top)
         .frame(minWidth: 980, minHeight: 620)
@@ -110,6 +111,13 @@ struct DetailView: View {
                 .clipped()
                 // Losing the selected agent tears the SplitContainer down without
                 // resetting the axis, which would leave the same phantom split.
+                //
+                // Load-bearing beyond that: this is the ONLY thing that clears the axis
+                // when the agent goes away. `dismantleNSView` nils the coordinator's
+                // onExit before killing the shell, so the shell's own onExit never fires
+                // on teardown. Remove this and "split open with no agent selected"
+                // becomes reachable, which is a state a deferred focus request can be
+                // armed into with nothing left in the tree to consume it.
                 .onChange(of: model.selectedEntry?.id) { _, id in
                     if id == nil { model.shellSplitAxis = nil }
                 }
@@ -219,7 +227,6 @@ struct DetailView: View {
     @AppStorage(TerminalDefaults.fontWeightKey) private var terminalFontWeight = TerminalDefaults.defaultFontWeight
     @AppStorage(TerminalDefaults.lineSpacingKey) private var terminalLineSpacing = TerminalDefaults.defaultLineSpacing
     @AppStorage("terminal.mouseReporting") private var terminalMouseReporting = true
-    @AppStorage("terminal.splitRatio") private var splitRatio = 0.5
     @Environment(\.colorScheme) private var colorScheme
     /// The entry whose attach process exited, and how. Keyed by entry id so a stale
     /// exit from a previously selected pane never covers a live terminal.
@@ -227,6 +234,7 @@ struct DetailView: View {
     @State private var endedAttachCode: Int32?
     @State private var attachRetry = 0
     @State private var uploadingAttachment = false
+    @State private var splitTracker = SplitFocusTracker()
 
     @ViewBuilder
     private var terminal: some View {
@@ -260,7 +268,11 @@ struct DetailView: View {
     @ViewBuilder
     private var agentTerminal: some View {
         if let entry = model.selectedEntry {
-            SplitContainer(axis: model.shellSplitAxis, ratio: $splitRatio) {
+            SplitContainer(
+                axis: model.shellSplitAxis,
+                activeSide: model.activeSplitSide,
+                ratio: $model.splitRatio
+            ) {
                 ZStack {
                     AttachTerminalView(
                         device: entry.device,
@@ -282,6 +294,10 @@ struct DetailView: View {
                         onExit: { code in
                             endedAttachKey = entry.id
                             endedAttachCode = code
+                        },
+                        onViewReady: {
+                            splitTracker.agentView = $0
+                            model.splitAgentView = $0
                         }
                     )
                         .id("attach-\(entry.id)-\(colorScheme)-\(attachRetry)")
@@ -300,7 +316,11 @@ struct DetailView: View {
                     lineSpacing: terminalLineSpacing,
                     dark: colorScheme == .dark,
                     mouseReporting: terminalMouseReporting,
-                    onExit: { _ in model.shellSplitAxis = nil }
+                    onExit: { _ in model.shellSplitAxis = nil },
+                    onViewReady: {
+                        splitTracker.shellView = $0
+                        model.splitShellView = $0
+                    }
                 )
                     // Deliberately not keyed on colorScheme like the attach above:
                     // a new id tears the view down and kills the shell with whatever
@@ -315,16 +335,44 @@ struct DetailView: View {
             .overlay(alignment: .bottomTrailing) {
                 if uploadingAttachment { uploadIndicator }
             }
+            .onAppear {
+                // Single source of truth: the tracker writes straight into the model
+                // instead of holding its own copy for a second onChange to mirror.
+                splitTracker.onSideChanged = { model.activeSplitSide = $0 }
+                splitTracker.start()
+            }
             .onChange(of: entry.id) { _, _ in
                 endedAttachKey = nil
                 uploadingAttachment = false
+                if model.shellSplitAxis != nil { focusTerminal(model.splitAgentView) }
+            }
+            // Keyed on the window becoming key rather than on a delay: that is the event
+            // that follows the sheet's responder restore. Filtered to the terminal's own
+            // window and consumed no matter which window it was, so a pending request can
+            // never survive to a later, unrelated activation — coming back from ⌘Tab or
+            // closing Settings would otherwise yank the keyboard into a live agent.
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+                guard model.pendingSplitAgentFocus else { return }
+                model.pendingSplitAgentFocus = false
+                guard let window = note.object as? NSWindow,
+                      window === model.splitAgentView?.window
+                else { return }
+                focusTerminal(model.splitAgentView)
             }
             // Splitting moves the keyboard to the shell, so closing the split has to
-            // hand it back — by ⌘W or by the shell exiting on its own.
+            // hand it back — by ⌘W or by the shell exiting on its own. Reset the
+            // tracked side to the agent so the next split starts predictably.
             .onChange(of: model.shellSplitAxis) { _, axis in
-                if axis == nil { focusRemainingTerminal() }
+                if axis == nil {
+                    model.activeSplitSide = .agent
+                    model.pendingSplitAgentFocus = false
+                    focusRemainingTerminal()
+                }
             }
         } else {
+            // The .onReceive below only exists on the branch above, so a request armed
+            // while no agent is selected would have no consumer and would be cashed in by
+            // some later activation. Revealing a pane that has since gone away lands here.
             VStack(spacing: 10) {
                 Image(systemName: "terminal")
                     .font(.system(size: 28, weight: .light))
@@ -346,6 +394,7 @@ struct DetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.terminalBackground)
+            .onAppear { model.pendingSplitAgentFocus = false }
         }
     }
 

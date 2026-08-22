@@ -503,6 +503,15 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
     }
 }
 
+/// Puts the keyboard in a specific terminal, one runloop pass later so it lands after
+/// AppKit has finished its own first-responder bookkeeping for the current event.
+func focusTerminal(_ view: LocalProcessTerminalView?) {
+    DispatchQueue.main.async {
+        guard let view, let window = view.window else { return }
+        window.makeFirstResponder(view)
+    }
+}
+
 /// Hands the keyboard back to whichever terminal is left after a split closes. The
 /// shell view that held first responder is gone by then, and AppKit falls back to the
 /// window itself, which reads as a dead keyboard until the user clicks.
@@ -558,6 +567,9 @@ struct AttachTerminalView: NSViewRepresentable {
     /// dead session otherwise keeps its last frame and silently eats every
     /// keystroke, which reads as a freeze.
     var onExit: ((Int32?) -> Void)? = nil
+    /// Delivers the created view so a focus tracker can observe its window's
+    /// first responder without retaining the terminal itself.
+    var onViewReady: ((LocalProcessTerminalView) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -593,6 +605,7 @@ struct AttachTerminalView: NSViewRepresentable {
             guard let view, let window = view.window else { return }
             window.makeFirstResponder(view)
         }
+        onViewReady?(view)
         return view
     }
 
@@ -735,6 +748,9 @@ struct ShellTerminalView: NSViewRepresentable {
     var dark: Bool = false
     var mouseReporting: Bool = true
     var onExit: ((Int32?) -> Void)? = nil
+    /// Delivers the created view so a focus tracker can observe its window's
+    /// first responder without retaining the terminal itself.
+    var onViewReady: ((LocalProcessTerminalView) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -772,6 +788,7 @@ struct ShellTerminalView: NSViewRepresentable {
             guard let view, let window = view.window else { return }
             window.makeFirstResponder(view)
         }
+        onViewReady?(view)
         return view
     }
 

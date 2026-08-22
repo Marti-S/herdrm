@@ -1,4 +1,5 @@
 import AppKit
+import SwiftTerm
 import SwiftUI
 
 /// A two-pane split with a draggable divider and a persisted ratio. `axis == nil` shows
@@ -11,6 +12,7 @@ import SwiftUI
 /// split — which killed the agent's attach process and relaunched it with `--takeover`.
 struct SplitContainer<First: View, Second: View>: View {
     let axis: SplitAxis?
+    let activeSide: SplitSide
     @Binding var ratio: Double
     @ViewBuilder var first: () -> First
     @ViewBuilder var second: () -> Second
@@ -39,10 +41,12 @@ struct SplitContainer<First: View, Second: View>: View {
                         width: axis == .vertical ? firstLength : nil,
                         height: axis == .horizontal ? firstLength : nil
                     )
+                    .opacity(paneOpacity(for: .agent))
                 if let axis {
                     divider(axis: axis, total: total)
                     second()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(paneOpacity(for: .shell))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -50,6 +54,11 @@ struct SplitContainer<First: View, Second: View>: View {
             // clearing on axis change covers the case that shows.
             .onChange(of: axis) { _, _ in dragStartRatio = nil }
         }
+    }
+
+    private func paneOpacity(for side: SplitSide) -> Double {
+        guard axis != nil else { return 1.0 }
+        return activeSide == side ? 1.0 : inactivePaneOpacity
     }
 
     private func divider(axis: SplitAxis, total: CGFloat) -> some View {
@@ -95,3 +104,68 @@ private enum SplitContainerRatioBounds {
         Swift.min(Swift.max(value, bounds.lowerBound), bounds.upperBound)
     }
 }
+
+/// Tracks which side of the ⌘D split holds the keyboard by KVO-observing the key
+/// window's `firstResponder`. `LocalProcessTerminalView`'s responder methods are
+/// `public override`, not `open`, so they cannot be subclassed.
+///
+/// `NSWindow.firstResponder` is documented as KVO-observable. `NSApplication.keyWindow`
+/// is NOT documented as such, but was verified empirically to fire — including on the
+/// transitions through nil — so the observer reinstalls itself when the key window
+/// changes. Treat that half as a measured, non-contractual dependency on AppKit.
+///
+/// This class holds no copy of the active side on purpose: it reports every computed
+/// value to `onSideChanged` without deduplicating. A cached side here went stale when
+/// the split closed and then silently stopped reporting, which drew the active pane
+/// dimmed and inverted the resize direction.
+///
+/// AppKit changes `firstResponder` and `keyWindow` on the main thread, so the callback
+/// is delivered there too.
+final class SplitFocusTracker {
+    /// Called with the side that now holds the keyboard. Fires on every observed
+    /// change, even when the value repeats — see the note above.
+    var onSideChanged: ((SplitSide) -> Void)?
+
+    weak var agentView: LocalProcessTerminalView?
+    weak var shellView: LocalProcessTerminalView?
+
+    private var keyWindowObservation: NSKeyValueObservation?
+    private var firstResponderObservation: NSKeyValueObservation?
+
+    func start() {
+        keyWindowObservation = NSApp.observe(\.keyWindow, options: [.new]) { [weak self] _, _ in
+            self?.installFirstResponderObserver()
+        }
+        installFirstResponderObserver()
+    }
+
+    private func installFirstResponderObserver() {
+        firstResponderObservation?.invalidate()
+        firstResponderObservation = NSApp.keyWindow?.observe(
+            \.firstResponder,
+            options: [.new]
+        ) { [weak self] _, _ in
+            self?.updateActiveSide()
+        }
+        updateActiveSide()
+    }
+
+    private func updateActiveSide() {
+        guard let responder = NSApp.keyWindow?.firstResponder as? NSView else { return }
+        var view: NSView? = responder
+        while let current = view {
+            if current === agentView { onSideChanged?(.agent); return }
+            if current === shellView { onSideChanged?(.shell); return }
+            view = current.superview
+        }
+    }
+
+    deinit {
+        keyWindowObservation?.invalidate()
+        firstResponderObservation?.invalidate()
+    }
+}
+
+/// Dims the inactive pane enough to show which side has the keyboard without making
+/// its text unreadable. Tuned visually; deliberately not exposed as a setting.
+private let inactivePaneOpacity = 0.55

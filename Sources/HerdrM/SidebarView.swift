@@ -1,5 +1,7 @@
+import AppKit
 import HerdrKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct VisualEffectView: NSViewRepresentable {
     var material: NSVisualEffectView.Material = .sidebar
@@ -21,6 +23,8 @@ struct SidebarView: View {
     @ObservedObject var model: AppModel
     @Binding var collapsed: Bool
     @State private var deviceButtonHovered = false
+    @State private var draggingSpaceID: String?
+    @State private var spaceDrop: (id: String, after: Bool)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,6 +84,27 @@ struct SidebarView: View {
                     allSpacesRow
                     ForEach(model.visibleSpaces) { entry in
                         spaceRow(entry)
+                            .opacity(draggingSpaceID == entry.id ? 0.4 : 1)
+                            .overlay(alignment: (spaceDrop?.after ?? false) ? .bottom : .top) {
+                                if spaceDrop?.id == entry.id {
+                                    Rectangle()
+                                        .fill(Theme.accent)
+                                        .frame(height: 2)
+                                }
+                            }
+                            .onDrag {
+                                draggingSpaceID = entry.id
+                                return NSItemProvider(object: entry.id as NSString)
+                            }
+                            .onDrop(
+                                of: [.utf8PlainText, .text],
+                                delegate: SpaceRowDropDelegate(
+                                    entry: entry,
+                                    model: model,
+                                    draggingSpaceID: $draggingSpaceID,
+                                    spaceDrop: $spaceDrop
+                                )
+                            )
                             .contextMenu {
                                 Button("Rename Space…") {
                                     model.spaceToRename = entry
@@ -587,6 +612,46 @@ struct SidebarRowButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 7)
                     .fill(selected || configuration.isPressed ? AnyShapeStyle(Theme.itemWashSelected) : AnyShapeStyle(.clear))
             )
+    }
+}
+
+private struct SpaceRowDropDelegate: DropDelegate {
+    let entry: AppModel.SpaceEntry
+    let model: AppModel
+    @Binding var draggingSpaceID: String?
+    @Binding var spaceDrop: (id: String, after: Bool)?
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.utf8PlainText, .text])
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let after = info.location.y > 15
+        DispatchQueue.main.async {
+            spaceDrop = (entry.id, after)
+        }
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        DispatchQueue.main.async {
+            if spaceDrop?.id == entry.id { spaceDrop = nil }
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let after = info.location.y > 15
+        let target = entry
+        let sourceID = draggingSpaceID
+        Task { @MainActor in
+            draggingSpaceID = nil
+            spaceDrop = nil
+            guard let sourceID,
+                  let source = model.visibleSpaces.first(where: { $0.id == sourceID })
+            else { return }
+            model.moveSpace(source, onto: target, placeAfter: after)
+        }
+        return true
     }
 }
 

@@ -14,6 +14,10 @@ the Sparkle update description — a release without a section here fails CI.
   touching emoji or CJK fallback. (#34)
 
 ### Added
+- Spaces in the sidebar can be drag-reordered. The drop calls herdr's
+  `workspace.move_block` (same RPC the TUI uses) so the order is the
+  session's, not a herdrm-only list; worktree groups move as a block.
+  Cross-device drops are ignored. (#38)
 - **New Terminal** in the sidebar opens a standalone local shell as its own
   entry under a TERMINALS section — full pane, selectable like an agent, and
   it keeps running while you switch away. Every click opens another one;
@@ -24,6 +28,14 @@ the Sparkle update description — a release without a section here fails CI.
   and closing the split hands it back to the agent. ⌘W closes the split first
   and only closes the window once it's gone. First phase of a series; keyboard
   focus/resize controls and a remote shell over SSH follow in later issues.
+- The ⌘D split now shows which terminal has the keyboard and can be driven
+  without the mouse: the active pane stays at full opacity while the inactive
+  one dims. **Focus Left/Right Pane** (⌥⌘←/→) and **Focus Top/Bottom Pane**
+  (⌥⌘↑/↓) move focus directionally, so repeating a shortcut is idempotent
+  rather than toggling. **Widen/Narrow Active Pane** (⌃⌘→/←) and **Grow/Shrink
+  Active Pane** (⌃⌘↓/↑) resize in 5% steps, clamped to the same 20%/80% the
+  divider already enforces. Jumping to an agent from ⌘K or a notification puts
+  the keyboard on the agent's side. (#9)
 
 ## [0.3.9] - 2026-08-21
 
