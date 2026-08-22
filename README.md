@@ -66,10 +66,12 @@ macOS window on top of it, and it's grown well past "attach to a terminal":
 ### Spaces & Agents, always current
 - **Spaces & Agents sidebar** — every workspace and agent (claude, codex, gemini, grok,
   opencode, …), same canonical order the ⌘K palette uses.
-- **New Agent / New Space** — the picker only lists CLIs actually installed on that device
-  (NVM and user-level installs included), and enables each agent's bypass-permissions flag by
-  default. **⌘N** for a new agent, **⇧⌘N** for a new space. New Space includes an inline
-  directory browser that works over SSH.
+- **New Agent / New Space** — locally the picker only lists advertised CLIs found on the
+  login-shell PATH (captured once from a real interactive + login shell, not by grepping rc
+  files or trusting LaunchServices); SSH devices follow the remote server's manifest catalog
+  and validate on start. Each agent's bypass-permissions flag is on by default. **⌘N** for a
+  new agent, **⇧⌘N** for a new space. New Space includes an inline directory browser that
+  works over SSH. Settings → Agents accepts a per-kind binary path when detection is wrong.
 - Spaces rename straight from the sidebar's context menu.
 
 ### A real terminal, not a chat wrapper

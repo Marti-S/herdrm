@@ -873,7 +873,7 @@ struct NewAgentSheet: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var deviceID = Device.local.id
-    @State private var kind = "claude"
+    @State private var kind = ""
     @State private var workspaceID: String = ""
     @AppStorage("agent.bypassDefault") private var bypass = true
 
@@ -885,11 +885,8 @@ struct NewAgentSheet: View {
         model.session(deviceID)
     }
 
-    /// Only agents actually installed on the chosen device; falls back to the full
-    /// manifest list if sniffing failed.
     private var kinds: [String] {
-        if !session.installedAgentKinds.isEmpty { return session.installedAgentKinds }
-        return session.agentKinds.isEmpty ? ["claude", "codex", "gemini", "opencode", "grok"] : session.agentKinds
+        session.agentCatalog.kinds
     }
 
     private var bypassFlags: [String]? {
@@ -922,25 +919,57 @@ struct NewAgentSheet: View {
                     .fixedSize()
                     .onChange(of: deviceID) { _, _ in
                         workspaceID = ""
-                        if !kinds.contains(kind) { kind = kinds.first ?? "claude" }
+                        if !kinds.contains(kind) { kind = kinds.first ?? "" }
                     }
 
                     Spacer().frame(height: 8)
                 }
 
                 SheetSectionLabel("AGENT")
-                ScrollView {
-                    LazyVGrid(
-                        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4),
-                        spacing: 8
-                    ) {
-                        ForEach(kinds, id: \.self) { name in
-                            kindCell(name)
+                Group {
+                    switch session.agentCatalog {
+                    case .loading:
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Checking agents on \(chosenDevice.name)…")
+                                .foregroundStyle(Theme.textSecondary)
                         }
+                        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+                    case .failed(let message):
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(chosenDevice.isLocal
+                                ? "Couldn’t check installed agent CLIs."
+                                : "Couldn’t load this server’s agent catalog.")
+                                .foregroundStyle(Theme.textSecondary)
+                            Text(message)
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(Theme.textTertiary)
+                                .lineLimit(2)
+                            Button("Retry") { model.reloadAgentCatalog(deviceID: deviceID) }
+                                .controlSize(.small)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+                    case .loaded(let loadedKinds, _) where loadedKinds.isEmpty:
+                        Text(chosenDevice.isLocal
+                            ? "No supported agent CLI was found on this Mac. Install one, or set a binary path in Settings → Agents."
+                            : "This server advertises no agent manifests.")
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+                    case .loaded(let loadedKinds, let paths):
+                        ScrollView {
+                            LazyVGrid(
+                                columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4),
+                                spacing: 8
+                            ) {
+                                ForEach(loadedKinds, id: \.self) { name in
+                                    kindCell(name, path: paths[name])
+                                }
+                            }
+                            .padding(1)
+                        }
+                        .frame(maxHeight: 236)
                     }
-                    .padding(1)
                 }
-                .frame(maxHeight: 236)
 
                 Spacer().frame(height: 8)
 
@@ -993,6 +1022,7 @@ struct NewAgentSheet: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
                 .keyboardShortcut(.defaultAction)
+                .disabled(!kinds.contains(kind))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -1006,11 +1036,14 @@ struct NewAgentSheet: View {
             workspaceID = model.selectedSpace?.deviceID == deviceID
                 ? (model.selectedSpace?.workspaceID ?? "")
                 : ""
-            if !kinds.contains(kind) { kind = kinds.first ?? "claude" }
+            if !kinds.contains(kind) { kind = kinds.first ?? "" }
+        }
+        .onChange(of: kinds) { _, newKinds in
+            if !newKinds.contains(kind) { kind = newKinds.first ?? "" }
         }
     }
 
-    private func kindCell(_ name: String) -> some View {
+    private func kindCell(_ name: String, path: String?) -> some View {
         let selected = kind == name
         return Button {
             kind = name
@@ -1030,6 +1063,7 @@ struct NewAgentSheet: View {
                     .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
                     .lineLimit(1)
             }
+            .help(path ?? "")
             .frame(maxWidth: .infinity)
             .frame(height: 58)
             .background(

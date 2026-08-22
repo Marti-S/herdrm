@@ -7,6 +7,22 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Dragging a Space in the sidebar actually reorders it. The 0.4.0 rows were
+  SwiftUI `Button`s, and on macOS that swallows mouseDown so `.onDrag` never
+  started (click-to-select still worked). Space rows now use an AppKit drag
+  session after a few points of movement.
+- New Agent (and local `herdr` lookup) no longer trust the Finder-launched
+  app's sparse PATH. herdrm captures the login + interactive shell environment
+  once in the background (`zsh -i -l`, then `-l` if the interactive rc hangs),
+  via `env -0` into a private tempfile so rc banners cannot pollute the
+  snapshot. Lookup walks that PATH, then the GUI PATH, then well-known
+  prefixes (Homebrew, bun, cargo, mise, volta). Spawn and terminal attach
+  reuse the same environment and PATH, so a `#!/usr/bin/env node` shim that
+  shows as installed can actually find `node`. Settings → Agents accepts a
+  per-kind binary path when detection is wrong. SSH devices still follow the
+  remote server's manifest catalog.
+
 ## [0.4.0] - 2026-08-22
 
 ### Added

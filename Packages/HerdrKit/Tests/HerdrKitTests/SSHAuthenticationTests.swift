@@ -125,12 +125,18 @@ final class AttachBinarySelectionTests: XCTestCase {
             .attachCommand(paneID: "w1:p1", serverVersion: "0.8.2")
         XCTAssertEqual(local.executable, "/bin/sh")
         XCTAssertTrue(local.args.last?.contains("exec \"$hb\" agent attach 'w1:p1'") == true)
+        XCTAssertTrue(
+            local.environment["PATH"]?.contains("/opt/homebrew/bin") == true,
+            "local attach must use the same search PATH as lookup"
+        )
+        XCTAssertNil(local.environment["TERM"], "SwiftTerm owns TERM")
 
         let remote = HerdrService(device: Device(name: "R", kind: .ssh(target: "u@h")), localServer: nil)
             .attachCommand(paneID: "w1:p1", serverVersion: "0.8.2")
         XCTAssertEqual(remote.executable, "/usr/bin/ssh")
         // The whole script must run under sh on the far side, not the login shell.
         XCTAssertTrue(remote.args.last?.hasPrefix("exec /bin/sh -c '") == true)
+        XCTAssertTrue(remote.args.last?.contains("export PATH=") == true)
     }
 }
 

@@ -337,8 +337,9 @@ final class LocalServerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: shell), shell)
     }
 
-    /// The condition the PATH export exists for: an app launched from Finder gets launchd's
-    /// PATH, which has none of the places herdr installs into.
+    /// The condition login-shell capture + well-known prefixes exist for: an app
+    /// launched from Finder gets launchd's PATH, which has none of the places herdr
+    /// installs into.
     func testResolverFindsHerdrUnderLaunchdsPath() throws {
         let sessionSocket = (NSHomeDirectory() as NSString)
             .appendingPathComponent(".config/herdr/herdr.sock")

@@ -10,6 +10,24 @@ enum ConnectionState: Equatable {
     case failed(String)
 }
 
+/// Agent kinds offered by the picker. Local manifests are filtered through the
+/// login-shell search PATH; remote manifests stay server-owned.
+enum AgentCatalogState: Equatable {
+    case loading
+    case loaded(kinds: [String], paths: [String: String] = [:])
+    case failed(String)
+
+    var kinds: [String] {
+        guard case .loaded(let kinds, _) = self else { return [] }
+        return kinds
+    }
+
+    var paths: [String: String] {
+        guard case .loaded(_, let paths) = self else { return [:] }
+        return paths
+    }
+}
+
 /// Global pane identity: pane ids like "w1:p1" collide across devices.
 struct PaneRef: Hashable {
     let deviceID: UUID
@@ -27,8 +45,7 @@ struct DeviceSessionState {
     var agents: [AgentInfo] = []
     var workspaces: [WorkspaceInfo] = []
     var panes: [PaneInfo] = []
-    var agentKinds: [String] = []
-    var installedAgentKinds: [String] = []
+    var agentCatalog: AgentCatalogState = .loading
     var attachmentCapabilities = AgentAttachmentCapabilityRegistry()
 }
 
@@ -51,6 +68,33 @@ enum SplitSide { case agent, shell }
 struct ShellSession: Identifiable, Equatable {
     let id: UUID
     var title: String
+}
+
+/// Per-kind CLI path overrides persisted in user defaults. Empty means automatic
+/// lookup on the login-shell search PATH. Invalid paths hide that kind until
+/// the user fixes or clears the field — they never silently fall back.
+enum AgentBinaryOverrides {
+    static let defaultsKey = "agent.binaryOverrides"
+
+    static func load(defaults: UserDefaults = .standard) -> [String: String] {
+        (defaults.dictionary(forKey: defaultsKey) as? [String: String] ?? [:])
+            .reduce(into: [:]) { result, entry in
+                let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty { result[entry.key] = value }
+            }
+    }
+
+    static func save(_ overrides: [String: String], defaults: UserDefaults = .standard) {
+        let trimmed = overrides.reduce(into: [String: String]()) { result, entry in
+            let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { result[entry.key] = value }
+        }
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: defaultsKey)
+        } else {
+            defaults.set(trimmed, forKey: defaultsKey)
+        }
+    }
 }
 
 @MainActor
@@ -300,6 +344,12 @@ final class AppModel: ObservableObject {
 
     func start() {
         NotificationManager.shared.setup(model: self)
+        // Finder-launched apps have launchd's PATH. Capture the login +
+        // interactive shell environment on a background thread once; New Agent
+        // lookup, herdr spawn, and terminal attach all read the same snapshot.
+        Task.detached(priority: .utility) {
+            _ = await ShellEnvironment.ensure()
+        }
         for device in devices {
             startSession(device)
             probeOSIfNeeded(device)
@@ -334,14 +384,7 @@ final class AppModel: ObservableObject {
                         self.probeOSIfNeeded(current)
                     }
                     await self.refresh(device.id)
-                    if let manifests = try? await service.agentManifests() {
-                        let kinds = manifests.map(\.agent)
-                        self.sessions[device.id]?.agentKinds = kinds
-                        self.sessions[device.id]?.attachmentCapabilities =
-                            AgentAttachmentCapabilityRegistry(manifests: manifests)
-                        self.sessions[device.id]?.installedAgentKinds =
-                            (try? await service.installedAgentKinds(from: kinds)) ?? []
-                    }
+                    await self.loadAgentCatalog(deviceID: device.id, using: service)
                     let stream = try await service.events()
                     for try await _ in stream {
                         self.scheduleRefresh(device.id)
@@ -361,6 +404,40 @@ final class AppModel: ObservableObject {
                 backoff = min(backoff * 2, 30)
             }
         }
+    }
+
+    /// Locally, keeps only advertised CLIs whose binaries are on the login-shell
+    /// search PATH (or a Settings override). SSH hosts keep their server-owned
+    /// catalog; `agent.start` validates in the target pane instead. Manifests
+    /// also feed the attachment-capability registry (paste path vs upload).
+    private func loadAgentCatalog(deviceID: UUID, using service: HerdrService) async {
+        sessions[deviceID]?.agentCatalog = .loading
+        do {
+            let manifests = try await service.agentManifests()
+            sessions[deviceID]?.attachmentCapabilities =
+                AgentAttachmentCapabilityRegistry(manifests: manifests)
+            let advertised = manifests.map(\.agent)
+            if device(deviceID)?.isLocal == true {
+                let found = await service.installedAgents(
+                    from: advertised,
+                    overrides: AgentBinaryOverrides.load()
+                )
+                sessions[deviceID]?.agentCatalog = .loaded(
+                    kinds: found.map(\.kind),
+                    paths: Dictionary(uniqueKeysWithValues: found.map { ($0.kind, $0.path) })
+                )
+            } else {
+                sessions[deviceID]?.agentCatalog = .loaded(kinds: advertised)
+            }
+        } catch {
+            sessions[deviceID]?.agentCatalog = .failed(error.localizedDescription)
+        }
+    }
+
+    func reloadAgentCatalog(deviceID: UUID) {
+        guard let device = device(deviceID) else { return }
+        let service = service(for: device)
+        Task { await loadAgentCatalog(deviceID: deviceID, using: service) }
     }
 
     /// Tears down every live tunnel. Awaited from the app's terminate hook — `stopSession`
