@@ -36,7 +36,7 @@ final class LocalSocketTests: XCTestCase {
         // snapshot and dedicated list endpoints must agree
         XCTAssertEqual(Set(snapshot.agents.map(\.paneID)), Set(agents.map(\.paneID)))
         XCTAssertEqual(Set(snapshot.workspaces.map(\.workspaceID)), Set(workspaces.map(\.workspaceID)))
-        XCTAssertFalse(manifests.isEmpty)
+        XCTAssertFalse(manifests.isEmpty, "server advertised no agent manifests")
         _ = AgentAttachmentCapabilityRegistry(manifests: manifests)
         // every agent belongs to a listed workspace
         let workspaceIDs = Set(workspaces.map(\.workspaceID))
