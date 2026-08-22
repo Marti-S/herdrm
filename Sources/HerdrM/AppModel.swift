@@ -607,6 +607,40 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Reorders a Space by dropping it on another Space of the same device.
+    /// Cross-device drops are ignored; herdr remains the source of truth after refresh.
+    func moveSpace(_ source: SpaceEntry, onto target: SpaceEntry, placeAfter: Bool) {
+        guard source.device.id == target.device.id else { return }
+        let orderedIDs = session(source.device.id).workspaces.map(\.workspaceID)
+        guard let plan = WorkspaceReorder.plan(
+            moving: source.workspace.workspaceID,
+            onto: target.workspace.workspaceID,
+            placeAfter: placeAfter,
+            orderedIDs: orderedIDs
+        ) else { return }
+
+        if let current = sessions[source.device.id]?.workspaces {
+            sessions[source.device.id]?.workspaces = WorkspaceReorder.applying(
+                current,
+                id: \.workspaceID,
+                plan: plan
+            )
+        }
+
+        Task {
+            do {
+                try await service(for: source.device).moveWorkspaceBlock(
+                    workspaceIDs: plan.workspaceIDs,
+                    beforeWorkspaceID: plan.beforeWorkspaceID
+                )
+                await refresh(source.device.id)
+            } catch {
+                await refresh(source.device.id)
+                actionError = actionErrorMessage(error, device: source.device)
+            }
+        }
+    }
+
     /// Creates a workspace rooted at the given directory ("~" expands to the device's
     /// home, local or remote), then goes straight into the New Agent sheet for it.
     func createNewSpace(device: Device, directory: String, label: String?) {

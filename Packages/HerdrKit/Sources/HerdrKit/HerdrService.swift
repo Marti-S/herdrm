@@ -310,6 +310,31 @@ public actor HerdrService {
         )
     }
 
+    /// Places one workspace at `insertIndex` in the device's workspace list
+    /// (`0...count`). Prefer `moveWorkspaceBlock` for sidebar drag: it is how
+    /// the herdr TUI reorders spaces, and it moves a worktree group atomically.
+    public func moveWorkspace(workspaceID: String, insertIndex: UInt) async throws {
+        _ = try await client().request(
+            method: "workspace.move",
+            params: .object([
+                "workspace_id": .string(workspaceID),
+                "insert_index": .number(Double(insertIndex)),
+            ])
+        )
+    }
+
+    /// Moves `workspaceIDs` as a block so they sit immediately before
+    /// `beforeWorkspaceID`, or at the end of the list when that is nil.
+    public func moveWorkspaceBlock(workspaceIDs: [String], beforeWorkspaceID: String?) async throws {
+        var params: [String: JSONValue] = [
+            "workspace_ids": .array(workspaceIDs.map { .string($0) }),
+        ]
+        if let beforeWorkspaceID {
+            params["before_workspace_id"] = .string(beforeWorkspaceID)
+        }
+        _ = try await client().request(method: "workspace.move_block", params: .object(params))
+    }
+
     /// Creates a tab (optionally in a workspace/cwd) and returns the new pane id.
     public func createTab(workspaceID: String?, cwd: String?, label: String?) async throws -> String {
         var params: [String: JSONValue] = ["focus": .bool(false)]
