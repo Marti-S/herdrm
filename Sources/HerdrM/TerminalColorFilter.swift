@@ -58,13 +58,25 @@ struct LightTerminalANSIAdapter {
         )
     }
 
-    /// Adapts one color for the light theme. Backgrounds always flip (a dark box
-    /// must become light); foregrounds keep whichever variant reads better on
-    /// white — same rule as the ANSI palette, so an already-dark foreground
-    /// (diff red, syntax blue) doesn't wash out to a pastel.
+    /// Adapts one color for the light theme.
+    ///
+    /// Backgrounds flip only when they are dark: the adapter's job is "make
+    /// this output suit a light terminal", and a light background already
+    /// does. Flipping unconditionally double-inverted agents that are
+    /// themselves in a light theme — Claude Code's pale user-message bar
+    /// became a black strip, and since the foreground rule keeps dark text
+    /// dark, the result was dark-on-black. Dark-themed output (Codex's
+    /// `48;2;30;30;30` box, 256-color dark diff backgrounds) still flips.
+    ///
+    /// Foregrounds keep whichever variant reads better on white — same rule
+    /// as the ANSI palette, so an already-dark foreground (diff red, syntax
+    /// blue) doesn't wash out to a pastel.
     static func adapt(red: Int, green: Int, blue: Int, isBackground: Bool) -> (red: Int, green: Int, blue: Int) {
         let flipped = lightRGB(red: red, green: green, blue: blue)
-        if isBackground { return flipped }
+        if isBackground {
+            let luminance = 0.2126 * Double(red) + 0.7152 * Double(green) + 0.0722 * Double(blue)
+            return luminance < 128 ? flipped : (red, green, blue)
+        }
         let originalContrast = contrastOnWhite(red: red, green: green, blue: blue)
         let flippedContrast = contrastOnWhite(red: flipped.red, green: flipped.green, blue: flipped.blue)
         return originalContrast >= flippedContrast ? (red, green, blue) : flipped

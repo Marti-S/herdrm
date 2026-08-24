@@ -7,6 +7,15 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Light mode no longer inverts the output of agents that are themselves in a
+  light theme. The adapter used to flip every explicit background on the
+  assumption that agent output is dark-themed, which turned a light-themed
+  Claude Code's pale message bars and diff backgrounds into black strips with
+  dark (unreadable) text. Backgrounds now flip only when they are actually
+  dark; dark-themed output (Codex's input box, dark diff colors) behaves as
+  before.
+
 ## [0.4.2] - 2026-08-22
 
 ### Fixed

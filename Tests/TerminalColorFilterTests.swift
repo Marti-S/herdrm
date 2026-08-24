@@ -30,8 +30,17 @@ struct TerminalColorFilterTests {
         expect(indexedResult.contains("38;2;6;86;6"), "256-color light green foreground should become dark")
         expect(indexedResult.contains("48;2;119;214;119"), "256-color dark diff background should become light")
 
+        // A light-themed agent's output must pass through untouched: light
+        // backgrounds already suit a light terminal, and flipping them was
+        // how Claude Code's pale user-message bar became a black strip.
+        var lightThemeAdapter = LightTerminalANSIAdapter()
+        let lightTheme = Array("\u{1B}[38;2;50;50;50;48;2;245;245;245mrow".utf8)
+        let lightThemeResult = String(decoding: lightThemeAdapter.transform(lightTheme[...]), as: UTF8.self)
+        expect(lightThemeResult.contains("48;2;245;245;245"), "light backgrounds must not flip dark")
+        expect(lightThemeResult.contains("38;2;50;50;50"), "dark foregrounds on light rows must stay dark")
+
         // Foregrounds that already read well on white keep their color;
-        // only backgrounds flip unconditionally.
+        // only dark backgrounds flip.
         var keepAdapter = LightTerminalANSIAdapter()
         let darkRed = Array("\u{1B}[38;2;220;50;47merror".utf8)
         expect(
