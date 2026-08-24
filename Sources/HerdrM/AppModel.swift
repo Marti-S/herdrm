@@ -101,7 +101,16 @@ enum AgentBinaryOverrides {
 final class AppModel: ObservableObject {
     @Published var devices: [Device]
     /// All devices stay connected in parallel; this only filters the sidebar.
-    @Published var deviceFilter: UUID?
+    @Published var deviceFilter: UUID? {
+        didSet {
+            // Persisted so a relaunch restores the last selection (nil = All
+            // Devices, which removes the key). Every reset path — removing the
+            // filtered device, a notification jump to another device — goes
+            // through this property, so the stored value can never go stale.
+            UserDefaults.standard.set(deviceFilter?.uuidString, forKey: Self.deviceFilterKey)
+        }
+    }
+    private static let deviceFilterKey = "device.filter"
     @Published var sessions: [UUID: DeviceSessionState] = [:]
     @Published var selectedSpace: SpaceRef?
     @Published var selectedPane: PaneRef?
@@ -154,7 +163,15 @@ final class AppModel: ObservableObject {
     private var previousStatuses: [UUID: [String: AgentStatus]] = [:]
 
     init() {
-        devices = DeviceStore().load()
+        let loaded = DeviceStore().load()
+        devices = loaded
+        // Restore the device filter only if that device still exists;
+        // otherwise fall back to All Devices.
+        if let raw = UserDefaults.standard.string(forKey: Self.deviceFilterKey),
+           let id = UUID(uuidString: raw),
+           loaded.contains(where: { $0.id == id }) {
+            deviceFilter = id
+        }
     }
 
     // MARK: - Derived state
