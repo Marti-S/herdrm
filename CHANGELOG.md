@@ -7,6 +7,8 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-23
+
 ### Fixed
 - Light mode no longer inverts the output of agents that are themselves in a
   light theme. The adapter used to flip every explicit background on the
