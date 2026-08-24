@@ -7,6 +7,8 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-08-23
+
 ### Added
 - The device filter (bottom-left switcher) is remembered across launches:
   reopening herdrm restores the device you had selected instead of always
