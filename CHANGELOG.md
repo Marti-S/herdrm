@@ -7,10 +7,12 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-22
+
 ### Fixed
 - Text selected in the terminal while an agent is streaming output no longer
   flickers away the instant it is made — the selection now survives incoming
-  output and only clears when you click elsewhere.
+  output and only clears when you click elsewhere. (#43, thanks @ljxw88!)
 
 ## [0.4.1] - 2026-08-22
 
