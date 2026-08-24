@@ -284,6 +284,15 @@ final class AppModel: ObservableObject {
         devices.count > 1
     }
 
+    /// Badges on sidebar/titlebar rows are scoped by the device filter: with a
+    /// single device selected every row belongs to it, so the badge says
+    /// nothing. ⌘K search and the New Agent/Space device pickers stay on
+    /// `showsDeviceBadges` — search crosses all devices regardless of the
+    /// filter, and the pickers must stay reachable while filtered.
+    var showsRowDeviceBadges: Bool {
+        devices.count > 1 && deviceFilter == nil
+    }
+
     // MARK: - Selection
 
     func selectSpace(_ ref: SpaceRef?) {

@@ -229,7 +229,7 @@ struct SidebarView: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     trailingDetail(agent)
-                    if model.showsDeviceBadges {
+                    if model.showsRowDeviceBadges {
                         deviceBadge(entry.device)
                     }
                 }
@@ -581,7 +581,7 @@ private struct SpaceRowView: View {
                 .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
                 .lineLimit(1)
             Spacer()
-            if model.showsDeviceBadges {
+            if model.showsRowDeviceBadges {
                 DeviceChip(device: entry.device)
             }
             Text("\(model.agentCount(in: entry))")

@@ -165,7 +165,7 @@ struct DetailView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
-                if model.showsDeviceBadges {
+                if model.showsRowDeviceBadges {
                     DeviceChip(device: entry.device)
                 }
                 statusPill(agent.status)

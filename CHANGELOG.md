@@ -7,6 +7,13 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Changed
+- With a single device selected in the bottom-left switcher, the Space and
+  Agent rows (and the titlebar) no longer show that device's badge — every
+  row belongs to it, so the badge said nothing. ⌘K search keeps its badges
+  (it always searches every device), and the New Agent / New Space device
+  pickers stay available while filtered.
+
 ## [0.4.4] - 2026-08-23
 
 ### Added
