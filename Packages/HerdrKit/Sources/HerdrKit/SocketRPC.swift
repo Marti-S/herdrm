@@ -106,6 +106,18 @@ public struct SocketRPC: Sendable {
         }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw HerdrError.connectionFailed("socket(): \(String(cString: strerror(errno)))") }
+        var noSigPipe: Int32 = 1
+        guard setsockopt(
+            fd,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &noSigPipe,
+            socklen_t(MemoryLayout.size(ofValue: noSigPipe))
+        ) == 0 else {
+            let reason = String(cString: strerror(errno))
+            close(fd)
+            throw HerdrError.connectionFailed("setsockopt(SO_NOSIGPIPE): \(reason)")
+        }
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(path.utf8)
