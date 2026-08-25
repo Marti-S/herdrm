@@ -7,6 +7,9 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- ⌘⌫ in the terminal now deletes to the start of the line (^U). ⌘← / ⌘→ jump to start / end (^A / ^E) and ⌘⌦ deletes to the end (^K); the same chords still send those readline bytes when a TUI has negotiated the kitty keyboard protocol. zsh's default ^U is kill-whole-line — that binding lives in the shell, not the terminal.
+
 ## [0.4.5] - 2026-08-23
 
 ### Changed
