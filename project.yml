@@ -4,6 +4,10 @@ options:
   deploymentTarget:
     macOS: "14.0"
   xcodeVersion: "16.0"
+  developmentRegion: en
+  knownRegions:
+    - en
+    - zh-Hans
 packages:
   HerdrKit:
     path: Packages/HerdrKit
@@ -21,6 +25,9 @@ targets:
       - Sources/HerdrM
       - path: Resources
         buildPhase: resources
+        excludes:
+          - Localizable.xcstrings
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - package: HerdrKit
       - package: SwiftTerm
@@ -37,6 +44,10 @@ targets:
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "© 2026 MOE AI LLC"
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations:
+          - en
+          - zh-Hans
         SUFeedURL: https://github.com/missuo/herdrm/releases/latest/download/appcast.xml
         SUPublicEDKey: RHEhllstUuuVrVDCPGrbhg/8LivSzpuZB9X3u3xdV5o=
         SUEnableAutomaticChecks: true
@@ -54,6 +65,7 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: NCFNX3LJ83
+        LOCALIZATION_PREFERS_STRING_CATALOGS: YES
       configs:
         Debug:
           # real identity so UserNotifications & friends work in dev builds

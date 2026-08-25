@@ -7,6 +7,10 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- Simplified Chinese localization via an Apple String Catalog, with Settings →
+  Appearance offering Follow System / English / Simplified Chinese (restart to apply).
+
 ## [0.4.5] - 2026-08-23
 
 ### Changed

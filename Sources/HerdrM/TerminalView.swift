@@ -123,9 +123,9 @@ private enum ClipboardFileError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedItem: return "Remote paste supports regular files, not folders or special files."
-        case .imageEncodingFailed: return "The clipboard image could not be encoded as PNG."
-        case .transferUnavailable: return "The remote file transfer service is unavailable."
+        case .unsupportedItem: return String(localized: "Remote paste supports regular files, not folders or special files.")
+        case .imageEncodingFailed: return String(localized: "The clipboard image could not be encoded as PNG.")
+        case .transferUnavailable: return String(localized: "The remote file transfer service is unavailable.")
         }
     }
 }
@@ -213,20 +213,20 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
         if selection.active {
-            menu.addItem(makeItem("Copy", #selector(NSText.copy(_:))))
+            menu.addItem(makeItem(String(localized: "Copy"), #selector(NSText.copy(_:))))
             if let url = Self.firstURL(in: selection.getSelectedText()) {
                 menu.addItem(.separator())
-                let open = makeItem("Open Link", #selector(openLinkFromMenu(_:)))
+                let open = makeItem(String(localized: "Open Link"), #selector(openLinkFromMenu(_:)))
                 open.representedObject = url
                 menu.addItem(open)
-                let copyLink = makeItem("Copy Link Address", #selector(copyLinkFromMenu(_:)))
+                let copyLink = makeItem(String(localized: "Copy Link Address"), #selector(copyLinkFromMenu(_:)))
                 copyLink.representedObject = url
                 menu.addItem(copyLink)
             }
             menu.addItem(.separator())
         }
-        menu.addItem(makeItem("Paste", #selector(NSText.paste(_:))))
-        menu.addItem(makeItem("Select All", #selector(NSText.selectAll(_:))))
+        menu.addItem(makeItem(String(localized: "Paste"), #selector(NSText.paste(_:))))
+        menu.addItem(makeItem(String(localized: "Select All"), #selector(NSText.selectAll(_:))))
         return menu
     }
 
