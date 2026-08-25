@@ -7,6 +7,9 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- CJK IME composition in the embedded terminal keeps preedit visible, holds the candidate window at the caret, and does not forward edit shortcuts to the PTY. (#47)
+
 ## [0.4.5] - 2026-08-23
 
 ### Changed
