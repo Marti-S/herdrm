@@ -17,7 +17,9 @@ struct SpaceRowDragHost: NSViewRepresentable {
     let onDrop: (String, Bool) -> Void
 
     func makeNSView(context: Context) -> SpaceRowDragNSView {
-        SpaceRowDragNSView()
+        // Non-zero seed frame: a SwiftUI overlay NSView that starts at .zero
+        // can stay 0-size, so clicks and drags never arrive (#42).
+        SpaceRowDragNSView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
     }
 
     func updateNSView(_ view: SpaceRowDragNSView, context: Context) {
@@ -63,6 +65,11 @@ final class SpaceRowDragNSView: NSView, NSDraggingSource {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // Explicit hit-test so a 0-size overlay cannot silently drop clicks.
+        bounds.contains(point) ? self : nil
+    }
 
     override func mouseDown(with event: NSEvent) {
         downEvent = event

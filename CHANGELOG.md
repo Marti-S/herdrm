@@ -7,6 +7,9 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Sidebar section headers (Spaces, Agents, Terminals) now collapse on click, and chrome buttons no longer keep a focus ring after click (#48).
+
 ## [0.4.5] - 2026-08-23
 
 ### Changed
