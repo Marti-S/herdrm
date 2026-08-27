@@ -135,7 +135,13 @@ private enum ClipboardFileError: LocalizedError {
 /// Shift+Enter, so the modifier never reaches the TUI. SwiftTerm's `keyDown`
 /// and `doCommand` are public, not open, so `interpretKeyEvents` is the only
 /// hook a subclass can take — and it only sees Return in legacy mode, leaving
-/// this inert when a TUI negotiates the kitty keyboard protocol.
+/// Shift+Enter inert when a TUI negotiates the kitty keyboard protocol.
+///
+/// ⌘ text-editing chords are different. SwiftTerm hands ⌘ to AppKit
+/// `interpretKeyEvents`, and `doCommand` has no `deleteToBeginningOfLine:`, so
+/// ⌘⌫ used to send nothing. Those chords (and the matching ⌥ word-editing
+/// ones) send readline bytes here, before `super`, even under kitty — Ghostty
+/// / VS Code / iTerm Natural Text Editing, not the Shift+Enter kitty skip.
 final class LineBreakTerminalView: LocalProcessTerminalView {
     var usesLightColors = false
     var appliedDarkAppearance: Bool?
@@ -261,16 +267,48 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
         if eventArray.count == 1,
            let event = eventArray.first,
            event.type == .keyDown,
-           event.keyCode == 36 || event.keyCode == 76,  // Return, keypad Enter
-           !hasMarkedText() {
-            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if modifiers.contains(.shift),
-               modifiers.isDisjoint(with: [.command, .control, .option]) {
-                send(txt: "\u{1b}\r")
-                return
-            }
+           !hasMarkedText(),
+           let payload = ptyBytes(forMacEditingKey: event) {
+            send(txt: payload)
+            return
         }
         super.interpretKeyEvents(eventArray)
+    }
+
+    /// Mac Delete is Backspace (keyCode 51). ⌥⌘ arrows move split focus and
+    /// are left alone; ⌘A/⌘E/⌘W and the other app chords never match here.
+    private func ptyBytes(forMacEditingKey event: NSEvent) -> String? {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let commandOnly = modifiers.contains(.command)
+            && modifiers.isDisjoint(with: [.option, .control])
+        let optionOnly = optionAsMetaKey
+            && modifiers.contains(.option)
+            && modifiers.isDisjoint(with: [.command, .control])
+
+        if commandOnly {
+            switch event.keyCode {
+            case 51:  return "\u{15}"  // ⌘⌫ → ^U
+            case 123: return "\u{01}"  // ⌘← → ^A
+            case 124: return "\u{05}"  // ⌘→ → ^E
+            case 117: return "\u{0b}"  // ⌘⌦ → ^K
+            default: break
+            }
+        }
+        if optionOnly {
+            switch event.keyCode {
+            case 51:  return "\u{1b}\u{7f}"  // ⌥⌫ → ESC DEL
+            case 123: return "\u{1b}b"       // ⌥← → ESC b
+            case 124: return "\u{1b}f"       // ⌥→ → ESC f
+            case 117: return "\u{1b}d"       // ⌥⌦ → ESC d
+            default: break
+            }
+        }
+        if event.keyCode == 36 || event.keyCode == 76,  // Return, keypad Enter
+           modifiers.contains(.shift),
+           modifiers.isDisjoint(with: [.command, .control, .option]) {
+            return "\u{1b}\r"
+        }
+        return nil
     }
 
     var attachmentCapabilities: AgentAttachmentCapabilities?
