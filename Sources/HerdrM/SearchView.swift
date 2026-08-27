@@ -29,6 +29,9 @@ struct SearchSheet: View {
             q.isEmpty
                 || entry.agent.title.lowercased().contains(q)
                 || entry.agent.agent.lowercased().contains(q)
+                || (entry.agent.name?.lowercased().contains(q) ?? false)
+                || (entry.agent.terminalTitleStripped ?? entry.agent.terminalTitle)?
+                    .lowercased().contains(q) == true
                 || entry.device.name.lowercased().contains(q)
                 || model.spaceName(deviceID: entry.device.id, workspaceID: entry.agent.workspaceID)
                     .lowercased().contains(q)

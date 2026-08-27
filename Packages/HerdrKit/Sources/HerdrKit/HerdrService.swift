@@ -304,6 +304,17 @@ public actor HerdrService {
         )
     }
 
+    /// Renames an agent (`herdr agent rename`). `target` is a pane id or current name.
+    public func renameAgent(target: String, name: String) async throws {
+        _ = try await client().request(
+            method: "agent.rename",
+            params: .object([
+                "target": .string(target),
+                "name": .string(name),
+            ])
+        )
+    }
+
     /// Places one workspace at `insertIndex` in the device's workspace list
     /// (`0...count`). Prefer `moveWorkspaceBlock` for sidebar drag: it is how
     /// the herdr TUI reorders spaces, and it moves a worktree group atomically.

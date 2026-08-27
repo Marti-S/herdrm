@@ -145,6 +145,7 @@ final class AppModel: ObservableObject {
     @Published var deviceToEdit: Device?
     @Published var sshAuthenticationRequest: SSHAuthenticationRequest?
     @Published var spaceToRename: SpaceEntry?
+    @Published var agentToRename: AgentEntry?
     /// Transient action failures: shown as an alert, never by tearing down sessions.
     @Published var actionError: String?
 
@@ -739,6 +740,22 @@ final class AppModel: ObservableObject {
                 try await service(for: entry.device).renameWorkspace(
                     workspaceID: entry.workspace.workspaceID,
                     label: label
+                )
+                await refresh(entry.device.id)
+            } catch {
+                actionError = actionErrorMessage(error, device: entry.device)
+            }
+        }
+    }
+
+    func renameAgent(_ entry: AgentEntry, name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != entry.agent.name else { return }
+        Task {
+            do {
+                try await service(for: entry.device).renameAgent(
+                    target: entry.agent.paneID,
+                    name: name
                 )
                 await refresh(entry.device.id)
             } catch {
