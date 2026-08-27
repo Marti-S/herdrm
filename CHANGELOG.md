@@ -5,16 +5,33 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
-## [Unreleased]
+## [0.5.0] - 2026-08-27
 
 ### Added
 - Simplified Chinese localization via an Apple String Catalog, with Settings →
-  Appearance offering Follow System / English / Simplified Chinese (restart to apply).
+  Appearance offering Follow System / English / Simplified Chinese (restart to
+  apply). (#46, #52, thanks @eachann1024!)
 
 ### Fixed
-- ⌘⌫ in the terminal now deletes to the start of the line (^U). ⌘← / ⌘→ jump to start / end (^A / ^E) and ⌘⌦ deletes to the end (^K); the same chords still send those readline bytes when a TUI has negotiated the kitty keyboard protocol. zsh's default ^U is kill-whole-line — that binding lives in the shell, not the terminal.
-- Sidebar section headers (Spaces, Agents, Terminals) now collapse on click, and chrome buttons no longer keep a focus ring after click (#48).
-- CJK IME composition in the embedded terminal keeps preedit visible, holds the candidate window at the caret, and does not forward edit shortcuts to the PTY. (#47)
+- ⌘⌫ in the terminal now deletes to the start of the line (^U). ⌘← / ⌘→ jump
+  to start / end (^A / ^E) and ⌘⌦ deletes to the end (^K), with the matching ⌥
+  word-editing chords; the same chords still send those readline bytes when a
+  TUI has negotiated the kitty keyboard protocol. zsh's default ^U is
+  kill-whole-line — that binding lives in the shell, not the terminal. (#49,
+  thanks @eachann1024!)
+- Sidebar section headers (Spaces, Agents, Terminals) now collapse on click,
+  and chrome buttons no longer keep a focus ring after click. (#48, #50,
+  thanks @eachann1024!)
+- CJK IME composition in the embedded terminal keeps preedit visible, holds
+  the candidate window at the caret, and does not forward edit shortcuts to
+  the PTY. (#47, #51, thanks @eachann1024!)
+- The app icon renders with proper rounded corners and margins in the Dock and
+  ⌘Tab on macOS 15 and earlier — releases now compile the Icon Composer icon
+  so down-level variants are generated instead of the full-bleed square. (#44,
+  thanks @hualinli!)
+- A write to a peer-closed herdr socket can no longer take the whole app down
+  with SIGPIPE — connections opt out of the signal and the reconnect path
+  handles the error instead. (#45, thanks @csorodrigo!)
 
 ## [0.4.5] - 2026-08-23
 
