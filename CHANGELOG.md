@@ -5,17 +5,19 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
-## [Unreleased]
+## [0.5.1] - 2026-08-27
 
 ### Added
 - Agents can be renamed from the sidebar context menu (`agent.rename`). The
-  row then shows that name instead of a stale terminal title.
+  row then shows that name instead of a stale terminal title. (#53, thanks
+  @JackieJam!)
 
 ### Fixed
 - Sidebar agent rows no longer treat a terminal OSC title as the display name
   when it is just the agent kind or the project folder. Cursor / OpenCode
   conversation titles still win when the herdr name is auto-generated; Agy
-  and Codex fall through to the herdr name so a rename is visible.
+  and Codex fall through to the herdr name so a rename is visible. (#53,
+  thanks @JackieJam!)
 - Pasting a copied image file into a local agent behaves like pasting a
   screenshot again: agents that read clipboard images natively (Claude Code,
   Codex, Copilot) get the paste shortcut and show their [Image #1]-style
