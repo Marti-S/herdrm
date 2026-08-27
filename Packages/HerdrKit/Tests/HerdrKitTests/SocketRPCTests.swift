@@ -5,12 +5,14 @@ import XCTest
 
 final class SocketRPCTests: XCTestCase {
     func testConnectDisablesSIGPIPE() throws {
+        // Names stay short because sockaddr_un caps paths at 104 bytes and
+        // temporaryDirectory already burns most of that (/var/folders/…).
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("herdrm-sigpipe-\(UUID().uuidString)")
+            .appendingPathComponent("hk-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let path = directory.appendingPathComponent("server.sock").path
+        let path = directory.appendingPathComponent("s.sock").path
         let listener = socket(AF_UNIX, SOCK_STREAM, 0)
         XCTAssertGreaterThanOrEqual(listener, 0)
         defer { close(listener) }
