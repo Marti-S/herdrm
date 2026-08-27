@@ -58,6 +58,7 @@ struct RootView: View {
         .sheet(isPresented: $model.showNewAgent) { NewAgentSheet(model: model) }
         .sheet(isPresented: $model.showNewSpace) { NewSpaceSheet(model: model) }
         .sheet(item: $model.spaceToRename) { entry in RenameSpaceSheet(model: model, entry: entry) }
+        .sheet(item: $model.agentToRename) { entry in RenameAgentSheet(model: model, entry: entry) }
         .sheet(item: $model.deviceToEdit) { device in EditDeviceSheet(model: model, device: device) }
         .sheet(item: $model.sshAuthenticationRequest) { request in
             SSHAuthenticationSheet(model: model, request: request)
@@ -1126,6 +1127,55 @@ struct RenameSpaceSheet: View {
         }
         .frame(width: 400)
         .onAppear { name = entry.workspace.label }
+    }
+}
+
+struct RenameAgentSheet: View {
+    @ObservedObject var model: AppModel
+    let entry: AppModel.AgentEntry
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(
+                systemImage: "pencil",
+                title: String(localized: "Rename Agent"),
+                subtitle: String(localized: "Rename \(entry.agent.title) on \(entry.device.name)")
+            )
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 8) {
+                SheetSectionLabel("NAME")
+                TextField("Agent name", text: $name)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .padding(16)
+
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Rename") {
+                    model.renameAgent(entry, name: name)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(trimmedName.isEmpty || trimmedName == (entry.agent.name ?? entry.agent.title))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 400)
+        .onAppear { name = entry.agent.name ?? entry.agent.title }
     }
 }
 

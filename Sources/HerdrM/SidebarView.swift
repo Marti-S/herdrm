@@ -105,6 +105,10 @@ struct SidebarView: View {
                         ForEach(model.visibleAgents) { entry in
                             agentRow(entry)
                                 .contextMenu {
+                                    Button("Rename Agent…") {
+                                        model.agentToRename = entry
+                                    }
+                                    Divider()
                                     Button("Close Agent…", role: .destructive) {
                                         model.requestClosePane(entry.ref, name: entry.agent.title)
                                     }
