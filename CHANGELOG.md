@@ -5,6 +5,13 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Fixed
+- Remote terminal attaches now inherit the captured shell environment, so
+  OpenSSH keeps the user's `PATH` and `SSH_AUTH_SOCK` when evaluating SSH
+  configuration and agent-backed identities.
+
 ## [0.5.1] - 2026-08-27
 
 ### Added
