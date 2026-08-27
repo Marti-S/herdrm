@@ -10,6 +10,7 @@ the Sparkle update description — a release without a section here fails CI.
 ### Fixed
 - ⌘⌫ in the terminal now deletes to the start of the line (^U). ⌘← / ⌘→ jump to start / end (^A / ^E) and ⌘⌦ deletes to the end (^K); the same chords still send those readline bytes when a TUI has negotiated the kitty keyboard protocol. zsh's default ^U is kill-whole-line — that binding lives in the shell, not the terminal.
 - Sidebar section headers (Spaces, Agents, Terminals) now collapse on click, and chrome buttons no longer keep a focus ring after click (#48).
+- CJK IME composition in the embedded terminal keeps preedit visible, holds the candidate window at the caret, and does not forward edit shortcuts to the PTY. (#47)
 
 ## [0.4.5] - 2026-08-23
 

@@ -142,10 +142,18 @@ private enum ClipboardFileError: LocalizedError {
 /// ⌘⌫ used to send nothing. Those chords (and the matching ⌥ word-editing
 /// ones) send readline bytes here, before `super`, even under kitty — Ghostty
 /// / VS Code / iTerm Natural Text Editing, not the Shift+Enter kitty skip.
+///
+/// IME composition is the same constraint. SwiftTerm 1.19 already implements
+/// `NSTextInputClient` and draws a marked-text overlay; this subclass only
+/// keeps edit shortcuts off the PTY while `hasMarkedText()`, commits CJK as
+/// UTF-8, and re-anchors `firstRect` when a TUI has hidden the hardware caret.
 final class LineBreakTerminalView: LocalProcessTerminalView {
     var usesLightColors = false
     var appliedDarkAppearance: Bool?
     private var lightColorAdapter = LightTerminalANSIAdapter()
+    /// Last non-empty caret frame, used when the TUI hides the hardware cursor
+    /// and SwiftTerm's `firstRect` would otherwise report `.zero`.
+    private var lastIMECaretFrame: NSRect = .zero
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         // SwiftTerm drops the selection on every chunk of output and on every
@@ -264,6 +272,17 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
     }
 
     override func interpretKeyEvents(_ eventArray: [NSEvent]) {
+        if hasMarkedText() {
+            // SwiftTerm's `doCommand` still emits PTY sequences for copy/select/
+            // emacs-style motion. Command/Control shortcuts must stay with the
+            // IME until composition ends; other keys still reach AppKit so
+            // preedit can update.
+            let forIME = eventArray.filter { !Self.isEditShortcutDuringComposition($0) }
+            if !forIME.isEmpty {
+                super.interpretKeyEvents(forIME)
+            }
+            return
+        }
         if eventArray.count == 1,
            let event = eventArray.first,
            event.type == .keyDown,
@@ -309,6 +328,110 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
             return "\u{1b}\r"
         }
         return nil
+    }
+
+    /// Command/Control combos become `doCommand` selectors that SwiftTerm
+    /// forwards to the process. IME composition needs those keys locally.
+    private static func isEditShortcutDuringComposition(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return mods.contains(.command) || mods.contains(.control)
+    }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        rememberIMECaretFrame()
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        // IME commit must go as a complete UTF-8 string. With kitty keyboard
+        // flags on, SwiftTerm encodes a single scalar as CSI-u, which some
+        // TUIs then split. ASCII keystrokes still take the super path.
+        if hasMarkedText(), let text = Self.inputString(from: string) {
+            super.unmarkText()
+            if !text.isEmpty {
+                send(txt: text)
+            }
+            return
+        }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    override func showCursor(source: Terminal) {
+        super.showCursor(source: source)
+        rememberIMECaretFrame()
+    }
+
+    override func hideCursor(source: Terminal) {
+        rememberIMECaretFrame()
+        super.hideCursor(source: source)
+    }
+
+    override func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        let fromSuper = super.firstRect(forCharacterRange: range, actualRange: actualRange)
+        if fromSuper.width > 0.5, fromSuper.height > 0.5 {
+            rememberIMECaretFrame()
+            return fromSuper
+        }
+        let local = imeAnchorFrame()
+        guard let window else { return fromSuper }
+        return window.convertToScreen(convert(local, to: nil))
+    }
+
+    private func rememberIMECaretFrame() {
+        let frame = caretFrame
+        if frame.width > 0.5, frame.height > 0.5 {
+            lastIMECaretFrame = frame
+        }
+    }
+
+    /// Prefers the live caret, then the last frame from before the TUI hid it,
+    /// then a buffer-relative cell so IME candidates never fall back to 0,0.
+    private func imeAnchorFrame() -> NSRect {
+        let current = caretFrame
+        if current.width > 0.5, current.height > 0.5 {
+            lastIMECaretFrame = current
+            return current
+        }
+        if lastIMECaretFrame.width > 0.5, lastIMECaretFrame.height > 0.5 {
+            return lastIMECaretFrame
+        }
+        return estimatedCaretFrameFromBuffer()
+    }
+
+    private func estimatedCaretFrameFromBuffer() -> NSRect {
+        let cell = estimatedCellSize()
+        let col = min(max(0, terminal.buffer.x), max(0, terminal.cols - 1))
+        let row = min(max(0, terminal.buffer.y), max(0, terminal.rows - 1))
+        let origin = CGPoint(
+            x: CGFloat(col) * cell.width,
+            y: bounds.height - cell.height * CGFloat(row + 1)
+        )
+        return NSRect(origin: origin, size: cell)
+    }
+
+    private func estimatedCellSize() -> NSSize {
+        let rows = max(1, terminal.rows)
+        let cellHeight = max(1, getOptimalFrameSize().height / CGFloat(rows))
+        let glyph = font.glyph(withName: "W")
+        var cellWidth = font.advancement(forGlyph: glyph).width
+        if cellWidth < 1 {
+            cellWidth = ("W" as NSString).size(withAttributes: [.font: font]).width
+        }
+        return NSSize(width: max(1, cellWidth), height: cellHeight)
+    }
+
+    private static func inputString(from value: Any) -> String? {
+        switch value {
+        case let text as String:
+            return text
+        case let text as NSString:
+            return text as String
+        case let text as NSAttributedString:
+            return text.string
+        default:
+            return nil
+        }
     }
 
     var attachmentCapabilities: AgentAttachmentCapabilities?
