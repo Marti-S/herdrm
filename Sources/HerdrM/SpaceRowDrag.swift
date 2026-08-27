@@ -68,7 +68,8 @@ final class SpaceRowDragNSView: NSView, NSDraggingSource {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         // Explicit hit-test so a 0-size overlay cannot silently drop clicks.
-        bounds.contains(point) ? self : nil
+        // AppKit passes the point in the superview's coordinate space.
+        bounds.contains(convert(point, from: superview)) ? self : nil
     }
 
     override func mouseDown(with event: NSEvent) {
