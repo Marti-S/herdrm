@@ -880,12 +880,9 @@ func applyTerminalAppearance(
     view.needsDisplay = true
 }
 
-/// A local login shell, side by side with the agent attach — no herdr pane and no
-/// attachment paste. It does take first responder when it appears, so splitting hands the
-/// keyboard to the new shell; closing the split gives it back via `focusRemainingTerminal`.
-/// Standalone shell views stay in the hierarchy while deselected (a local shell
-/// has no server side to reattach to), so re-selecting one needs a way to hand
-/// it the keyboard again — the registry maps session ids to their live views.
+/// A standalone local or SSH login shell, or the local login shell beside an
+/// agent attach. Standalone views stay alive while deselected, so re-selecting
+/// one uses the registry to restore keyboard focus.
 @MainActor
 enum ShellViewRegistry {
     private struct WeakView { weak var view: LocalProcessTerminalView? }
@@ -910,6 +907,7 @@ enum ShellViewRegistry {
 struct ShellTerminalView: NSViewRepresentable {
     /// Session identity for the registry; nil for the ⌘D split shell.
     var sessionID: UUID?
+    var device: Device = .local
     var fontName: String = ""
     var fontSize: Double = TerminalDefaults.defaultFontSize
     var thinStrokes: Bool = true
@@ -940,11 +938,19 @@ struct ShellTerminalView: NSViewRepresentable {
             mouseReporting: mouseReporting
         )
 
+        let command = HerdrService(device: device, autoStartLocalServer: false)
+            .terminalCommand()
         var environment = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         environment.append("LANG=en_US.UTF-8")
+        for (key, value) in command.environment {
+            environment.removeAll { $0.hasPrefix("\(key)=") }
+            environment.append("\(key)=\(value)")
+        }
+        context.coordinator.authorizationID = command.authorizationID
+        context.coordinator.scheduleAuthorizationCleanup()
         view.startProcess(
-            executable: "/bin/sh",
-            args: ["-c", "cd \"$HOME\"; exec \"${SHELL:-/bin/zsh}\" -l"],
+            executable: command.executable,
+            args: command.args,
             environment: environment
         )
         if let sessionID {
@@ -978,6 +984,7 @@ struct ShellTerminalView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
         coordinator.onExit = nil
+        coordinator.discardAuthorization()
         if let sessionID = coordinator.sessionID {
             ShellViewRegistry.unregister(sessionID)
         }
@@ -1003,11 +1010,29 @@ struct ShellTerminalView: NSViewRepresentable {
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         var onExit: ((Int32?) -> Void)?
         var sessionID: UUID?
+        var authorizationID: UUID?
+
+        deinit {
+            discardAuthorization()
+        }
+
+        func scheduleAuthorizationCleanup() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                self?.discardAuthorization()
+            }
+        }
+
+        func discardAuthorization() {
+            guard let authorizationID else { return }
+            try? SSHCredentialStore.removeAuthorization(authorizationID)
+            self.authorizationID = nil
+        }
 
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
         func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
         func processTerminated(source: TerminalView, exitCode: Int32?) {
+            discardAuthorization()
             let callback = onExit
             onExit = nil  // report once
             DispatchQueue.main.async { callback?(exitCode) }
