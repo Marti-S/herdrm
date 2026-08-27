@@ -5,6 +5,17 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Fixed
+- Pasting a copied image file into a local agent behaves like pasting a
+  screenshot again: agents that read clipboard images natively (Claude Code,
+  Codex, Copilot) get the paste shortcut and show their [Image #1]-style
+  attachment, instead of a shell-quoted file path. 0.3.9's agent-aware paste
+  had routed every copied file — image or not — through the path paste;
+  non-image files keep it, and remote devices still upload and paste the
+  remote path.
+
 ## [0.5.0] - 2026-08-27
 
 ### Added

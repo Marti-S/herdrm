@@ -318,7 +318,7 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         XCTAssertNil(capabilityAwareRegistry.capabilities(for: "claude"))
     }
 
-    func testLocalDeliveryUsesNativeClipboardOnlyForImageData() {
+    func testLocalDeliveryUsesNativeClipboardForImages() {
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(
                 capabilities: pathCapabilities,
@@ -327,13 +327,15 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
             ),
             .nativeClipboard
         )
+        // Copied image files are images too: local agents that read clipboard
+        // images natively get the paste shortcut, not a quoted path.
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(
                 capabilities: pathCapabilities,
                 deviceKind: .local,
                 source: .files(allImages: true)
             ),
-            .devicePaths(.shellQuoted)
+            .nativeClipboard
         )
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(

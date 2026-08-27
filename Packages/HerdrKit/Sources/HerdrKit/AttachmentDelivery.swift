@@ -151,6 +151,12 @@ public enum AgentAttachmentDeliveryPolicy {
             return capabilities.imagePath.map(AgentAttachmentDeliveryAction.devicePaths)
                 ?? .unsupported
         case .files(allImages: true):
+            // A copied image file is still an image: a local agent that reads
+            // clipboard images natively (Claude Code's [Image #1] flow) gets
+            // the paste shortcut, same as raw image data — not a quoted path.
+            if isLocal, capabilities.nativeClipboardImageData {
+                return .nativeClipboard
+            }
             let pathSyntax = capabilities.imagePath ?? capabilities.filePath
             return pathSyntax.map(AgentAttachmentDeliveryAction.devicePaths) ?? .unsupported
         case .files(allImages: false):
