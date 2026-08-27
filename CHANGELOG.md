@@ -5,6 +5,13 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Added
+- A two-pane Files workspace browses local and SSH-device files and copies
+  regular files in either direction with progress, cancellation, atomic
+  staging, and Replace / Keep Both conflict handling.
+
 ## [0.5.1] - 2026-08-27
 
 ### Added

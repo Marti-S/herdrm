@@ -51,6 +51,9 @@ struct SidebarView: View {
                 actionRow(icon: "terminal", label: "New Terminal") {
                     model.newShellSession()
                 }
+                actionRow(icon: "folder", label: "Files") {
+                    model.openFileManager()
+                }
                 actionRow(icon: "magnifyingglass", label: "Search") {
                     model.showSearch = true
                 }
@@ -237,10 +240,11 @@ struct SidebarView: View {
 
     private func agentRow(_ entry: AppModel.AgentEntry) -> some View {
         let agent = entry.agent
-        let selected = model.selectedPane == entry.ref && model.selectedShellID == nil
+        let selected = !model.isFileManagerActive
+            && model.selectedPane == entry.ref
+            && model.selectedShellID == nil
         return Button {
-            model.selectedPane = entry.ref
-            model.selectedShellID = nil
+            model.selectAgent(entry.ref)
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -279,7 +283,7 @@ struct SidebarView: View {
     }
 
     private func shellRow(_ session: ShellSession) -> some View {
-        let selected = model.selectedShellID == session.id
+        let selected = !model.isFileManagerActive && model.selectedShellID == session.id
         return Button {
             model.selectShell(session.id)
         } label: {

@@ -119,6 +119,7 @@ final class AppModel: ObservableObject {
     @Published var showNewAgent = false
     @Published var showNewSpace = false
     @Published var showSearch = false
+    @Published var isFileManagerActive = false
     @Published var shellSplitAxis: SplitAxis?
     /// The pane that currently holds the keyboard within the ⌘D split. Reset to
     /// the agent side whenever the split closes so reopening it is predictable.
@@ -297,6 +298,7 @@ final class AppModel: ObservableObject {
     // MARK: - Selection
 
     func selectSpace(_ ref: SpaceRef?) {
+        isFileManagerActive = false
         selectedSpace = ref
         selectedShellID = nil
         if let entry = selectedEntry {
@@ -323,6 +325,7 @@ final class AppModel: ObservableObject {
 
     /// Jump target used by the search sheet and by notification clicks.
     func reveal(_ ref: PaneRef) {
+        isFileManagerActive = false
         if let filter = deviceFilter, filter != ref.deviceID {
             deviceFilter = nil
         }
@@ -343,6 +346,17 @@ final class AppModel: ObservableObject {
 
     // MARK: - Shell terminals
 
+    func openFileManager() {
+        isFileManagerActive = true
+        selectedShellID = nil
+    }
+
+    func selectAgent(_ ref: PaneRef) {
+        isFileManagerActive = false
+        selectedPane = ref
+        selectedShellID = nil
+    }
+
     var selectedShell: ShellSession? {
         selectedShellID.flatMap { id in shellSessions.first { $0.id == id } }
     }
@@ -356,6 +370,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectShell(_ id: UUID) {
+        isFileManagerActive = false
         selectedShellID = id
         ShellViewRegistry.focus(id)
     }
@@ -858,6 +873,7 @@ final class AppModel: ObservableObject {
                     )
                 }
                 await refresh(device.id)
+                isFileManagerActive = false
                 selectedPane = PaneRef(deviceID: device.id, paneID: pane)
             } catch {
                 if let createdPane {

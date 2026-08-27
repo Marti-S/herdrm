@@ -236,6 +236,7 @@ public enum HerdrError: Error, LocalizedError, Sendable {
     case malformedResponse(String)
     case incompatibleProtocol(Int)
     case tunnelFailed(String)
+    case fileOperationFailed(String)
     case fileTransferFailed(String)
 
     public var errorDescription: String? {
@@ -249,6 +250,7 @@ public enum HerdrError: Error, LocalizedError, Sendable {
         case .malformedResponse(let reason): return "malformed response: \(reason)"
         case .incompatibleProtocol(let version): return "herdr protocol \(version) is too old (need >= 17)"
         case .tunnelFailed(let reason): return "SSH tunnel failed: \(reason)"
+        case .fileOperationFailed(let reason): return "file operation failed: \(reason)"
         case .fileTransferFailed(let reason): return "file transfer failed: \(reason)"
         }
     }

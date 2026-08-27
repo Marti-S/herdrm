@@ -46,6 +46,7 @@ macOS window on top of it, and it's grown well past "attach to a terminal":
 | 🧭 **Live status** | Spaces & Agents sorted by urgency: blocked → done → working → idle |
 | ⌨️ **Real terminal** | Full PTY attach, not a chat wrapper — native selection, legible fonts, resilient sessions |
 | 📎 **Paste anything** | Files and images land straight in the agent's pane, locally or over SSH |
+| 📁 **Move files** | Browse Local + SSH files side by side and copy in either direction |
 | 🔔 **Notifications** | A system alert the moment an agent needs you — click it to jump right there |
 | 🔍 **⌘K search** | Every agent, on every device, one keystroke away |
 
@@ -86,6 +87,10 @@ macOS window on top of it, and it's grown well past "attach to a terminal":
   of freezing on the last frame; mixed-version `herdr` binaries no longer break attach.
 
 ### Files, search, and staying in the loop
+- **Two-pane file manager** — browse Local and any configured SSH device side by side, then
+  upload or download regular files with progress, cancellation, and explicit Replace / Keep
+  Both conflict handling. Transfers use the same OpenSSH config, agent, host-key, and Keychain
+  password flow as terminals.
 - **Paste files and images** into Claude Code, Codex, or Copilot. Local pastes forward as
   Ctrl+V; remote pastes stream over SSH into a self-pruning cache (7-day retention, 50 MB cap).
 - **Search** — ⌘K across every device, ordered by urgency, scrolling to follow your selection.
