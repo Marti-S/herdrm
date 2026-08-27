@@ -129,7 +129,7 @@ struct SearchSheet: View {
         .onChange(of: query) { _, _ in highlighted = 0 }
     }
 
-    private func hint(_ key: String, _ label: String) -> some View {
+    private func hint(_ key: String, _ label: LocalizedStringKey) -> some View {
         HStack(spacing: 4) {
             Text(key)
                 .font(.system(size: 10, weight: .medium))
@@ -183,7 +183,7 @@ struct SearchSheet: View {
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                trailing("Space · \(model.agentCount(in: entry)) agents", device: entry.device)
+                trailing(String(localized: "Space · \(model.agentCount(in: entry)) agents"), device: entry.device)
             }
         }
         .padding(.horizontal, 10)

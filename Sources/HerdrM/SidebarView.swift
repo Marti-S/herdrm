@@ -139,15 +139,15 @@ struct SidebarView: View {
 
     private var emptyAgentsHint: String {
         switch model.connection {
-        case .connecting: return "Connecting…"
+        case .connecting: return String(localized: "Connecting…")
         case .failed(let reason): return reason
-        default: return "No agents"
+        default: return String(localized: "No agents")
         }
     }
 
     // MARK: - Rows
 
-    private func actionRow(icon: String, label: String, action: @escaping () -> Void) -> some View {
+    private func actionRow(icon: String, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
@@ -170,12 +170,12 @@ struct SidebarView: View {
         .focusEffectDisabled()
     }
 
-    private func groupHeader(_ title: String, expanded: Binding<Bool>) -> some View {
+    private func groupHeader(_ title: LocalizedStringKey, expanded: Binding<Bool>) -> some View {
         groupHeader(title, expanded: expanded) { EmptyView() }
     }
 
     private func groupHeader<Trailing: View>(
-        _ title: String,
+        _ title: LocalizedStringKey,
         expanded: Binding<Bool>,
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
@@ -387,7 +387,7 @@ struct SidebarView: View {
 /// Small icon button that sits in the 28pt titlebar strip.
 struct TitlebarIconButton: View {
     let systemName: String
-    let help: String
+    let help: LocalizedStringKey
     let action: () -> Void
     @State private var hovered = false
 
@@ -439,7 +439,7 @@ struct DevicePopover: View {
                         Text("All Devices")
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.text)
-                        Text("\(model.devices.count) devices · \(connectedCount) connected")
+                        Text(String(localized: "\(model.devices.count) devices · \(connectedCount) connected"))
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.textTertiary)
                     }
@@ -467,11 +467,11 @@ struct DevicePopover: View {
                 }
                 .contextMenu {
                     if !device.isLocal {
-                        Button("Edit \(device.name)…") {
+                        Button(String(localized: "Edit \(device.name)…")) {
                             isPresented = false
                             model.deviceToEdit = device
                         }
-                        Button("Remove \(device.name)", role: .destructive) {
+                        Button(String(localized: "Remove \(device.name)"), role: .destructive) {
                             isPresented = false
                             model.removeDevice(device)
                         }
@@ -507,7 +507,7 @@ struct DevicePopover: View {
         }.count
     }
 
-    private func actionRow(icon: String, label: String, action: @escaping () -> Void) -> some View {
+    private func actionRow(icon: String, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 9) {
                 Image(systemName: icon)
@@ -558,7 +558,7 @@ struct DevicePopoverRow: View {
                             .fill(dotColor)
                             .frame(width: 6, height: 6)
                     }
-                    Text(device.subtitle)
+                    Text(device.localizedSubtitle)
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)

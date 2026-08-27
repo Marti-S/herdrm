@@ -65,6 +65,7 @@ struct HerdrMApp: App {
         if ProcessInfo.processInfo.environment[SSHCredentialStore.askPassModeEnvironmentKey] == "1" {
             Self.runSSHAskPass()
         }
+        AppLanguage.synchronize()
         SSHCredentialStore.purgeAuthorizations()
         TerminalDefaults.registerBundledFonts()
         updaterController = SPUStandardUpdaterController(
@@ -192,9 +193,9 @@ struct HerdrMApp: App {
     }
 
     private var closeButtonTitle: String {
-        if focusedModel?.shellSplitAxis != nil { return "Close Split" }
-        if focusedModel?.selectedShell != nil { return "Close Terminal" }
-        return "Close"
+        if focusedModel?.shellSplitAxis != nil { return String(localized: "Close Split") }
+        if focusedModel?.selectedShell != nil { return String(localized: "Close Terminal") }
+        return String(localized: "Close")
     }
 
     static func applyTheme(_ preference: String) {
@@ -278,7 +279,7 @@ struct AgentsSettingsView: View {
                 ForEach(Self.kinds, id: \.kind) { row in
                     TextField(row.label, text: binding(row.kind), prompt: Text("Automatic"))
                         .font(.system(size: 12).monospaced())
-                        .help("Command or path for \(row.hint). Leave empty to detect.")
+                        .help(String(localized: "Command or path for \(row.hint). Leave empty to detect."))
                 }
             } footer: {
                 Text("Finder-launched apps don’t inherit your terminal PATH. herdrm captures it once from a login + interactive shell, then looks up these names. A path here is an escape hatch when detection picks the wrong binary.")
@@ -340,9 +341,12 @@ struct TerminalSettingsView: View {
                 }
 
                 Picker("Weight", selection: $fontWeight) {
-                    Text("Light").tag(Double(NSFont.Weight.light.rawValue))
-                    Text("Regular").tag(TerminalDefaults.defaultFontWeight)
-                    Text("Medium").tag(Double(NSFont.Weight.medium.rawValue))
+                    Text(String(localized: "font.weight.light", defaultValue: "Light"))
+                        .tag(Double(NSFont.Weight.light.rawValue))
+                    Text(String(localized: "font.weight.regular", defaultValue: "Regular"))
+                        .tag(TerminalDefaults.defaultFontWeight)
+                    Text(String(localized: "font.weight.medium", defaultValue: "Medium"))
+                        .tag(Double(NSFont.Weight.medium.rawValue))
                 }
                 .pickerStyle(.segmented)
                 .disabled(!fontName.isEmpty)
@@ -408,16 +412,30 @@ struct TerminalSettingsView: View {
 
 struct AppearanceSettingsView: View {
     @AppStorage("app.theme") private var themePreference = "system"
+    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.system.rawValue
 
     var body: some View {
         Form {
             Picker("Theme", selection: $themePreference) {
-                Text("System").tag("system")
-                Text("Light").tag("light")
-                Text("Dark").tag("dark")
+                Text(String(localized: "theme.system", defaultValue: "System")).tag("system")
+                Text(String(localized: "theme.light", defaultValue: "Light")).tag("light")
+                Text(String(localized: "theme.dark", defaultValue: "Dark")).tag("dark")
             }
             .pickerStyle(.segmented)
             Text("The terminal follows the app theme.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            Picker("Language", selection: $language) {
+                ForEach(AppLanguage.allCases) { option in
+                    Text(verbatim: option.displayName).tag(option.rawValue)
+                }
+            }
+            .onChange(of: language) { _, newValue in
+                AppLanguage.apply(AppLanguage(rawValue: newValue) ?? .system)
+            }
+            // Changing AppleLanguages only takes effect on the next process start.
+            Text("Changing language takes effect after you quit and reopen herdrm.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }

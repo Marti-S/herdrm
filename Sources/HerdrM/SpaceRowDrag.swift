@@ -100,14 +100,14 @@ final class SpaceRowDragNSView: NSView, NSDraggingSource {
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
         let rename = menu.addItem(
-            withTitle: "Rename Space…",
+            withTitle: String(localized: "Rename Space…"),
             action: #selector(renameSpace),
             keyEquivalent: ""
         )
         rename.target = self
         menu.addItem(.separator())
         let close = menu.addItem(
-            withTitle: "Close Space \"\(label)\"…",
+            withTitle: String(localized: "Close Space \"\(label)\"…"),
             action: #selector(closeSpace),
             keyEquivalent: ""
         )

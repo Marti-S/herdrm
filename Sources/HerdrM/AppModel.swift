@@ -348,7 +348,8 @@ final class AppModel: ObservableObject {
 
     /// Every click opens another terminal, like New Agent opens another agent.
     func newShellSession() {
-        let session = ShellSession(id: UUID(), title: "Terminal \(shellSessions.count + 1)")
+        let n = shellSessions.count + 1
+        let session = ShellSession(id: UUID(), title: String(localized: "Terminal \(n)"))
         shellSessions.append(session)
         selectShell(session.id)
     }
@@ -519,7 +520,7 @@ final class AppModel: ObservableObject {
     func cancelSSHAuthentication(for request: SSHAuthenticationRequest) {
         sshAuthenticationRequest = nil
         sessions[request.deviceID]?.connection =
-            .failed("Authentication cancelled — choose Reconnect to try again")
+            .failed(String(localized: "Authentication cancelled — choose Reconnect to try again"))
     }
 
     var hasReconnectableDevice: Bool {
@@ -678,13 +679,13 @@ final class AppModel: ObservableObject {
         else { return error.localizedDescription }
         switch session(device.id).connection {
         case .connecting:
-            return "Still connecting to \(device.name) — try again in a moment."
+            return String(localized: "Still connecting to \(device.name) — try again in a moment.")
         case .failed(let reason):
-            return "\(device.name) is unreachable: \(reason)"
+            return String(localized: "\(device.name) is unreachable: \(reason)")
         case .idle:
-            return "\(device.name) isn't connected."
+            return String(localized: "\(device.name) isn't connected.")
         case .connected:
-            return "\(device.name) just reconnected — try again."
+            return String(localized: "\(device.name) just reconnected — try again.")
         }
     }
 
@@ -692,8 +693,8 @@ final class AppModel: ObservableObject {
 
     func requestCloseSpace(_ entry: SpaceEntry) {
         closeRequest = CloseRequest(
-            title: "Close space \"\(entry.workspace.label)\" on \(entry.device.name)?",
-            message: "All terminals and agents in this space will be closed."
+            title: String(localized: "Close space \"\(entry.workspace.label)\" on \(entry.device.name)?"),
+            message: String(localized: "All terminals and agents in this space will be closed.")
         ) { [weak self] in
             guard let self else { return }
             Task {
@@ -712,8 +713,8 @@ final class AppModel: ObservableObject {
     func requestClosePane(_ ref: PaneRef, name: String) {
         guard let device = device(ref.deviceID) else { return }
         closeRequest = CloseRequest(
-            title: "Close \"\(name)\"?",
-            message: "The pane and whatever is running inside it will be terminated."
+            title: String(localized: "Close \"\(name)\"?"),
+            message: String(localized: "The pane and whatever is running inside it will be terminated.")
         ) { [weak self] in
             guard let self else { return }
             Task {
