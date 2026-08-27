@@ -77,6 +77,8 @@ macOS window on top of it, and it's grown well past "attach to a terminal":
 ### A real terminal, not a chat wrapper
 - **Live terminal** — attaches directly to the agent's PTY (`herdr agent attach`); grabs
   keyboard focus the moment you jump in from ⌘K, the sidebar, or a notification.
+- **Standalone terminals** — open a local login shell or choose any configured SSH device;
+  remote shells reuse the same OpenSSH config, agent, host-key, and Keychain password flow.
 - **Native text selection** — drag to select, no Shift needed; right-click for Copy/Paste/Select
   All plus link actions (⌘-click opens a URL).
 - **Legibility controls** — Thin strokes, font Weight, and Line spacing settings.
