@@ -24,6 +24,9 @@ struct SidebarView: View {
     @State private var deviceButtonHovered = false
     @State private var draggingSpaceID: String?
     @State private var spaceDrop: (id: String, after: Bool)?
+    @State private var spacesExpanded = true
+    @State private var agentsExpanded = true
+    @State private var terminalsExpanded = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,14 +61,11 @@ struct SidebarView: View {
 
             ScrollView {
                 VStack(spacing: 1) {
-                    HStack(spacing: 5) {
-                        Text("Spaces")
-                            .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(Theme.textTertiary)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(Theme.textGhost)
-                        Spacer()
+                    // Title + chevron used to be a decorative HStack with no
+                    // tap target, so the chevron promised a disclosure that
+                    // never fired. Trailing New Space stays a sibling Button
+                    // so it does not toggle the section.
+                    groupHeader("Spaces", expanded: $spacesExpanded) {
                         Button {
                             model.showNewSpace = true
                         } label: {
@@ -77,48 +77,53 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.plain)
                         .help("New Space")
+                        .focusEffectDisabled()
                     }
-                    .padding(.horizontal, 8)
-                    .frame(height: 28)
-                    allSpacesRow
-                    ForEach(model.visibleSpaces) { entry in
-                        SpaceRowView(
-                            entry: entry,
-                            model: model,
-                            draggingSpaceID: $draggingSpaceID,
-                            spaceDrop: $spaceDrop
-                        )
+                    if spacesExpanded {
+                        allSpacesRow
+                        ForEach(model.visibleSpaces) { entry in
+                            SpaceRowView(
+                                entry: entry,
+                                model: model,
+                                draggingSpaceID: $draggingSpaceID,
+                                spaceDrop: $spaceDrop
+                            )
+                        }
                     }
 
                     Spacer().frame(height: 10)
 
-                    groupHeader("Agents")
-                    if model.visibleAgents.isEmpty {
-                        Text(emptyAgentsHint)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Theme.textGhost)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                    }
-                    ForEach(model.visibleAgents) { entry in
-                        agentRow(entry)
-                            .contextMenu {
-                                Button("Close Agent…", role: .destructive) {
-                                    model.requestClosePane(entry.ref, name: entry.agent.title)
+                    groupHeader("Agents", expanded: $agentsExpanded)
+                    if agentsExpanded {
+                        if model.visibleAgents.isEmpty {
+                            Text(emptyAgentsHint)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Theme.textGhost)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                        }
+                        ForEach(model.visibleAgents) { entry in
+                            agentRow(entry)
+                                .contextMenu {
+                                    Button("Close Agent…", role: .destructive) {
+                                        model.requestClosePane(entry.ref, name: entry.agent.title)
+                                    }
                                 }
-                            }
+                        }
                     }
 
                     if !model.shellSessions.isEmpty {
                         Spacer().frame(height: 10)
-                        groupHeader("Terminals")
-                        ForEach(model.shellSessions) { session in
-                            shellRow(session)
-                                .contextMenu {
-                                    Button("Close Terminal", role: .destructive) {
-                                        model.closeShellSession(session.id)
+                        groupHeader("Terminals", expanded: $terminalsExpanded)
+                        if terminalsExpanded {
+                            ForEach(model.shellSessions) { session in
+                                shellRow(session)
+                                    .contextMenu {
+                                        Button("Close Terminal", role: .destructive) {
+                                            model.closeShellSession(session.id)
+                                        }
                                     }
-                                }
+                            }
                         }
                     }
                 }
@@ -159,17 +164,44 @@ struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(SidebarRowButtonStyle())
+        // CSS `outline: none` is not a SwiftUI concept. This is the native
+        // equivalent for chrome (New Agent / New Terminal / Search). List
+        // rows keep their focus ring for keyboard access.
+        .focusEffectDisabled()
     }
 
-    private func groupHeader(_ title: String) -> some View {
+    private func groupHeader(_ title: String, expanded: Binding<Bool>) -> some View {
+        groupHeader(title, expanded: expanded) { EmptyView() }
+    }
+
+    private func groupHeader<Trailing: View>(
+        _ title: String,
+        expanded: Binding<Bool>,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
         HStack(spacing: 5) {
-            Text(title)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(Theme.textTertiary)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(Theme.textGhost)
-            Spacer()
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expanded.wrappedValue.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(Theme.textTertiary)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.textGhost)
+                        .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .disclosureAccessibility(expanded: expanded.wrappedValue)
+
+            trailing()
         }
         .padding(.horizontal, 8)
         .frame(height: 28)
@@ -336,6 +368,7 @@ struct SidebarView: View {
                     .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
+            .focusEffectDisabled()
         }
         .padding(.horizontal, 10)
         .frame(height: 40)
@@ -371,6 +404,7 @@ struct TitlebarIconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .onHover { hovered = $0 }
         .help(help)
     }
@@ -546,6 +580,16 @@ struct DevicePopoverRow: View {
                 .fill(hovered || isActive ? AnyShapeStyle(Theme.itemWashSelected) : AnyShapeStyle(.clear))
         )
         .onHover { hovered = $0 }
+    }
+}
+
+private extension View {
+    /// Button trait plus expanded/collapsed so VoiceOver matches the chevron.
+    /// macOS SwiftUI has no `accessibilityExpanded`; VoiceOver reads the value.
+    func disclosureAccessibility(expanded: Bool) -> some View {
+        self
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
     }
 }
 
