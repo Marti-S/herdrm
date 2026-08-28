@@ -110,7 +110,7 @@ struct SidebarView: View {
                                     }
                                     Divider()
                                     Button("Close Agent…", role: .destructive) {
-                                    model.requestClosePane(entry.ref, name: entry.title)
+                                        model.requestClosePane(entry.ref, name: entry.title)
                                     }
                                 }
                         }

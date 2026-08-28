@@ -163,6 +163,21 @@ final class AgentTitleTests: XCTestCase {
         XCTAssertEqual(title, "agy-da7c")
     }
 
+    func testNumericDefaultTabLabelIsNotACustomLabel() {
+        // herdr labels fresh tabs with their number; live protocol-20 snapshots
+        // show agents in tabs labeled "1". Those must not become the title.
+        let fresh = TabInfo(
+            tabID: "w1:t1", workspaceID: "w1", number: 1, label: "1",
+            focused: true, paneCount: 1, agentStatusRaw: "idle"
+        )
+        XCTAssertNil(fresh.customLabel)
+        let renamed = TabInfo(
+            tabID: "w1:t2", workspaceID: "w1", number: 2, label: "制度图谱讨论",
+            focused: false, paneCount: 1, agentStatusRaw: nil
+        )
+        XCTAssertEqual(renamed.customLabel, "制度图谱讨论")
+    }
+
     private func decode(_ json: String) throws -> AgentInfo {
         try JSONDecoder().decode(AgentInfo.self, from: Data(json.utf8))
     }

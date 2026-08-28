@@ -236,7 +236,7 @@ final class AppModel: ObservableObject {
         AgentEntry(
             device: device,
             agent: agent,
-            tabLabel: session(device.id).tabs.first { $0.tabID == agent.tabID }?.label
+            tabLabel: session(device.id).tabs.first { $0.tabID == agent.tabID }?.customLabel
         )
     }
 
@@ -638,7 +638,7 @@ final class AppModel: ObservableObject {
         for agent in agents {
             guard let old = previous[agent.paneID], old != agent.status else { continue }
             guard agent.status == .blocked || agent.status == .done else { continue }
-            let tabLabel = tabs.first { $0.tabID == agent.tabID }?.label
+            let tabLabel = tabs.first { $0.tabID == agent.tabID }?.customLabel
             NotificationManager.shared.post(
                 agent: agent,
                 title: agent.title(tabLabel: tabLabel),

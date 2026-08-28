@@ -207,6 +207,15 @@ public struct TabInfo: Codable, Sendable, Identifiable, Equatable {
 
     public var id: String { tabID }
 
+    /// herdr labels fresh tabs with their number ("1", "2"); only a label
+    /// someone actually set is a display name.
+    public var customLabel: String? {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let number, trimmed == String(number) { return nil }
+        return trimmed
+    }
+
     enum CodingKeys: String, CodingKey {
         case tabID = "tab_id"
         case workspaceID = "workspace_id"
