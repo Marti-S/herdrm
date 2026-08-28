@@ -95,8 +95,9 @@ macOS window on top of it, and it's grown well past "attach to a terminal":
   upload or download regular files with progress, cancellation, and explicit Replace / Keep
   Both conflict handling. Transfers use the same OpenSSH config, agent, host-key, and Keychain
   password flow as terminals.
-- **Paste files and images** into Claude Code, Codex, or Copilot. Local pastes forward as
-  Ctrl+V; remote pastes stream over SSH into a self-pruning cache (7-day retention, 50 MB cap).
+- **Paste files and images** into Claude Code, Codex, Copilot, Cursor, Gemini, Grok, OpenCode,
+  or pi. Local pastes forward as Ctrl+V so the agent reads the clipboard itself; remote pastes
+  stream over SSH into a self-pruning cache (7-day retention, 50 MB cap) and paste the path.
 - **Search** — ⌘K across every device, ordered by urgency, scrolling to follow your selection.
 - **Notifications** — a sound and a system alert when any agent finishes or needs input;
   clicking jumps straight to it. Agents you're already watching stay quiet.

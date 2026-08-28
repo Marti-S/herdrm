@@ -371,6 +371,98 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         XCTAssertNil(capabilityAwareRegistry.capabilities(for: "claude"))
     }
 
+    /// herdr 0.8.2's `server.agent_manifests` reports only an id and version —
+    /// no aliases, no capabilities — so the built-in table has to recognize the
+    /// bare manifest ids. Kinds outside it must stay nil and paste as plain text.
+    func testBuiltInFallbackCoversVerifiedAgentKinds() throws {
+        let data = Data(
+            """
+            [
+              { "agent": "claude", "active_version": "2026.08.21.1" },
+              { "agent": "codex", "active_version": "2026.08.09.1" },
+              { "agent": "copilot", "active_version": "2026.07.07.1" },
+              { "agent": "cursor", "active_version": "2026.08.03.1" },
+              { "agent": "gemini", "active_version": "2026.06.10.1" },
+              { "agent": "grok", "active_version": "2026.07.16.2" },
+              { "agent": "opencode", "active_version": "2026.06.10.1" },
+              { "agent": "pi", "active_version": "2026.06.10.1" },
+              { "agent": "kimi", "active_version": "2026.06.10.1" }
+            ]
+            """.utf8
+        )
+        let registry = AgentAttachmentCapabilityRegistry(
+            manifests: try JSONDecoder().decode([AgentManifestInfo].self, from: data)
+        )
+
+        for kind in ["claude", "codex", "copilot", "cursor", "gemini", "grok", "opencode", "pi"] {
+            XCTAssertEqual(
+                registry.capabilities(for: kind),
+                pathCapabilities,
+                "\(kind) should support pasted attachments"
+            )
+        }
+
+        // herdr's own manifest aliases, in case detection ever reports one.
+        XCTAssertEqual(registry.capabilities(for: "cursor-agent"), pathCapabilities)
+        XCTAssertEqual(registry.capabilities(for: "grok-build"), pathCapabilities)
+        XCTAssertEqual(registry.capabilities(for: "open-code"), pathCapabilities)
+
+        // Advertised by herdr but unverified here: no capabilities, plain paste.
+        XCTAssertNil(registry.capabilities(for: "kimi"))
+        XCTAssertNil(registry.capabilities(for: "devin"))
+    }
+
+    func testVerifiedAgentsDeliverImagesLocallyAndRemotely() throws {
+        let data = Data(
+            """
+            [
+              { "agent": "cursor" },
+              { "agent": "gemini" },
+              { "agent": "grok" },
+              { "agent": "opencode" },
+              { "agent": "pi" }
+            ]
+            """.utf8
+        )
+        let registry = AgentAttachmentCapabilityRegistry(
+            manifests: try JSONDecoder().decode([AgentManifestInfo].self, from: data)
+        )
+        let remote = Device.Kind.ssh(target: "user@example.test")
+
+        for kind in ["cursor", "gemini", "grok", "opencode", "pi"] {
+            let capabilities = registry.capabilities(for: kind)
+            // Local: the agent shells out to osascript and reads the clipboard.
+            XCTAssertEqual(
+                AgentAttachmentDeliveryPolicy.action(
+                    capabilities: capabilities,
+                    deviceKind: .local,
+                    source: .imageData
+                ),
+                .nativeClipboard,
+                "\(kind) should read the local clipboard"
+            )
+            // Remote: the Mac clipboard is unreachable, so stage and paste paths.
+            XCTAssertEqual(
+                AgentAttachmentDeliveryPolicy.action(
+                    capabilities: capabilities,
+                    deviceKind: remote,
+                    source: .imageData
+                ),
+                .devicePaths(.shellQuoted),
+                "\(kind) should paste a staged remote path"
+            )
+            XCTAssertEqual(
+                AgentAttachmentDeliveryPolicy.action(
+                    capabilities: capabilities,
+                    deviceKind: .local,
+                    source: .files(allImages: false)
+                ),
+                .devicePaths(.shellQuoted),
+                "\(kind) should paste a local path for generic files"
+            )
+        }
+    }
+
     func testLocalDeliveryUsesNativeClipboardForImages() {
         XCTAssertEqual(
             AgentAttachmentDeliveryPolicy.action(
