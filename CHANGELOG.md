@@ -7,6 +7,11 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- Standalone terminals can now open a local login shell or connect to any
+  configured device over SSH, reusing the device's OpenSSH config, agent,
+  host-key, and Keychain password flow. (#54, thanks @ljxw88!)
+
 ### Fixed
 - Rename Agent now sets the herdr tab label (`tab.rename`) instead of
   `agent.rename`. Tab labels accept Chinese, spaces, and punctuation; agent

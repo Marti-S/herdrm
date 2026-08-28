@@ -104,6 +104,12 @@ struct HerdrMApp: App {
             }
 
             CommandMenu("Terminal") {
+                Button("New Terminal…") { focusedModel?.showNewTerminal = true }
+                    .keyboardShortcut("t", modifiers: .command)
+                    .disabled(focusedModel == nil)
+
+                Divider()
+
                 // Guarded on selectedEntry, not just on the model: with the placeholder
                 // on screen there is no SplitContainer to render into, so a split would
                 // be invisible yet leave shellSplitAxis non-nil — and the next ⌘W would

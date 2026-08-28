@@ -106,6 +106,30 @@ final class SSHDestinationTests: XCTestCase {
 }
 
 final class AttachBinarySelectionTests: XCTestCase {
+    func testStandaloneTerminalCommandsMatchDeviceTransport() {
+        let local = HerdrService(
+            device: Device(name: "L", kind: .local),
+            autoStartLocalServer: false
+        ).terminalCommand()
+        XCTAssertEqual(local.executable, "/bin/sh")
+        XCTAssertTrue(local.args.last?.contains("exec \"${SHELL:-/bin/zsh}\" -l") == true)
+        XCTAssertNil(local.authorizationID)
+
+        let remote = HerdrService(
+            device: Device(
+                id: UUID(),
+                name: "R",
+                kind: .ssh(target: "user@example.test:2222")
+            ),
+            autoStartLocalServer: false
+        ).terminalCommand()
+        XCTAssertEqual(remote.executable, "/usr/bin/ssh")
+        XCTAssertTrue(remote.args.contains("-tt"))
+        XCTAssertTrue(remote.args.contains("StrictHostKeyChecking=accept-new"))
+        XCTAssertTrue(remote.args.contains("ServerAliveInterval=15"))
+        XCTAssertEqual(remote.args.last, "ssh://user@example.test:2222")
+    }
+
     func testKnownServerVersionProbesForAnExactMatch() {
         let fragment = HerdrService.attachBinarySelection(serverVersion: "0.8.2")
         XCTAssertTrue(fragment.contains("for d in $PATH"))

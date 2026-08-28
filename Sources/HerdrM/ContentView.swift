@@ -56,6 +56,7 @@ struct RootView: View {
         .onAppear { model.start() }
         .sheet(isPresented: $model.showAddDevice) { AddDeviceSheet(model: model) }
         .sheet(isPresented: $model.showNewAgent) { NewAgentSheet(model: model) }
+        .sheet(isPresented: $model.showNewTerminal) { NewTerminalSheet(model: model) }
         .sheet(isPresented: $model.showNewSpace) { NewSpaceSheet(model: model) }
         .sheet(item: $model.spaceToRename) { entry in RenameSpaceSheet(model: model, entry: entry) }
         .sheet(item: $model.agentToRename) { entry in RenameAgentSheet(model: model, entry: entry) }
@@ -144,7 +145,7 @@ struct DetailView: View {
                 Text(shell.title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Theme.text)
-                Text("Local")
+                Text(shell.device.name)
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textTertiary)
                 Spacer()
@@ -247,6 +248,7 @@ struct DetailView: View {
             ForEach(model.shellSessions) { session in
                 ShellTerminalView(
                     sessionID: session.id,
+                    device: session.device,
                     fontName: terminalFontName,
                     fontSize: terminalFontSize,
                     thinStrokes: terminalThinStrokes,
@@ -602,6 +604,71 @@ struct SheetSectionLabel: View {
             .font(.system(size: 10.5, weight: .medium))
             .kerning(0.4)
             .foregroundStyle(Theme.textTertiary)
+    }
+}
+
+struct NewTerminalSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var deviceID = Device.local.id
+
+    private var chosenDevice: Device {
+        model.device(deviceID) ?? .local
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(
+                systemImage: "terminal",
+                title: String(localized: "New Terminal"),
+                subtitle: chosenDevice.isLocal
+                    ? String(localized: "Start a login shell on this Mac")
+                    : String(localized: "Connect to \(chosenDevice.name) over SSH")
+            )
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 8) {
+                SheetSectionLabel("DEVICE")
+                Picker("", selection: $deviceID) {
+                    ForEach(model.devices) { device in
+                        Text(device.name).tag(device.id)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+
+                if let target = chosenDevice.sshTarget {
+                    Text(target)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            .padding(16)
+
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Open Terminal") {
+                    model.newShellSession(on: chosenDevice)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 400)
+        .onAppear {
+            deviceID = model.deviceFilter
+                ?? model.selectedEntry?.device.id
+                ?? model.devices.first?.id
+                ?? Device.local.id
+        }
     }
 }
 

@@ -64,11 +64,12 @@ enum SplitAxis { case vertical, horizontal }
 /// keyboard-driven resize; standalone `ShellSession`s are not part of this.
 enum SplitSide { case agent, shell }
 
-/// A standalone local shell shown as its own sidebar entry — not a herdr pane
+/// A standalone local or SSH shell shown as its own sidebar entry — not a herdr pane
 /// (herdr refuses to attach agent-less panes) and not the ⌘D split.
 struct ShellSession: Identifiable, Equatable {
     let id: UUID
     var title: String
+    let device: Device
 }
 
 /// Per-kind CLI path overrides persisted in user defaults. Empty means automatic
@@ -118,6 +119,7 @@ final class AppModel: ObservableObject {
 
     @Published var showAddDevice = false
     @Published var showNewAgent = false
+    @Published var showNewTerminal = false
     @Published var showNewSpace = false
     @Published var showSearch = false
     @Published var shellSplitAxis: SplitAxis?
@@ -137,7 +139,7 @@ final class AppModel: ObservableObject {
     /// Held weakly so the views are not kept alive by the model.
     weak var splitAgentView: LocalProcessTerminalView?
     weak var splitShellView: LocalProcessTerminalView?
-    /// Standalone local terminals. Their views stay alive while deselected —
+    /// Standalone terminals. Their views stay alive while deselected —
     /// unlike agents, a local shell has no server side to reattach to.
     @Published var shellSessions: [ShellSession] = []
     @Published var selectedShellID: UUID?
@@ -359,9 +361,13 @@ final class AppModel: ObservableObject {
     }
 
     /// Every click opens another terminal, like New Agent opens another agent.
-    func newShellSession() {
+    func newShellSession(on device: Device) {
         let n = shellSessions.count + 1
-        let session = ShellSession(id: UUID(), title: String(localized: "Terminal \(n)"))
+        let session = ShellSession(
+            id: UUID(),
+            title: String(localized: "Terminal \(n)"),
+            device: device
+        )
         shellSessions.append(session)
         selectShell(session.id)
     }

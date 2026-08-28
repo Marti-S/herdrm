@@ -46,10 +46,10 @@ struct SidebarView: View {
                 actionRow(icon: "square.and.pencil", label: "New Agent") {
                     model.showNewAgent = true
                 }
-                // Every click opens another standalone local shell, listed under
-                // TERMINALS below — the ⌘D split beside an agent is separate.
+                // Standalone terminals are listed under TERMINALS below; the
+                // ⌘D split beside an agent remains a local shell.
                 actionRow(icon: "terminal", label: "New Terminal") {
-                    model.newShellSession()
+                    model.showNewTerminal = true
                 }
                 actionRow(icon: "magnifyingglass", label: "Search") {
                     model.showSearch = true
@@ -292,7 +292,7 @@ struct SidebarView: View {
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                Text("Local")
+                Text(session.device.name)
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.textGhost)
             }
