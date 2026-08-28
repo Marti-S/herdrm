@@ -110,7 +110,7 @@ struct SidebarView: View {
                                     }
                                     Divider()
                                     Button("Close Agent…", role: .destructive) {
-                                        model.requestClosePane(entry.ref, name: entry.agent.title)
+                                    model.requestClosePane(entry.ref, name: entry.title)
                                     }
                                 }
                         }
@@ -244,7 +244,7 @@ struct SidebarView: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(agent.title)
+                    Text(entry.title)
                         .font(.system(size: 13.5))
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)

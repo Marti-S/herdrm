@@ -44,6 +44,7 @@ struct DeviceSessionState {
     var connection: ConnectionState = .idle
     var agents: [AgentInfo] = []
     var workspaces: [WorkspaceInfo] = []
+    var tabs: [TabInfo] = []
     var panes: [PaneInfo] = []
     var agentCatalog: AgentCatalogState = .loading
     var attachmentCapabilities = AgentAttachmentCapabilityRegistry()
@@ -224,9 +225,19 @@ final class AppModel: ObservableObject {
     struct AgentEntry: Identifiable {
         let device: Device
         let agent: AgentInfo
+        let tabLabel: String?
 
         var id: String { "\(device.id.uuidString)-\(agent.paneID)" }
         var ref: PaneRef { PaneRef(deviceID: device.id, paneID: agent.paneID) }
+        var title: String { agent.title(tabLabel: tabLabel) }
+    }
+
+    func agentEntry(device: Device, agent: AgentInfo) -> AgentEntry {
+        AgentEntry(
+            device: device,
+            agent: agent,
+            tabLabel: session(device.id).tabs.first { $0.tabID == agent.tabID }?.label
+        )
     }
 
     struct SpaceEntry: Identifiable {
@@ -246,7 +257,7 @@ final class AppModel: ObservableObject {
     /// Agents across the scope, filtered by selected space, status-bucket sorted.
     var visibleAgents: [AgentEntry] {
         var entries = devicesInScope.flatMap { device in
-            session(device.id).agents.map { AgentEntry(device: device, agent: $0) }
+            session(device.id).agents.map { agentEntry(device: device, agent: $0) }
         }
         if let space = selectedSpace {
             entries = entries.filter {
@@ -269,7 +280,7 @@ final class AppModel: ObservableObject {
         guard let selected = selectedPane, let device = device(selected.deviceID) else { return nil }
         guard let agent = session(selected.deviceID).agents.first(where: { $0.paneID == selected.paneID })
         else { return nil }
-        return AgentEntry(device: device, agent: agent)
+        return agentEntry(device: device, agent: agent)
     }
 
     func agentCount(in entry: SpaceEntry) -> Int {
@@ -579,13 +590,15 @@ final class AppModel: ObservableObject {
                 device: device,
                 from: previousStatuses[deviceID] ?? [:],
                 to: snapshot.agents,
-                workspaces: snapshot.workspaces
+                workspaces: snapshot.workspaces,
+                tabs: snapshot.tabs ?? []
             )
             previousStatuses[deviceID] = Dictionary(
                 uniqueKeysWithValues: snapshot.agents.map { ($0.paneID, $0.status) }
             )
             sessions[deviceID]?.agents = snapshot.agents
             sessions[deviceID]?.workspaces = snapshot.workspaces
+            sessions[deviceID]?.tabs = snapshot.tabs ?? []
             sessions[deviceID]?.panes = snapshot.panes ?? []
             if let selected = selectedPane, selected.deviceID == deviceID,
                !snapshot.agents.contains(where: { $0.paneID == selected.paneID }) {
@@ -618,14 +631,17 @@ final class AppModel: ObservableObject {
         device: Device,
         from previous: [String: AgentStatus],
         to agents: [AgentInfo],
-        workspaces: [WorkspaceInfo]
+        workspaces: [WorkspaceInfo],
+        tabs: [TabInfo]
     ) {
         guard !previous.isEmpty else { return }
         for agent in agents {
             guard let old = previous[agent.paneID], old != agent.status else { continue }
             guard agent.status == .blocked || agent.status == .done else { continue }
+            let tabLabel = tabs.first { $0.tabID == agent.tabID }?.label
             NotificationManager.shared.post(
                 agent: agent,
+                title: agent.title(tabLabel: tabLabel),
                 status: agent.status,
                 deviceID: device.id,
                 deviceName: device.name,
@@ -750,12 +766,12 @@ final class AppModel: ObservableObject {
 
     func renameAgent(_ entry: AgentEntry, name: String) {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name != entry.agent.name else { return }
+        guard !name.isEmpty, name != entry.title else { return }
         Task {
             do {
-                try await service(for: entry.device).renameAgent(
-                    target: entry.agent.paneID,
-                    name: name
+                try await service(for: entry.device).renameTab(
+                    tabID: entry.agent.tabID,
+                    label: name
                 )
                 await refresh(entry.device.id)
             } catch {
