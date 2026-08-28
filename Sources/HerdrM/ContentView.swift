@@ -102,6 +102,7 @@ enum TitlebarMetrics {
 struct DetailView: View {
     @ObservedObject var model: AppModel
     @Binding var sidebarCollapsed: Bool
+    @State private var hasOpenedFileManager = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -109,8 +110,7 @@ struct DetailView: View {
                 .background(Theme.contentBackground)
                 .zIndex(1)
             Rectangle().fill(Theme.hairline).frame(height: 1)
-            terminal
-                .clipped()
+            detailContent
                 // Losing the selected agent tears the SplitContainer down without
                 // resetting the axis, which would leave the same phantom split.
                 //
@@ -123,9 +123,29 @@ struct DetailView: View {
                 .onChange(of: model.selectedAttachedEntry?.id) { _, id in
                     if id == nil { model.shellSplitAxis = nil }
                 }
+                .onChange(of: model.isFileManagerActive) { _, active in
+                    if active { hasOpenedFileManager = true }
+                }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.contentBackground.ignoresSafeArea())
+    }
+
+    private var detailContent: some View {
+        ZStack {
+            terminal
+                .clipped()
+                .opacity(model.isFileManagerActive ? 0 : 1)
+                .allowsHitTesting(!model.isFileManagerActive)
+            if hasOpenedFileManager {
+                DeviceFilesView(model: model)
+                    .opacity(model.isFileManagerActive ? 1 : 0)
+                    .allowsHitTesting(model.isFileManagerActive)
+            }
+        }
+        .onAppear {
+            if model.isFileManagerActive { hasOpenedFileManager = true }
+        }
     }
 
     // MARK: - Titlebar strip (28pt, traditional)
@@ -138,7 +158,15 @@ struct DetailView: View {
                     sidebarCollapsed = false
                 }
             }
-            if let shell = model.selectedShell {
+            if model.isFileManagerActive {
+                Image(systemName: "folder")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+                Text("Files")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                Spacer()
+            } else if let shell = model.selectedShell {
                 Image(systemName: "terminal")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.textTertiary)

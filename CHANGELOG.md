@@ -17,6 +17,9 @@ the Sparkle update description — a release without a section here fails CI.
   shell, reusing the device's OpenSSH config, agent, host-key, and Keychain
   password flow. Pick "Standalone" in the New Terminal sheet. (#54, thanks
   @ljxw88!)
+- A two-pane Files workspace browses local and SSH-device files and copies
+  regular files in either direction with progress, cancellation, atomic
+  staging, and Replace / Keep Both conflict handling. (#55, thanks @ljxw88!)
 
 ### Fixed
 - Rename Agent now sets the herdr tab label (`tab.rename`) instead of
