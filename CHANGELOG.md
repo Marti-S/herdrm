@@ -11,6 +11,10 @@ the Sparkle update description — a release without a section here fails CI.
 - Rename Agent now sets the herdr tab label (`tab.rename`) instead of
   `agent.rename`. Tab labels accept Chinese, spaces, and punctuation; agent
   identifiers do not (`[a-z][a-z0-9_-]{0,31}`). The sidebar shows that label.
+  (#59, thanks @JackieJam!)
+- Remote terminal attaches now inherit the captured shell environment, so
+  OpenSSH keeps the user's `PATH` and `SSH_AUTH_SOCK` when evaluating SSH
+  configuration and agent-backed identities. (#56, thanks @OnkayC!)
 
 ## [0.5.1] - 2026-08-27
 
