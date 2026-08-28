@@ -52,8 +52,9 @@ auto-bumped after each release.
   `pane.agent_status_changed` / `pane.scroll_changed` / `pane.output_matched` are
   pane-scoped (require `pane_id`) and cannot be subscribed globally — status changes
   arrive globally as `pane.updated`. Full global kind list: `HerdrEvent.allKinds`.
-- Terminal attach: `herdr agent attach <pane_id> --takeover` (takes the pane over from
-  other attached clients). Remote devices run it through `ssh -tt` with PATH prepended
+- Terminal attach: agents use `herdr agent attach <pane_id> --takeover`; bare shells use
+  `herdr terminal attach <terminal_id> --takeover` (takes the pane over from other attached
+  clients). Remote devices run it through `ssh -tt` with PATH prepended
   (`sshd` exec is not a login shell; herdr lives in `/opt/homebrew/bin` on macOS hosts).
 - Agent status buckets sort Blocked > Done > Working > Idle (matches Heeler).
 

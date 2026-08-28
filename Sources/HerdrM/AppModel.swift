@@ -45,6 +45,7 @@ struct DeviceSessionState {
     var agents: [AgentInfo] = []
     var workspaces: [WorkspaceInfo] = []
     var panes: [PaneInfo] = []
+    var tabs: [TabInfo] = []
     var agentCatalog: AgentCatalogState = .loading
     var attachmentCapabilities = AgentAttachmentCapabilityRegistry()
 }
@@ -60,15 +61,8 @@ struct SSHAuthenticationRequest: Identifiable {
 enum SplitAxis { case vertical, horizontal }
 
 /// Identifies one of the two panes in the ⌘D split. Used for focus tracking and
-/// keyboard-driven resize; standalone `ShellSession`s are not part of this.
+/// keyboard-driven resize.
 enum SplitSide { case agent, shell }
-
-/// A standalone local shell shown as its own sidebar entry — not a herdr pane
-/// (herdr refuses to attach agent-less panes) and not the ⌘D split.
-struct ShellSession: Identifiable, Equatable {
-    let id: UUID
-    var title: String
-}
 
 /// Per-kind CLI path overrides persisted in user defaults. Empty means automatic
 /// lookup on the login-shell search PATH. Invalid paths hide that kind until
@@ -117,6 +111,7 @@ final class AppModel: ObservableObject {
 
     @Published var showAddDevice = false
     @Published var showNewAgent = false
+    @Published var showNewTerminal = false
     @Published var showNewSpace = false
     @Published var showSearch = false
     @Published var shellSplitAxis: SplitAxis?
@@ -136,10 +131,6 @@ final class AppModel: ObservableObject {
     /// Held weakly so the views are not kept alive by the model.
     weak var splitAgentView: LocalProcessTerminalView?
     weak var splitShellView: LocalProcessTerminalView?
-    /// Standalone local terminals. Their views stay alive while deselected —
-    /// unlike agents, a local shell has no server side to reattach to.
-    @Published var shellSessions: [ShellSession] = []
-    @Published var selectedShellID: UUID?
     /// In-window device panel (NSPopover crashes in ViewBridge on macOS 26+ betas).
     @Published var showDevicePanel = false
     @Published var deviceToEdit: Device?
@@ -229,6 +220,71 @@ final class AppModel: ObservableObject {
         var ref: PaneRef { PaneRef(deviceID: device.id, paneID: agent.paneID) }
     }
 
+    struct TerminalEntry: Identifiable {
+        let device: Device
+        let pane: PaneInfo
+        let tab: TabInfo?
+        let terminalID: String
+
+        var id: String { "\(device.id.uuidString)-\(pane.paneID)" }
+        var ref: PaneRef { PaneRef(deviceID: device.id, paneID: pane.paneID) }
+
+        var title: String {
+            if let terminalTitle = pane.terminalTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !terminalTitle.isEmpty {
+                return terminalTitle
+            }
+            if let tab, !tab.label.isEmpty, tab.label != (tab.number.map(String.init) ?? "") {
+                return tab.label
+            }
+            if let cwd = pane.cwd, !cwd.isEmpty {
+                let basename = URL(fileURLWithPath: cwd).lastPathComponent
+                if !basename.isEmpty { return basename }
+            }
+            return String(localized: "Terminal")
+        }
+    }
+
+    enum AttachedEntry: Identifiable {
+        case agent(AgentEntry)
+        case terminal(TerminalEntry)
+
+        var id: String {
+            switch self {
+            case .agent(let entry): return "agent-\(entry.id)"
+            case .terminal(let entry): return "terminal-\(entry.id)"
+            }
+        }
+
+        var device: Device {
+            switch self {
+            case .agent(let entry): return entry.device
+            case .terminal(let entry): return entry.device
+            }
+        }
+
+        var ref: PaneRef {
+            switch self {
+            case .agent(let entry): return entry.ref
+            case .terminal(let entry): return entry.ref
+            }
+        }
+
+        var workspaceID: String {
+            switch self {
+            case .agent(let entry): return entry.agent.workspaceID
+            case .terminal(let entry): return entry.pane.workspaceID
+            }
+        }
+
+        var attachTarget: TerminalAttachTarget {
+            switch self {
+            case .agent(let entry): return .agent(paneID: entry.agent.paneID)
+            case .terminal(let entry): return .terminal(terminalID: entry.terminalID)
+            }
+        }
+    }
+
     struct SpaceEntry: Identifiable {
         let device: Device
         let workspace: WorkspaceInfo
@@ -261,6 +317,30 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func terminalEntries(for device: Device) -> [TerminalEntry] {
+        let state = session(device.id)
+        let tabsByID = Dictionary(uniqueKeysWithValues: state.tabs.map { ($0.tabID, $0) })
+        return state.panes.compactMap { pane in
+            guard let terminalID = pane.terminalID else { return nil }
+            return TerminalEntry(
+                device: device,
+                pane: pane,
+                tab: pane.tabID.flatMap { tabsByID[$0] },
+                terminalID: terminalID
+            )
+        }
+    }
+
+    var visibleTerminals: [TerminalEntry] {
+        var entries = devicesInScope.flatMap { terminalEntries(for: $0) }
+        if let space = selectedSpace {
+            entries = entries.filter {
+                $0.device.id == space.deviceID && $0.pane.workspaceID == space.workspaceID
+            }
+        }
+        return entries
+    }
+
     var scopeAgentCount: Int {
         devicesInScope.reduce(0) { $0 + session($1.id).agents.count }
     }
@@ -270,6 +350,21 @@ final class AppModel: ObservableObject {
         guard let agent = session(selected.deviceID).agents.first(where: { $0.paneID == selected.paneID })
         else { return nil }
         return AgentEntry(device: device, agent: agent)
+    }
+
+    var selectedTerminalEntry: TerminalEntry? {
+        guard let selected = selectedPane, let device = device(selected.deviceID) else { return nil }
+        return terminalEntries(for: device).first { $0.pane.paneID == selected.paneID }
+    }
+
+    var selectedAttachedEntry: AttachedEntry? {
+        if let selectedEntry { return .agent(selectedEntry) }
+        if let selectedTerminalEntry { return .terminal(selectedTerminalEntry) }
+        return nil
+    }
+
+    private var firstVisiblePaneRef: PaneRef? {
+        visibleAgents.first?.ref ?? visibleTerminals.first?.ref
     }
 
     func agentCount(in entry: SpaceEntry) -> Int {
@@ -298,12 +393,11 @@ final class AppModel: ObservableObject {
 
     func selectSpace(_ ref: SpaceRef?) {
         selectedSpace = ref
-        selectedShellID = nil
-        if let entry = selectedEntry {
+        if let entry = selectedAttachedEntry {
             if ref == nil { return }
-            if entry.device.id == ref!.deviceID && entry.agent.workspaceID == ref!.workspaceID { return }
+            if entry.device.id == ref!.deviceID && entry.workspaceID == ref!.workspaceID { return }
         }
-        selectedPane = visibleAgents.first?.ref
+        selectedPane = firstVisiblePaneRef
     }
 
     func setDeviceFilter(_ id: UUID?) {
@@ -311,8 +405,8 @@ final class AppModel: ObservableObject {
         if let id, let space = selectedSpace, space.deviceID != id {
             selectedSpace = nil
         }
-        if let id, let entry = selectedEntry, entry.device.id != id {
-            selectedPane = visibleAgents.first?.ref
+        if let id, let selected = selectedPane, selected.deviceID != id {
+            selectedPane = firstVisiblePaneRef
         }
     }
 
@@ -328,7 +422,6 @@ final class AppModel: ObservableObject {
         }
         selectedSpace = nil
         selectedPane = ref
-        selectedShellID = nil
         // Only the search sheet needs the deferred request: its dismissal restores the
         // parent window's previous responder after the view tree has asked for focus.
         // `showSearch` is still true here — SearchView calls this before dismissing.
@@ -339,33 +432,6 @@ final class AppModel: ObservableObject {
         // the shell. Those clicks get focus from the recreated attach and from the
         // entry-change request instead.
         if shellSplitAxis != nil, showSearch { pendingSplitAgentFocus = true }
-    }
-
-    // MARK: - Shell terminals
-
-    var selectedShell: ShellSession? {
-        selectedShellID.flatMap { id in shellSessions.first { $0.id == id } }
-    }
-
-    /// Every click opens another terminal, like New Agent opens another agent.
-    func newShellSession() {
-        let n = shellSessions.count + 1
-        let session = ShellSession(id: UUID(), title: String(localized: "Terminal \(n)"))
-        shellSessions.append(session)
-        selectShell(session.id)
-    }
-
-    func selectShell(_ id: UUID) {
-        selectedShellID = id
-        ShellViewRegistry.focus(id)
-    }
-
-    func closeShellSession(_ id: UUID) {
-        shellSessions.removeAll { $0.id == id }
-        if selectedShellID == id {
-            selectedShellID = shellSessions.last?.id
-            if let remaining = selectedShellID { ShellViewRegistry.focus(remaining) }
-        }
     }
 
     // MARK: - Lifecycle
@@ -566,7 +632,7 @@ final class AppModel: ObservableObject {
         store.save(devices)
         if deviceFilter == device.id { deviceFilter = nil }
         if selectedSpace?.deviceID == device.id { selectedSpace = nil }
-        if selectedPane?.deviceID == device.id { selectedPane = visibleAgents.first?.ref }
+        if selectedPane?.deviceID == device.id { selectedPane = firstVisiblePaneRef }
     }
 
     // MARK: - Refresh
@@ -586,9 +652,12 @@ final class AppModel: ObservableObject {
             )
             sessions[deviceID]?.agents = snapshot.agents
             sessions[deviceID]?.workspaces = snapshot.workspaces
-            sessions[deviceID]?.panes = snapshot.panes ?? []
+            sessions[deviceID]?.panes = snapshot.ordinaryTerminalPanes
+            sessions[deviceID]?.tabs = snapshot.tabs ?? []
+            let paneIDs = Set((snapshot.panes ?? []).map(\.paneID))
+                .union(snapshot.agents.map(\.paneID))
             if let selected = selectedPane, selected.deviceID == deviceID,
-               !snapshot.agents.contains(where: { $0.paneID == selected.paneID }) {
+               !paneIDs.contains(selected.paneID) {
                 selectedPane = nil
             }
             if let space = selectedSpace, space.deviceID == deviceID,
@@ -596,7 +665,18 @@ final class AppModel: ObservableObject {
                 selectedSpace = nil
             }
             if selectedPane == nil {
-                selectedPane = visibleAgents.first?.ref
+                if let focusedPaneID = snapshot.focusedPaneID,
+                   paneIDs.contains(focusedPaneID),
+                   deviceFilter == nil || deviceFilter == deviceID {
+                    let focused = PaneRef(deviceID: deviceID, paneID: focusedPaneID)
+                    if selectedSpace == nil
+                        || selectedAttachedEntry.map({
+                            $0.ref == focused && $0.workspaceID == selectedSpace?.workspaceID
+                        }) == true {
+                        selectedPane = focused
+                    }
+                }
+                if selectedPane == nil { selectedPane = firstVisiblePaneRef }
             }
         } catch {
             sessions[deviceID]?.connection = .failed(error.localizedDescription)
@@ -817,6 +897,26 @@ final class AppModel: ObservableObject {
                 await refresh(device.id)
                 selectedSpace = SpaceRef(deviceID: device.id, workspaceID: created.workspaceID)
                 showNewAgent = true
+            } catch {
+                actionError = actionErrorMessage(error, device: device)
+            }
+        }
+    }
+
+    /// Creates a persistent shell tab on the selected Herdr device. Local and
+    /// remote terminals use the same server-owned lifecycle and can be detached
+    /// and reattached without killing the shell process.
+    func startNewTerminal(device: Device, workspaceID: String) {
+        Task {
+            do {
+                let paneID = try await service(for: device).createTab(
+                    workspaceID: workspaceID,
+                    cwd: nil,
+                    label: nil
+                )
+                await refresh(device.id)
+                selectedSpace = SpaceRef(deviceID: device.id, workspaceID: workspaceID)
+                selectedPane = PaneRef(deviceID: device.id, paneID: paneID)
             } catch {
                 actionError = actionErrorMessage(error, device: device)
             }

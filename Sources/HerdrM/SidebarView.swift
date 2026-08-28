@@ -46,10 +46,8 @@ struct SidebarView: View {
                 actionRow(icon: "square.and.pencil", label: "New Agent") {
                     model.showNewAgent = true
                 }
-                // Every click opens another standalone local shell, listed under
-                // TERMINALS below — the ⌘D split beside an agent is separate.
                 actionRow(icon: "terminal", label: "New Terminal") {
-                    model.newShellSession()
+                    model.showNewTerminal = true
                 }
                 actionRow(icon: "magnifyingglass", label: "Search") {
                     model.showSearch = true
@@ -116,15 +114,15 @@ struct SidebarView: View {
                         }
                     }
 
-                    if !model.shellSessions.isEmpty {
+                    if !model.visibleTerminals.isEmpty {
                         Spacer().frame(height: 10)
                         groupHeader("Terminals", expanded: $terminalsExpanded)
                         if terminalsExpanded {
-                            ForEach(model.shellSessions) { session in
-                                shellRow(session)
+                            ForEach(model.visibleTerminals) { entry in
+                                terminalRow(entry)
                                     .contextMenu {
-                                        Button("Close Terminal", role: .destructive) {
-                                            model.closeShellSession(session.id)
+                                        Button("Close Terminal…", role: .destructive) {
+                                            model.requestClosePane(entry.ref, name: entry.title)
                                         }
                                     }
                             }
@@ -237,10 +235,9 @@ struct SidebarView: View {
 
     private func agentRow(_ entry: AppModel.AgentEntry) -> some View {
         let agent = entry.agent
-        let selected = model.selectedPane == entry.ref && model.selectedShellID == nil
+        let selected = model.selectedPane == entry.ref
         return Button {
             model.selectedPane = entry.ref
-            model.selectedShellID = nil
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -278,27 +275,39 @@ struct SidebarView: View {
         .buttonStyle(SidebarRowButtonStyle(selected: selected))
     }
 
-    private func shellRow(_ session: ShellSession) -> some View {
-        let selected = model.selectedShellID == session.id
+    private func terminalRow(_ entry: AppModel.TerminalEntry) -> some View {
+        let selected = model.selectedPane == entry.ref
         return Button {
-            model.selectShell(session.id)
+            model.selectedPane = entry.ref
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "terminal")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.textTertiary)
-                Text(session.title)
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Text("Local")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.textGhost)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text(entry.title)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 5) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text(model.spaceName(deviceID: entry.device.id, workspaceID: entry.pane.workspaceID))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if model.showsRowDeviceBadges {
+                        deviceBadge(entry.device)
+                    }
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
-            .frame(height: 34)
+            .frame(height: 51)
             .contentShape(Rectangle())
         }
         .buttonStyle(SidebarRowButtonStyle(selected: selected))

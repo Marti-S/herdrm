@@ -138,6 +138,20 @@ final class AttachBinarySelectionTests: XCTestCase {
         XCTAssertTrue(remote.args.last?.hasPrefix("exec /bin/sh -c '") == true)
         XCTAssertTrue(remote.args.last?.contains("export PATH=") == true)
     }
+
+    func testOrdinaryTerminalAttachCommandsUseTerminalIDLocallyAndRemotely() {
+        let local = HerdrService(device: Device(name: "L", kind: .local), localServer: nil)
+            .attachCommand(target: .terminal(terminalID: "term_abc123"), serverVersion: "0.8.2")
+        XCTAssertTrue(
+            local.args.last?.contains("exec \"$hb\" terminal attach 'term_abc123' --takeover") == true
+        )
+
+        let remote = HerdrService(device: Device(name: "R", kind: .ssh(target: "u@h")), localServer: nil)
+            .attachCommand(target: .terminal(terminalID: "term_abc123"), serverVersion: "0.8.2")
+        XCTAssertEqual(remote.executable, "/usr/bin/ssh")
+        XCTAssertTrue(remote.args.last?.contains("terminal attach") == true)
+        XCTAssertTrue(remote.args.last?.contains("term_abc123") == true)
+    }
 }
 
 final class SSHFileTransferTests: XCTestCase {

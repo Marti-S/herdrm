@@ -56,6 +56,7 @@ struct RootView: View {
         .onAppear { model.start() }
         .sheet(isPresented: $model.showAddDevice) { AddDeviceSheet(model: model) }
         .sheet(isPresented: $model.showNewAgent) { NewAgentSheet(model: model) }
+        .sheet(isPresented: $model.showNewTerminal) { NewTerminalSheet(model: model) }
         .sheet(isPresented: $model.showNewSpace) { NewSpaceSheet(model: model) }
         .sheet(item: $model.spaceToRename) { entry in RenameSpaceSheet(model: model, entry: entry) }
         .sheet(item: $model.agentToRename) { entry in RenameAgentSheet(model: model, entry: entry) }
@@ -119,7 +120,7 @@ struct DetailView: View {
                 // on teardown. Remove this and "split open with no agent selected"
                 // becomes reachable, which is a state a deferred focus request can be
                 // armed into with nothing left in the tree to consume it.
-                .onChange(of: model.selectedEntry?.id) { _, id in
+                .onChange(of: model.selectedAttachedEntry?.id) { _, id in
                     if id == nil { model.shellSplitAxis = nil }
                 }
         }
@@ -137,41 +138,51 @@ struct DetailView: View {
                     sidebarCollapsed = false
                 }
             }
-            if let shell = model.selectedShell {
-                Image(systemName: "terminal")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textTertiary)
-                Text(shell.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.text)
-                Text("Local")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.textTertiary)
-                Spacer()
-            } else if let entry = model.selectedEntry {
-                let agent = entry.agent
-                statusGlyph(agent.status)
-                Text(agent.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                    .help((agent.cwd as NSString?)?.abbreviatingWithTildeInPath ?? "")
-                Spacer(minLength: 12)
-                AgentKindBadge(kind: agent.agent)
-                Text("·")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.textGhost)
-                Text(model.spaceName(deviceID: entry.device.id, workspaceID: agent.workspaceID))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.textTertiary)
-                    .lineLimit(1)
-                if model.showsRowDeviceBadges {
-                    DeviceChip(device: entry.device)
+            if let attached = model.selectedAttachedEntry {
+                switch attached {
+                case .agent(let entry):
+                    let agent = entry.agent
+                    statusGlyph(agent.status)
+                    Text(agent.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                        .help((agent.cwd as NSString?)?.abbreviatingWithTildeInPath ?? "")
+                    Spacer(minLength: 12)
+                    AgentKindBadge(kind: agent.agent)
+                    Text("·")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.textGhost)
+                    Text(model.spaceName(deviceID: entry.device.id, workspaceID: agent.workspaceID))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                    if model.showsRowDeviceBadges {
+                        DeviceChip(device: entry.device)
+                    }
+                    statusPill(agent.status)
+                case .terminal(let entry):
+                    Image(systemName: "terminal")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text(entry.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                        .help((entry.pane.cwd as NSString?)?.abbreviatingWithTildeInPath ?? "")
+                    Spacer(minLength: 12)
+                    Text(model.spaceName(deviceID: entry.device.id, workspaceID: entry.pane.workspaceID))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                    if model.showsRowDeviceBadges {
+                        DeviceChip(device: entry.device)
+                    }
                 }
-                statusPill(agent.status)
             } else {
-                Text("No agent selected")
+                Text("No terminal selected")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Theme.textTertiary)
                 Spacer()
@@ -239,36 +250,20 @@ struct DetailView: View {
 
     @ViewBuilder
     private var terminal: some View {
-        ZStack {
-            agentTerminal
-            // Standalone shells stay in the hierarchy while deselected: unlike a
-            // herdr pane, a local shell has no server side to reattach to, so
-            // tearing the view down would kill whatever is running in it.
-            ForEach(model.shellSessions) { session in
-                ShellTerminalView(
-                    sessionID: session.id,
-                    fontName: terminalFontName,
-                    fontSize: terminalFontSize,
-                    thinStrokes: terminalThinStrokes,
-                    fontWeight: terminalFontWeight,
-                    lineSpacing: terminalLineSpacing,
-                    dark: colorScheme == .dark,
-                    mouseReporting: terminalMouseReporting,
-                    onExit: { _ in model.closeShellSession(session.id) }
-                )
-                    .id("shell-\(session.id)")
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .opacity(model.selectedShellID == session.id ? 1 : 0)
-                    .allowsHitTesting(model.selectedShellID == session.id)
-            }
-        }
+        attachedTerminal
         .background(Theme.terminalBackground)
     }
 
     @ViewBuilder
-    private var agentTerminal: some View {
-        if let entry = model.selectedEntry {
+    private var attachedTerminal: some View {
+        if let entry = model.selectedAttachedEntry {
+            let attachmentCapabilities: AgentAttachmentCapabilities? = {
+                guard case .agent(let agentEntry) = entry else { return nil }
+                return model.attachmentCapabilities(
+                    deviceID: agentEntry.device.id,
+                    agentKind: agentEntry.agent.agentKindRaw
+                )
+            }()
             SplitContainer(
                 axis: model.shellSplitAxis,
                 activeSide: model.activeSplitSide,
@@ -277,12 +272,9 @@ struct DetailView: View {
                 ZStack {
                     AttachTerminalView(
                         device: entry.device,
-                        paneID: entry.agent.paneID,
+                        target: entry.attachTarget,
                         serverVersion: model.serverVersion(deviceID: entry.device.id),
-                        attachmentCapabilities: model.attachmentCapabilities(
-                            deviceID: entry.device.id,
-                            agentKind: entry.agent.agentKindRaw
-                        ),
+                        attachmentCapabilities: attachmentCapabilities,
                         fontName: terminalFontName,
                         fontSize: terminalFontSize,
                         thinStrokes: terminalThinStrokes,
@@ -351,7 +343,7 @@ struct DetailView: View {
             // that follows the sheet's responder restore. Filtered to the terminal's own
             // window and consumed no matter which window it was, so a pending request can
             // never survive to a later, unrelated activation — coming back from ⌘Tab or
-            // closing Settings would otherwise yank the keyboard into a live agent.
+            // closing Settings would otherwise yank the keyboard into a live pane.
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
                 guard model.pendingSplitAgentFocus else { return }
                 model.pendingSplitAgentFocus = false
@@ -372,7 +364,7 @@ struct DetailView: View {
             }
         } else {
             // The .onReceive below only exists on the branch above, so a request armed
-            // while no agent is selected would have no consumer and would be cashed in by
+            // while no pane is selected would have no consumer and would be cashed in by
             // some later activation. Revealing a pane that has since gone away lands here.
             VStack(spacing: 10) {
                 Image(systemName: "terminal")
@@ -401,7 +393,7 @@ struct DetailView: View {
 
     /// ssh exits 255 for transport failures; everything else is the far end closing
     /// (takeover by another client, the pane going away, herdr stopping).
-    private func attachEndedOverlay(_ entry: AppModel.AgentEntry) -> some View {
+    private func attachEndedOverlay(_ entry: AppModel.AttachedEntry) -> some View {
         let dropped = endedAttachCode == 255
         return VStack(spacing: 10) {
             Image(systemName: dropped ? "bolt.horizontal.circle" : "rectangle.slash")
@@ -450,10 +442,12 @@ struct DetailView: View {
         case .connecting: return String(localized: "Connecting…")
         case .failed(let reason): return reason
         default:
-            if model.selectedSpace != nil && model.visibleAgents.isEmpty {
-                return String(localized: "No agents in this space yet")
+            if model.selectedSpace != nil
+                && model.visibleAgents.isEmpty
+                && model.visibleTerminals.isEmpty {
+                return String(localized: "No agents or terminals in this space yet")
             }
-            return String(localized: "Select an agent, or start a new one")
+            return String(localized: "Select an agent or terminal, or start a new one")
         }
     }
 
@@ -867,6 +861,105 @@ struct DirectoryPickerField: View {
         var trimmed = path
         while trimmed.count > 1 && trimmed.hasSuffix("/") { trimmed.removeLast() }
         return trimmed
+    }
+}
+
+struct NewTerminalSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var deviceID = Device.local.id
+    @State private var workspaceID = ""
+
+    private var chosenDevice: Device {
+        model.device(deviceID) ?? .local
+    }
+
+    private var spaces: [WorkspaceInfo] {
+        model.session(deviceID).workspaces
+    }
+
+    private var spaceLabel: String {
+        spaces.first { $0.workspaceID == workspaceID }?.label ?? String(localized: "a Herdr space")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(
+                systemImage: "terminal",
+                title: String(localized: "New Terminal"),
+                subtitle: String(localized: "Creates a persistent shell in \(spaceLabel) on \(chosenDevice.name)")
+            )
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 8) {
+                if model.showsDeviceBadges {
+                    SheetSectionLabel("DEVICE")
+                    Picker("", selection: $deviceID) {
+                        ForEach(model.devices) { device in
+                            Text(device.name).tag(device.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .onChange(of: deviceID) { _, _ in
+                        workspaceID = spaces.first?.workspaceID ?? ""
+                    }
+
+                    Spacer().frame(height: 8)
+                }
+
+                SheetSectionLabel("SPACE")
+                if spaces.isEmpty {
+                    Text("Create a space on this device before opening a terminal.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(minHeight: 32)
+                } else {
+                    Picker("", selection: $workspaceID) {
+                        ForEach(spaces) { workspace in
+                            Text(workspace.label).tag(workspace.workspaceID)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+            .padding(16)
+
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Open Terminal") {
+                    model.startNewTerminal(device: chosenDevice, workspaceID: workspaceID)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!spaces.contains { $0.workspaceID == workspaceID })
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 420)
+        .onAppear {
+            deviceID = model.selectedSpace?.deviceID
+                ?? model.selectedAttachedEntry?.device.id
+                ?? model.deviceFilter
+                ?? model.devices.first?.id
+                ?? Device.local.id
+            let preferredSpace = model.selectedSpace?.deviceID == deviceID
+                ? model.selectedSpace?.workspaceID
+                : model.selectedAttachedEntry.flatMap {
+                    $0.device.id == deviceID ? $0.workspaceID : nil
+                }
+            workspaceID = preferredSpace.flatMap { preferred in
+                spaces.contains { $0.workspaceID == preferred } ? preferred : nil
+            } ?? spaces.first?.workspaceID ?? ""
+        }
     }
 }
 

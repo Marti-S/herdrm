@@ -36,6 +36,9 @@ final class LocalSocketTests: XCTestCase {
         // snapshot and dedicated list endpoints must agree
         XCTAssertEqual(Set(snapshot.agents.map(\.paneID)), Set(agents.map(\.paneID)))
         XCTAssertEqual(Set(snapshot.workspaces.map(\.workspaceID)), Set(workspaces.map(\.workspaceID)))
+        for pane in snapshot.panes ?? [] {
+            XCTAssertNotNil(pane.terminalID, "pane \(pane.paneID) has no attachable terminal id")
+        }
         XCTAssertFalse(manifests.isEmpty, "server advertised no agent manifests")
         _ = AgentAttachmentCapabilityRegistry(manifests: manifests)
         // every agent belongs to a listed workspace

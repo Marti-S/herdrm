@@ -5,6 +5,13 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Added
+- Bare Herdr shell panes now appear alongside agents and can be attached on
+  local or SSH devices. **New Terminal** creates a persistent shell tab in a
+  chosen device and space instead of an app-owned local-only process. (#57)
+
 ## [0.5.1] - 2026-08-27
 
 ### Added
