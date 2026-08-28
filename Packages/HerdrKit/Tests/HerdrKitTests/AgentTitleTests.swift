@@ -133,6 +133,34 @@ final class AgentTitleTests: XCTestCase {
         let snapshot = try JSONDecoder().decode(SessionSnapshot.self, from: data)
         XCTAssertEqual(snapshot.agents.first?.title, "claude")
         XCTAssertNil(snapshot.agents.first?.name)
+        XCTAssertNil(snapshot.tabs)
+    }
+
+    func testChineseTabLabelWinsOverOscAndAutoName() {
+        let title = AgentInfo.resolvedTitle(
+            customTitle: nil,
+            tabLabel: "制度图谱讨论",
+            terminalTitle: "32_基于GraphRAG的制度知识图谱建设",
+            name: "codex-e23f",
+            agentKind: "codex",
+            cwd: "/tmp/32_基于GraphRAG的制度知识图谱建设"
+        )
+        XCTAssertEqual(title, "制度图谱讨论")
+    }
+
+    func testGenericTabLabelIsIgnored() {
+        XCTAssertTrue(AgentInfo.isGenericTabLabel("agy", agentKind: "agy", name: "agy-da7c"))
+        XCTAssertTrue(AgentInfo.isGenericTabLabel("codex", agentKind: "codex", name: "codex-e23f"))
+        XCTAssertFalse(AgentInfo.isGenericTabLabel("制度图谱讨论", agentKind: "agy", name: "agy-da7c"))
+        let title = AgentInfo.resolvedTitle(
+            customTitle: nil,
+            tabLabel: "agy",
+            terminalTitle: nil,
+            name: "agy-da7c",
+            agentKind: "agy",
+            cwd: "/tmp/project"
+        )
+        XCTAssertEqual(title, "agy-da7c")
     }
 
     private func decode(_ json: String) throws -> AgentInfo {

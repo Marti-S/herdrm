@@ -32,11 +32,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         NSSound(named: name)?.play()
     }
 
-    func post(agent: AgentInfo, status: AgentStatus, deviceID: UUID, deviceName: String, spaceName: String) {
+    func post(agent: AgentInfo, title: String? = nil, status: AgentStatus, deviceID: UUID, deviceName: String, spaceName: String) {
         playSound(for: status)
         guard authorized, UserDefaults.standard.object(forKey: "notifications.enabled") as? Bool ?? true else { return }
         let content = UNMutableNotificationContent()
-        content.title = agent.title
+        content.title = title ?? agent.title
         switch status {
         case .blocked:
             content.body = String(localized: "\(agent.agent) needs your input · \(spaceName) · \(deviceName)")

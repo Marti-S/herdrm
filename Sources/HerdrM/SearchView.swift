@@ -24,12 +24,14 @@ struct SearchSheet: View {
     private var results: [Result] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         let agents = model.devices.flatMap { device in
-            model.session(device.id).agents.map { AppModel.AgentEntry(device: device, agent: $0) }
+            model.session(device.id).agents.map { model.agentEntry(device: device, agent: $0) }
         }.filter { entry in
             q.isEmpty
+                || entry.title.lowercased().contains(q)
                 || entry.agent.title.lowercased().contains(q)
                 || entry.agent.agent.lowercased().contains(q)
                 || (entry.agent.name?.lowercased().contains(q) ?? false)
+                || (entry.tabLabel?.lowercased().contains(q) ?? false)
                 || (entry.agent.terminalTitleStripped ?? entry.agent.terminalTitle)?
                     .lowercased().contains(q) == true
                 || entry.device.name.lowercased().contains(q)
@@ -161,7 +163,7 @@ struct SearchSheet: View {
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: 16)
                 }
-                Text(entry.agent.title)
+                Text(entry.title)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)

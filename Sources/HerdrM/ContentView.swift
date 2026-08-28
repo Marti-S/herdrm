@@ -151,7 +151,7 @@ struct DetailView: View {
             } else if let entry = model.selectedEntry {
                 let agent = entry.agent
                 statusGlyph(agent.status)
-                Text(agent.title)
+                Text(entry.title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
@@ -1145,7 +1145,7 @@ struct RenameAgentSheet: View {
             SheetHeader(
                 systemImage: "pencil",
                 title: String(localized: "Rename Agent"),
-                subtitle: String(localized: "Rename \(entry.agent.title) on \(entry.device.name)")
+                subtitle: String(localized: "Rename \(entry.title) on \(entry.device.name)")
             )
             Rectangle().fill(Theme.hairline).frame(height: 1)
 
@@ -1153,6 +1153,9 @@ struct RenameAgentSheet: View {
                 SheetSectionLabel("NAME")
                 TextField("Agent name", text: $name)
                     .textFieldStyle(.roundedBorder)
+                Text("Chinese, spaces, and punctuation are allowed.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textTertiary)
             }
             .padding(16)
 
@@ -1169,13 +1172,13 @@ struct RenameAgentSheet: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(trimmedName.isEmpty || trimmedName == (entry.agent.name ?? entry.agent.title))
+                .disabled(trimmedName.isEmpty || trimmedName == entry.title)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
         .frame(width: 400)
-        .onAppear { name = entry.agent.name ?? entry.agent.title }
+        .onAppear { name = entry.title }
     }
 }
 

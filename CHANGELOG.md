@@ -5,6 +5,13 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Fixed
+- Rename Agent now sets the herdr tab label (`tab.rename`) instead of
+  `agent.rename`. Tab labels accept Chinese, spaces, and punctuation; agent
+  identifiers do not (`[a-z][a-z0-9_-]{0,31}`). The sidebar shows that label.
+
 ## [0.5.1] - 2026-08-27
 
 ### Added

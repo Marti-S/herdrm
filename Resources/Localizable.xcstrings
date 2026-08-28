@@ -2161,6 +2161,22 @@
         }
       }
     },
+    "Chinese, spaces, and punctuation are allowed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chinese, spaces, and punctuation are allowed."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可用中文、空格和标点，会显示在侧栏。"
+          }
+        }
+      }
+    },
     "Rename %@ on %@" : {
       "localizations" : {
         "en" : {

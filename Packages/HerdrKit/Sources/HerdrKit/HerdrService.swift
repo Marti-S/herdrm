@@ -305,12 +305,24 @@ public actor HerdrService {
     }
 
     /// Renames an agent (`herdr agent rename`). `target` is a pane id or current name.
+    /// Names must match `[a-z][a-z0-9_-]{0,31}` — use `renameTab` for display labels.
     public func renameAgent(target: String, name: String) async throws {
         _ = try await client().request(
             method: "agent.rename",
             params: .object([
                 "target": .string(target),
                 "name": .string(name),
+            ])
+        )
+    }
+
+    /// Renames a tab. Labels are free-form (Chinese, spaces) unlike `agent.rename`.
+    public func renameTab(tabID: String, label: String) async throws {
+        _ = try await client().request(
+            method: "tab.rename",
+            params: .object([
+                "tab_id": .string(tabID),
+                "label": .string(label),
             ])
         )
     }
