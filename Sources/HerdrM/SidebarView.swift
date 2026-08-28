@@ -24,6 +24,8 @@ struct SidebarView: View {
     @State private var deviceButtonHovered = false
     @State private var draggingSpaceID: String?
     @State private var spaceDrop: (id: String, after: Bool)?
+    @State private var draggingAgentID: String?
+    @State private var agentDrop: (id: String, after: Bool)?
     @State private var spacesExpanded = true
     @State private var agentsExpanded = true
     @State private var terminalsExpanded = true
@@ -106,16 +108,12 @@ struct SidebarView: View {
                                 .padding(8)
                         }
                         ForEach(model.visibleAgents) { entry in
-                            agentRow(entry)
-                                .contextMenu {
-                                    Button("Rename Agent…") {
-                                        model.agentToRename = entry
-                                    }
-                                    Divider()
-                                    Button("Close Agent…", role: .destructive) {
-                                        model.requestClosePane(entry.ref, name: entry.title)
-                                    }
-                                }
+                            AgentRowView(
+                                entry: entry,
+                                model: model,
+                                draggingAgentID: $draggingAgentID,
+                                agentDrop: $agentDrop
+                            )
                         }
                     }
 
@@ -235,56 +233,13 @@ struct SidebarView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
                 Spacer()
+                SpaceAttentionGlyph(attention: model.scopeAttention)
                 Text("\(model.scopeAgentCount)")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.textGhost)
             }
             .padding(.horizontal, 8)
             .frame(height: 30)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarRowButtonStyle(selected: selected))
-    }
-
-    private func agentRow(_ entry: AppModel.AgentEntry) -> some View {
-        let agent = entry.agent
-        let selected = !model.isFileManagerActive
-            && model.selectedPane == entry.ref
-            && model.selectedShellID == nil
-        return Button {
-            model.selectAgent(entry.ref)
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(entry.title)
-                        .font(.system(size: 13.5))
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    AgentStatusGlyph(status: agent.status)
-                }
-                HStack(spacing: 5) {
-                    AgentKindBadge(kind: agent.agent)
-                    Text("·")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Theme.textGhost)
-                    Image(systemName: "folder")
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(Theme.textTertiary)
-                    Text(model.spaceName(deviceID: entry.device.id, workspaceID: agent.workspaceID))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Theme.textTertiary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    trailingDetail(agent)
-                    if model.showsRowDeviceBadges {
-                        deviceBadge(entry.device)
-                    }
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-            .frame(height: 51)
             .contentShape(Rectangle())
         }
         .buttonStyle(SidebarRowButtonStyle(selected: selected))
@@ -358,19 +313,112 @@ struct SidebarView: View {
         .buttonStyle(SidebarRowButtonStyle(selected: selected))
     }
 
-    /// Tinted name chip marking which device a row belongs to.
     private func deviceBadge(_ device: Device) -> some View {
         DeviceChip(device: device)
     }
 
-    @ViewBuilder
-    private func trailingDetail(_ agent: AgentInfo) -> some View {
-        if agent.status == .blocked {
-            Text("needs input")
-                .font(.system(size: 11.5))
-                .foregroundStyle(Theme.warning)
+    private struct AgentRowView: View {
+    let entry: AppModel.AgentEntry
+    @ObservedObject var model: AppModel
+    @Binding var draggingAgentID: String?
+    @Binding var agentDrop: (id: String, after: Bool)?
+    @State private var hovered = false
+
+    var body: some View {
+        let agent = entry.agent
+        let selected = !model.isFileManagerActive
+            && model.selectedPane == entry.ref
+            && model.selectedShellID == nil
+        let unread = model.isUnread(entry)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(entry.title)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                AgentStatusGlyph(status: agent.status, unreadDone: unread)
+            }
+            HStack(spacing: 5) {
+                AgentKindBadge(kind: agent.agent)
+                Text("·")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textGhost)
+                Image(systemName: "folder")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Theme.textTertiary)
+                Text(model.spaceName(deviceID: entry.device.id, workspaceID: agent.workspaceID))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if agent.status == .blocked {
+                    Text("needs input")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.warning)
+                }
+                if model.showsRowDeviceBadges {
+                    DeviceChip(device: entry.device)
+                }
+            }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .frame(height: 51)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(selected || hovered ? AnyShapeStyle(Theme.itemWashSelected) : AnyShapeStyle(.clear))
+        )
+        .onHover { hovered = $0 }
+        .opacity(draggingAgentID == entry.id ? 0.4 : 1)
+        .overlay(alignment: (agentDrop?.after ?? false) ? .bottom : .top) {
+            if agentDrop?.id == entry.id {
+                Rectangle()
+                    .fill(Theme.accent)
+                    .frame(height: 2)
+            }
+        }
+        .overlay {
+            AgentRowDragHost(
+                entryID: entry.id,
+                onClick: { model.selectAgent(entry.ref) },
+                onRename: { model.agentToRename = entry },
+                onClose: { model.requestClosePane(entry.ref, name: entry.title) },
+                onDragStart: { draggingAgentID = $0 },
+                onDragEnd: {
+                    draggingAgentID = nil
+                    agentDrop = nil
+                },
+                onDropHover: { after in agentDrop = (entry.id, after) },
+                onHoverExit: {
+                    if agentDrop?.id == entry.id { agentDrop = nil }
+                },
+                onDrop: { sourceID, after in
+                    draggingAgentID = nil
+                    agentDrop = nil
+                    guard let source = model.visibleAgents.first(where: { $0.id == sourceID })
+                    else { return }
+                    model.moveAgent(source, onto: entry, placeAfter: after)
+                }
+            )
+        }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(accessibilityLabel(unread: unread))
     }
+
+    private func accessibilityLabel(unread: Bool) -> String {
+        var parts = [entry.title]
+        switch entry.agent.status {
+        case .working: parts.append(String(localized: "Working"))
+        case .blocked: parts.append(String(localized: "Needs input"))
+        case .done where unread: parts.append(String(localized: "Unread"))
+        case .done: break
+        case .idle, .unknown: break
+        }
+        return parts.joined(separator: ", ")
+    }
+}
 
     // MARK: - Footer (device filter)
 
@@ -683,6 +731,7 @@ private struct SpaceRowView: View {
                 .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
                 .lineLimit(1)
             Spacer()
+            SpaceAttentionGlyph(attention: model.attention(in: entry))
             if model.showsRowDeviceBadges {
                 DeviceChip(device: entry.device)
             }
@@ -732,7 +781,18 @@ private struct SpaceRowView: View {
             )
         }
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(entry.workspace.label)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [entry.workspace.label]
+        switch model.attention(in: entry) {
+        case .blocked: parts.append(String(localized: "Needs input"))
+        case .unreadDone: parts.append(String(localized: "Unread"))
+        case .working: parts.append(String(localized: "Working"))
+        case .none: break
+        }
+        return parts.joined(separator: ", ")
     }
 }
 

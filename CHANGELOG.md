@@ -5,6 +5,17 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Added
+- Sidebar Spaces and Agents share one set of conversation marks: a spinner
+  while running, a filled unread dot after a finish you have not opened,
+  nothing once viewed, and an exclamation if the agent needs input. A space
+  shows the strongest state among its agents.
+- Agents in the sidebar can be drag-reordered. The drop calls herdr's
+  `tab.move` (same RPC the TUI uses) so the order is the session's, not just
+  this window. Cross-space drops are ignored. ⌘K still ranks by urgency.
+
 ## [0.5.2] - 2026-08-28
 
 ### Added

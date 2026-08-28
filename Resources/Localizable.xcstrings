@@ -1409,6 +1409,22 @@
         }
       }
     },
+    "Unread" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unread"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未查看"
+          }
+        }
+      }
+    },
     "Reconnect" : {
       "localizations" : {
         "en" : {

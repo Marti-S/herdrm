@@ -242,11 +242,9 @@ struct DetailView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.warning)
         case .done:
-            Image(systemName: "checkmark")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Theme.success)
+            EmptyView()
         case .idle, .unknown:
-            Circle().fill(Theme.textGhost).frame(width: 7, height: 7)
+            EmptyView()
         }
     }
 

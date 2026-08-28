@@ -56,15 +56,26 @@ struct SearchSheet: View {
                 || model.spaceName(deviceID: entry.device.id, workspaceID: entry.pane.workspaceID)
                     .lowercased().contains(q)
         }
-        // Same ordering as the sidebar (AppModel.visibleAgents): whoever needs the
-        // user first, then most recently updated inside each bucket.
+        // Sidebar follows herdr tab order so drag-reorder sticks. ⌘K still
+        // ranks by urgency: needs input, unread, working, then the rest.
         let ranked = agents.sorted {
-            if $0.agent.status.sortBucket != $1.agent.status.sortBucket {
-                return $0.agent.status.sortBucket < $1.agent.status.sortBucket
-            }
+            let r0 = searchRank($0)
+            let r1 = searchRank($1)
+            if r0 != r1 { return r0 < r1 }
             return ($0.agent.revision ?? 0) > ($1.agent.revision ?? 0)
         }
         return ranked.map(Result.agent) + terminals.map(Result.terminal) + spaces.map(Result.space)
+    }
+
+    private func searchRank(_ entry: AppModel.AgentEntry) -> Int {
+        switch entry.agent.status {
+        case .blocked: return 0
+        case .done where model.isUnread(entry): return 1
+        case .working: return 2
+        case .done: return 3
+        case .idle: return 4
+        case .unknown: return 5
+        }
     }
 
     var body: some View {
@@ -178,7 +189,7 @@ struct SearchSheet: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
-                AgentStatusGlyph(status: entry.agent.status)
+                AgentStatusGlyph(status: entry.agent.status, unreadDone: model.isUnread(entry))
                 Spacer(minLength: 8)
                 if entry.agent.status == .blocked {
                     Text("needs input")

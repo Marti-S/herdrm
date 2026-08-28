@@ -327,6 +327,18 @@ public actor HerdrService {
         )
     }
 
+    /// Moves a tab to `insertIndex` among tabs in its workspace (`0...count`).
+    /// Same RPC the herdr TUI uses for tab reorder.
+    public func moveTab(tabID: String, insertIndex: UInt) async throws {
+        _ = try await client().request(
+            method: "tab.move",
+            params: .object([
+                "tab_id": .string(tabID),
+                "insert_index": .number(Double(insertIndex)),
+            ])
+        )
+    }
+
     /// Places one workspace at `insertIndex` in the device's workspace list
     /// (`0...count`). Prefer `moveWorkspaceBlock` for sidebar drag: it is how
     /// the herdr TUI reorders spaces, and it moves a worktree group atomically.

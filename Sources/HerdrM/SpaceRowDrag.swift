@@ -1,10 +1,53 @@
 import AppKit
 import SwiftUI
 
+enum SidebarContextMenuItem {
+    case item(title: String, action: () -> Void)
+    case destructive(title: String, action: () -> Void)
+    case separator
+}
+
 /// AppKit drag/drop host. SwiftUI `.onDrag` on macOS does not start when a
 /// `Button` (or even `onTapGesture`) owns mouseDown; a few points of movement
 /// here begin an `NSDraggingSession` instead.
-struct SpaceRowDragHost: NSViewRepresentable {
+struct SidebarRowDragHost: NSViewRepresentable {
+    let entryID: String
+    let pasteboardType: NSPasteboard.PasteboardType
+    let menuItems: [SidebarContextMenuItem]
+    let onClick: () -> Void
+    let onDragStart: (String) -> Void
+    let onDragEnd: () -> Void
+    let onDropHover: (Bool) -> Void
+    let onHoverExit: () -> Void
+    let onDrop: (String, Bool) -> Void
+
+    func makeNSView(context: Context) -> SidebarRowDragNSView {
+        // Non-zero seed frame: a SwiftUI overlay NSView that starts at .zero
+        // can stay 0-size, so clicks and drags never arrive (#42).
+        let view = SidebarRowDragNSView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        view.pasteboardType = pasteboardType
+        view.registerForDraggedTypes([pasteboardType])
+        return view
+    }
+
+    func updateNSView(_ view: SidebarRowDragNSView, context: Context) {
+        if view.pasteboardType != pasteboardType {
+            view.unregisterDraggedTypes()
+            view.pasteboardType = pasteboardType
+            view.registerForDraggedTypes([pasteboardType])
+        }
+        view.entryID = entryID
+        view.menuItems = menuItems
+        view.onClick = onClick
+        view.onDragStart = onDragStart
+        view.onDragEnd = onDragEnd
+        view.onDropHover = onDropHover
+        view.onHoverExit = onHoverExit
+        view.onDrop = onDrop
+    }
+}
+
+struct SpaceRowDragHost: View {
     let entryID: String
     let label: String
     let onClick: () -> Void
@@ -16,34 +59,63 @@ struct SpaceRowDragHost: NSViewRepresentable {
     let onHoverExit: () -> Void
     let onDrop: (String, Bool) -> Void
 
-    func makeNSView(context: Context) -> SpaceRowDragNSView {
-        // Non-zero seed frame: a SwiftUI overlay NSView that starts at .zero
-        // can stay 0-size, so clicks and drags never arrive (#42).
-        SpaceRowDragNSView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
-    }
-
-    func updateNSView(_ view: SpaceRowDragNSView, context: Context) {
-        view.entryID = entryID
-        view.label = label
-        view.onClick = onClick
-        view.onRename = onRename
-        view.onClose = onClose
-        view.onDragStart = onDragStart
-        view.onDragEnd = onDragEnd
-        view.onDropHover = onDropHover
-        view.onHoverExit = onHoverExit
-        view.onDrop = onDrop
+    var body: some View {
+        SidebarRowDragHost(
+            entryID: entryID,
+            pasteboardType: SidebarRowDragNSView.spacePasteboardType,
+            menuItems: [
+                .item(title: String(localized: "Rename Space…"), action: onRename),
+                .separator,
+                .destructive(title: String(localized: "Close Space \"\(label)\"…"), action: onClose),
+            ],
+            onClick: onClick,
+            onDragStart: onDragStart,
+            onDragEnd: onDragEnd,
+            onDropHover: onDropHover,
+            onHoverExit: onHoverExit,
+            onDrop: onDrop
+        )
     }
 }
 
-final class SpaceRowDragNSView: NSView, NSDraggingSource {
-    static let pasteboardType = NSPasteboard.PasteboardType("dev.bybee.herdrm.space-id")
+struct AgentRowDragHost: View {
+    let entryID: String
+    let onClick: () -> Void
+    let onRename: () -> Void
+    let onClose: () -> Void
+    let onDragStart: (String) -> Void
+    let onDragEnd: () -> Void
+    let onDropHover: (Bool) -> Void
+    let onHoverExit: () -> Void
+    let onDrop: (String, Bool) -> Void
 
+    var body: some View {
+        SidebarRowDragHost(
+            entryID: entryID,
+            pasteboardType: SidebarRowDragNSView.agentPasteboardType,
+            menuItems: [
+                .item(title: String(localized: "Rename Agent…"), action: onRename),
+                .separator,
+                .destructive(title: String(localized: "Close Agent…"), action: onClose),
+            ],
+            onClick: onClick,
+            onDragStart: onDragStart,
+            onDragEnd: onDragEnd,
+            onDropHover: onDropHover,
+            onHoverExit: onHoverExit,
+            onDrop: onDrop
+        )
+    }
+}
+
+final class SidebarRowDragNSView: NSView, NSDraggingSource {
+    static let spacePasteboardType = NSPasteboard.PasteboardType("dev.bybee.herdrm.space-id")
+    static let agentPasteboardType = NSPasteboard.PasteboardType("dev.bybee.herdrm.agent-id")
+
+    var pasteboardType = SidebarRowDragNSView.spacePasteboardType
     var entryID = ""
-    var label = ""
+    var menuItems: [SidebarContextMenuItem] = []
     var onClick: (() -> Void)?
-    var onRename: (() -> Void)?
-    var onClose: (() -> Void)?
     var onDragStart: ((String) -> Void)?
     var onDragEnd: (() -> Void)?
     var onDropHover: ((Bool) -> Void)?
@@ -55,12 +127,10 @@ final class SpaceRowDragNSView: NSView, NSDraggingSource {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        registerForDraggedTypes([Self.pasteboardType])
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        registerForDraggedTypes([Self.pasteboardType])
     }
 
     override var isFlipped: Bool { true }
@@ -85,7 +155,7 @@ final class SpaceRowDragNSView: NSView, NSDraggingSource {
         didDrag = true
         onDragStart?(entryID)
         let pbItem = NSPasteboardItem()
-        pbItem.setString(entryID, forType: Self.pasteboardType)
+        pbItem.setString(entryID, forType: pasteboardType)
         let item = NSDraggingItem(pasteboardWriter: pbItem)
         item.setDraggingFrame(bounds, contents: nil)
         beginDraggingSession(with: [item], event: down, source: self)
@@ -99,24 +169,26 @@ final class SpaceRowDragNSView: NSView, NSDraggingSource {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
-        let rename = menu.addItem(
-            withTitle: String(localized: "Rename Space…"),
-            action: #selector(renameSpace),
-            keyEquivalent: ""
-        )
-        rename.target = self
-        menu.addItem(.separator())
-        let close = menu.addItem(
-            withTitle: String(localized: "Close Space \"\(label)\"…"),
-            action: #selector(closeSpace),
-            keyEquivalent: ""
-        )
-        close.target = self
+        for item in menuItems {
+            switch item {
+            case .separator:
+                menu.addItem(.separator())
+            case .item(let title, let action):
+                let menuItem = menu.addItem(withTitle: title, action: #selector(runMenuItem(_:)), keyEquivalent: "")
+                menuItem.target = self
+                menuItem.representedObject = MenuAction(action)
+            case .destructive(let title, let action):
+                let menuItem = menu.addItem(withTitle: title, action: #selector(runMenuItem(_:)), keyEquivalent: "")
+                menuItem.target = self
+                menuItem.representedObject = MenuAction(action)
+            }
+        }
         return menu
     }
 
-    @objc private func renameSpace() { onRename?() }
-    @objc private func closeSpace() { onClose?() }
+    @objc private func runMenuItem(_ sender: NSMenuItem) {
+        (sender.representedObject as? MenuAction)?.run()
+    }
 
     func draggingSession(
         _ session: NSDraggingSession,
@@ -165,6 +237,12 @@ final class SpaceRowDragNSView: NSView, NSDraggingSource {
     }
 
     private func draggedID(from sender: NSDraggingInfo) -> String? {
-        sender.draggingPasteboard.string(forType: Self.pasteboardType)
+        sender.draggingPasteboard.string(forType: pasteboardType)
     }
+}
+
+/// NSMenu `representedObject` must be an object; a closure is not.
+private final class MenuAction: NSObject {
+    let run: () -> Void
+    init(_ run: @escaping () -> Void) { self.run = run }
 }
