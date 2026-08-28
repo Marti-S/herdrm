@@ -8,9 +8,15 @@ the Sparkle update description — a release without a section here fails CI.
 ## [Unreleased]
 
 ### Added
-- Standalone terminals can now open a local login shell or connect to any
-  configured device over SSH, reusing the device's OpenSSH config, agent,
-  host-key, and Keychain password flow. (#54, thanks @ljxw88!)
+- Bare herdr shell panes now appear under TERMINALS alongside agents and can
+  be attached on local or SSH devices (`herdr terminal attach`). **New
+  Terminal** (⌘T) creates a persistent shell tab in a chosen device and space.
+  (#57, #58, thanks @forcey!)
+- Standalone terminals — app-owned shells outside any herdr space — can now
+  connect to any configured device over SSH as well as opening a local login
+  shell, reusing the device's OpenSSH config, agent, host-key, and Keychain
+  password flow. Pick "Standalone" in the New Terminal sheet. (#54, thanks
+  @ljxw88!)
 
 ### Fixed
 - Rename Agent now sets the herdr tab label (`tab.rename`) instead of

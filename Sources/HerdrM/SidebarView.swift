@@ -46,8 +46,8 @@ struct SidebarView: View {
                 actionRow(icon: "square.and.pencil", label: "New Agent") {
                     model.showNewAgent = true
                 }
-                // Standalone terminals are listed under TERMINALS below; the
-                // ⌘D split beside an agent remains a local shell.
+                // Terminals — herdr-owned or standalone — are listed under
+                // TERMINALS below; the ⌘D split beside an agent is separate.
                 actionRow(icon: "terminal", label: "New Terminal") {
                     model.showNewTerminal = true
                 }
@@ -116,10 +116,18 @@ struct SidebarView: View {
                         }
                     }
 
-                    if !model.shellSessions.isEmpty {
+                    if !model.visibleTerminals.isEmpty || !model.shellSessions.isEmpty {
                         Spacer().frame(height: 10)
                         groupHeader("Terminals", expanded: $terminalsExpanded)
                         if terminalsExpanded {
+                            ForEach(model.visibleTerminals) { entry in
+                                terminalRow(entry)
+                                    .contextMenu {
+                                        Button("Close Terminal…", role: .destructive) {
+                                            model.requestClosePane(entry.ref, name: entry.title)
+                                        }
+                                    }
+                            }
                             ForEach(model.shellSessions) { session in
                                 shellRow(session)
                                     .contextMenu {
@@ -278,6 +286,47 @@ struct SidebarView: View {
         .buttonStyle(SidebarRowButtonStyle(selected: selected))
     }
 
+    private func terminalRow(_ entry: AppModel.TerminalEntry) -> some View {
+        let selected = model.selectedPane == entry.ref && model.selectedShellID == nil
+        return Button {
+            model.selectedPane = entry.ref
+            model.selectedShellID = nil
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text(entry.title)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 5) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text(model.spaceName(deviceID: entry.device.id, workspaceID: entry.pane.workspaceID))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if model.showsRowDeviceBadges {
+                        deviceBadge(entry.device)
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(height: 51)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarRowButtonStyle(selected: selected))
+    }
+
+    /// App-owned standalone shell (local login shell or plain ssh), outside
+    /// any herdr space.
     private func shellRow(_ session: ShellSession) -> some View {
         let selected = model.selectedShellID == session.id
         return Button {

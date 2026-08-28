@@ -709,10 +709,11 @@ private extension NSView {
     }
 }
 
-/// Embeds a SwiftTerm terminal running `herdr agent attach` (directly or over ssh).
+/// Embeds a SwiftTerm terminal running a direct agent or ordinary-terminal attach
+/// (locally or over SSH).
 struct AttachTerminalView: NSViewRepresentable {
     let device: Device
-    let paneID: String
+    let target: TerminalAttachTarget
     /// The device's herdr server version, so attach picks a matching CLI binary.
     var serverVersion: String?
     /// nil when the server or active manifest does not advertise attachment support.
@@ -752,7 +753,7 @@ struct AttachTerminalView: NSViewRepresentable {
 
         let service = HerdrService(device: device)
         view.attachmentService = service
-        let command = service.attachCommand(paneID: paneID, serverVersion: serverVersion)
+        let command = service.attachCommand(target: target, serverVersion: serverVersion)
         var environment = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         environment.append("LANG=en_US.UTF-8")
         for (key, value) in command.environment {

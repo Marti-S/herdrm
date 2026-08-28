@@ -173,6 +173,7 @@ public struct WorkspaceInfo: Codable, Sendable, Identifiable, Equatable {
 /// Any pane in the session, agent or bare shell.
 public struct PaneInfo: Codable, Sendable, Identifiable, Equatable {
     public let paneID: String
+    public let terminalID: String?
     public let workspaceID: String
     public let tabID: String?
     public let agentKindRaw: String?
@@ -186,6 +187,7 @@ public struct PaneInfo: Codable, Sendable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case paneID = "pane_id"
+        case terminalID = "terminal_id"
         case workspaceID = "workspace_id"
         case tabID = "tab_id"
         case agentKindRaw = "agent"
@@ -196,6 +198,8 @@ public struct PaneInfo: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
+/// A tab in a workspace. Snapshot tabs provide the user-facing label for panes
+/// whose terminal application has not published an OSC title.
 public struct TabInfo: Codable, Sendable, Identifiable, Equatable {
     public let tabID: String
     public let workspaceID: String
@@ -236,6 +240,16 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
     public let focusedWorkspaceID: String?
     public let version: String?
     public let protocolVersion: Int?
+
+    /// Server-owned panes that are attachable as ordinary terminals. Agent panes
+    /// are excluded by the authoritative agent list so the UI never shows one in
+    /// both sections while detection metadata is changing.
+    public var ordinaryTerminalPanes: [PaneInfo] {
+        let agentPaneIDs = Set(agents.map(\.paneID))
+        return (panes ?? []).filter {
+            $0.terminalID != nil && !agentPaneIDs.contains($0.paneID)
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case agents

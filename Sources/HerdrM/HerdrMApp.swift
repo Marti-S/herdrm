@@ -92,6 +92,9 @@ struct HerdrMApp: App {
                 Button("New Agent") { focusedModel?.showNewAgent = true }
                     .keyboardShortcut("n", modifiers: .command)
                     .disabled(focusedModel == nil)
+                Button("New Terminal") { focusedModel?.showNewTerminal = true }
+                    .keyboardShortcut("t", modifiers: .command)
+                    .disabled(focusedModel == nil)
                 Button("New Space") { focusedModel?.showNewSpace = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(focusedModel == nil)
@@ -104,22 +107,16 @@ struct HerdrMApp: App {
             }
 
             CommandMenu("Terminal") {
-                Button("New Terminal…") { focusedModel?.showNewTerminal = true }
-                    .keyboardShortcut("t", modifiers: .command)
-                    .disabled(focusedModel == nil)
-
-                Divider()
-
-                // Guarded on selectedEntry, not just on the model: with the placeholder
+                // Guarded on selectedAttachedEntry, not just on the model: with the placeholder
                 // on screen there is no SplitContainer to render into, so a split would
                 // be invisible yet leave shellSplitAxis non-nil — and the next ⌘W would
                 // "close" that phantom instead of the window.
                 Button("Split Vertically") { focusedModel?.shellSplitAxis = .vertical }
                     .keyboardShortcut("d", modifiers: .command)
-                    .disabled(focusedModel?.selectedEntry == nil)
+                    .disabled(focusedModel?.selectedAttachedEntry == nil)
                 Button("Split Horizontally") { focusedModel?.shellSplitAxis = .horizontal }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
-                    .disabled(focusedModel?.selectedEntry == nil)
+                    .disabled(focusedModel?.selectedAttachedEntry == nil)
 
                 Divider()
 
@@ -179,7 +176,8 @@ struct HerdrMApp: App {
             }
             CommandGroup(replacing: .saveItem) {
                 // ⌘W closes the most local thing first: the split, then the
-                // selected standalone terminal, then the window.
+                // selected standalone terminal, then the window. Server-owned
+                // panes close from their confirmed sidebar action instead.
                 Button(closeButtonTitle) {
                     if let model = focusedModel, model.shellSplitAxis != nil {
                         model.shellSplitAxis = nil

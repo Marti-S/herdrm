@@ -35,6 +35,10 @@ final class RemoteSSHTests: XCTestCase {
             after.workspaces.count >= snapshot.workspaces.count,
             "workspace count went backwards after tab.create"
         )
+        XCTAssertNotNil(
+            after.panes?.first(where: { $0.paneID == paneID })?.terminalID,
+            "created remote pane has no attachable terminal id"
+        )
         try await service.closePane(paneID: paneID)
         await service.disconnect()
     }

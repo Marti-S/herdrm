@@ -601,7 +601,17 @@ public actor HerdrService {
     /// `serverVersion` (from the device's last successful ping) lets the attach
     /// pick a herdr binary whose protocol matches the server's — see
     /// `attachBinarySelection`.
-    public nonisolated func attachCommand(paneID: String, serverVersion: String? = nil) -> TerminalCommand {
+    public nonisolated func attachCommand(
+        target: TerminalAttachTarget,
+        serverVersion: String? = nil
+    ) -> TerminalCommand {
+        let attachArguments: String
+        switch target {
+        case .agent(let paneID):
+            attachArguments = "agent attach \(Self.shellQuoted(paneID)) --takeover"
+        case .terminal(let terminalID):
+            attachArguments = "terminal attach \(Self.shellQuoted(terminalID)) --takeover"
+        }
         switch device.kind {
         case .local:
             // Same PATH we used to discover `herdr`: login-shell snapshot, GUI
@@ -613,7 +623,7 @@ public actor HerdrService {
             environment.removeValue(forKey: "COLUMNS")
             environment.removeValue(forKey: "LINES")
             let script = "\(Self.attachBinarySelection(serverVersion: serverVersion)); "
-                + "exec \"$hb\" agent attach '\(paneID)' --takeover"
+                + "exec \"$hb\" \(attachArguments)"
             return TerminalCommand(
                 executable: "/bin/sh",
                 args: ["-c", script],
@@ -626,7 +636,7 @@ public actor HerdrService {
             // runs in the user's login shell, and the script's sh syntax must
             // not depend on it.
             let script = "\(SSHTunnel.remotePathExport); \(Self.attachBinarySelection(serverVersion: serverVersion)); "
-                + "exec \"$hb\" agent attach '\(paneID)' --takeover"
+                + "exec \"$hb\" \(attachArguments)"
             let remote = "exec /bin/sh -c \(Self.shellQuoted(script))"
             let authentication = SSHTunnel.authenticationConfiguration(for: device.id)
             var environment = (ShellEnvironment.cached ?? .empty).launchEnvironment(binary: nil)
@@ -653,6 +663,16 @@ public actor HerdrService {
             )
         }
     }
+
+    /// Compatibility convenience for agent callers.
+    public nonisolated func attachCommand(paneID: String, serverVersion: String? = nil) -> TerminalCommand {
+        attachCommand(target: .agent(paneID: paneID), serverVersion: serverVersion)
+    }
+}
+
+public enum TerminalAttachTarget: Sendable, Equatable {
+    case agent(paneID: String)
+    case terminal(terminalID: String)
 }
 
 public struct TerminalCommand: Sendable {
