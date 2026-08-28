@@ -5,7 +5,7 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
-## [Unreleased]
+## [0.5.2] - 2026-08-28
 
 ### Added
 - Bare herdr shell panes now appear under TERMINALS alongside agents and can
