@@ -151,6 +151,14 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
     var usesLightColors = false
     var appliedDarkAppearance: Bool?
     private var lightColorAdapter = LightTerminalANSIAdapter()
+
+    /// A light-mode feed can retain a partial SGR while waiting to identify a
+    /// Powerline separator. Drop that parser state when switching themes so a
+    /// later light-mode session cannot prepend stale bytes to new output.
+    func resetLightColorAdapter() {
+        lightColorAdapter = LightTerminalANSIAdapter()
+    }
+
     /// Last non-empty caret frame, used when the TUI hides the hardware cursor
     /// and SwiftTerm's `firstRect` would otherwise report `.zero`.
     private var lastIMECaretFrame: NSRect = .zero
@@ -873,6 +881,7 @@ func applyTerminalAppearance(
     guard let view = view as? LineBreakTerminalView,
           view.appliedDarkAppearance != dark
     else { return }
+    view.resetLightColorAdapter()
     view.appliedDarkAppearance = dark
     view.usesLightColors = !dark
     view.nativeBackgroundColor = dark ? TerminalDefaults.darkBackground : TerminalDefaults.lightBackground
