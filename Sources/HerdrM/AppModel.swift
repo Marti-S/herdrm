@@ -116,7 +116,17 @@ final class AppModel: ObservableObject {
     private static let deviceFilterKey = "device.filter"
     @Published var sessions: [UUID: DeviceSessionState] = [:]
     @Published var selectedSpace: SpaceRef?
-    @Published var selectedPane: PaneRef?
+    @Published var selectedPane: PaneRef? {
+        didSet {
+            // Leaving a finished agent marks it viewed. Staying on it while
+            // the turn ends must not swallow the unread flag.
+            if let old = oldValue, old != selectedPane {
+                unreadAgents.remove(AgentUnreadKey(deviceID: old.deviceID, paneID: old.paneID))
+            }
+        }
+    }
+    /// Finished agents the user has not opened since they flipped to `done`.
+    @Published private(set) var unreadAgents: Set<AgentUnreadKey> = []
 
     @Published var showAddDevice = false
     @Published var showNewAgent = false
@@ -125,6 +135,10 @@ final class AppModel: ObservableObject {
     @Published var showSearch = false
     @Published var isFileManagerActive = false
     @Published var shellSplitAxis: SplitAxis?
+    /// Set by `reveal` when a jump lands while the ⌘D split is open, and consumed once the
+    /// main window is key again. Only an actual jump sets it: dismissing the search with
+    /// Escape never calls `reveal`, and the sidebar assigns `selectedPane` directly.
+    @Published var pendingSplitAgentFocus = false
     /// The pane that currently holds the keyboard within the ⌘D split. Reset to
     /// the agent side whenever the split closes so reopening it is predictable.
     @Published var activeSplitSide: SplitSide = .agent
@@ -323,7 +337,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Agents across the scope, filtered by selected space, status-bucket sorted.
+    /// Agents across the scope, filtered by selected space, in herdr tab order
+    /// (device → workspace → tab number) so sidebar drag matches the TUI.
     var visibleAgents: [AgentEntry] {
         var entries = devicesInScope.flatMap { device in
             session(device.id).agents.map { agentEntry(device: device, agent: $0) }
@@ -333,11 +348,16 @@ final class AppModel: ObservableObject {
                 $0.device.id == space.deviceID && $0.agent.workspaceID == space.workspaceID
             }
         }
-        return entries.sorted {
-            if $0.agent.status.sortBucket != $1.agent.status.sortBucket {
-                return $0.agent.status.sortBucket < $1.agent.status.sortBucket
-            }
-            return ($0.agent.revision ?? 0) > ($1.agent.revision ?? 0)
+        let deviceRank = Dictionary(uniqueKeysWithValues: devicesInScope.enumerated().map { ($1.id, $0) })
+        return entries.sorted { lhs, rhs in
+            let d0 = deviceRank[lhs.device.id] ?? Int.max
+            let d1 = deviceRank[rhs.device.id] ?? Int.max
+            if d0 != d1 { return d0 < d1 }
+            let w0 = workspaceRank(deviceID: lhs.device.id, workspaceID: lhs.agent.workspaceID)
+            let w1 = workspaceRank(deviceID: rhs.device.id, workspaceID: rhs.agent.workspaceID)
+            if w0 != w1 { return w0 < w1 }
+            return tabRank(deviceID: lhs.device.id, tabID: lhs.agent.tabID)
+                < tabRank(deviceID: rhs.device.id, tabID: rhs.agent.tabID)
         }
     }
 
@@ -363,6 +383,51 @@ final class AppModel: ObservableObject {
             }
         }
         return entries
+    }
+
+    func isUnread(_ entry: AgentEntry) -> Bool {
+        unreadAgents.contains(AgentUnreadKey(deviceID: entry.device.id, paneID: entry.agent.paneID))
+    }
+
+    func attention(in entry: SpaceEntry) -> SpaceAttention {
+        let agents = session(entry.device.id).agents.filter {
+            $0.workspaceID == entry.workspace.workspaceID
+        }
+        return SpaceAttention.rollup(agents.map {
+            (
+                status: $0.status,
+                unreadDone: unreadAgents.contains(
+                    AgentUnreadKey(deviceID: entry.device.id, paneID: $0.paneID)
+                )
+            )
+        })
+    }
+
+    var scopeAttention: SpaceAttention {
+        SpaceAttention.rollup(devicesInScope.flatMap { device in
+            session(device.id).agents.map {
+                (
+                    status: $0.status,
+                    unreadDone: unreadAgents.contains(
+                        AgentUnreadKey(deviceID: device.id, paneID: $0.paneID)
+                    )
+                )
+            }
+        })
+    }
+
+    private func workspaceRank(deviceID: UUID, workspaceID: String) -> Int {
+        session(deviceID).workspaces.firstIndex { $0.workspaceID == workspaceID } ?? Int.max
+    }
+
+    private func tabRank(deviceID: UUID, tabID: String) -> Int {
+        session(deviceID).tabs.firstIndex { $0.tabID == tabID } ?? Int.max
+    }
+
+    private func orderedTabIDs(deviceID: UUID, workspaceID: String) -> [String] {
+        session(deviceID).tabs
+            .filter { $0.workspaceID == workspaceID }
+            .map(\.tabID)
     }
 
     var scopeAgentCount: Int {
@@ -423,7 +488,7 @@ final class AppModel: ObservableObject {
             if ref == nil { return }
             if entry.device.id == ref!.deviceID && entry.workspaceID == ref!.workspaceID { return }
         }
-        selectedPane = firstVisiblePaneRef
+        selectedPane = preferredVisibleAgent()?.ref ?? firstVisiblePaneRef
     }
 
     func setDeviceFilter(_ id: UUID?) {
@@ -432,14 +497,21 @@ final class AppModel: ObservableObject {
             selectedSpace = nil
         }
         if let id, let selected = selectedPane, selected.deviceID != id {
-            selectedPane = firstVisiblePaneRef
+            selectedPane = preferredVisibleAgent()?.ref ?? firstVisiblePaneRef
         }
     }
 
-    /// Set by `reveal` when a jump lands while the ⌘D split is open, and consumed once the
-    /// main window is key again. Only an actual jump sets it: dismissing the search with
-    /// Escape never calls `reveal`, and the sidebar assigns `selectedPane` directly.
-    @Published var pendingSplitAgentFocus = false
+    /// When jumping into a space, land on whoever still needs a look — not
+    /// merely the first tab.
+    private func preferredVisibleAgent() -> AgentEntry? {
+        let agents = visibleAgents
+        if let blocked = agents.first(where: { $0.agent.status == .blocked }) { return blocked }
+        if let unread = agents.first(where: { $0.agent.status == .done && isUnread($0) }) {
+            return unread
+        }
+        if let working = agents.first(where: { $0.agent.status == .working }) { return working }
+        return agents.first
+    }
 
     /// Jump target used by the search sheet and by notification clicks.
     func reveal(_ ref: PaneRef) {
@@ -703,7 +775,9 @@ final class AppModel: ObservableObject {
         store.save(devices)
         if deviceFilter == device.id { deviceFilter = nil }
         if selectedSpace?.deviceID == device.id { selectedSpace = nil }
-        if selectedPane?.deviceID == device.id { selectedPane = firstVisiblePaneRef }
+        if selectedPane?.deviceID == device.id {
+            selectedPane = preferredVisibleAgent()?.ref ?? firstVisiblePaneRef
+        }
     }
 
     // MARK: - Refresh
@@ -712,6 +786,12 @@ final class AppModel: ObservableObject {
         guard let device = device(deviceID), let service = services[deviceID] else { return }
         do {
             let snapshot = try await service.snapshot()
+            unreadAgents = AgentUnread.applying(
+                previous: previousStatuses[deviceID] ?? [:],
+                agents: snapshot.agents,
+                unread: unreadAgents,
+                deviceID: device.id
+            )
             notifyTransitions(
                 device: device,
                 from: previousStatuses[deviceID] ?? [:],
@@ -724,8 +804,12 @@ final class AppModel: ObservableObject {
             )
             sessions[deviceID]?.agents = snapshot.agents
             sessions[deviceID]?.workspaces = snapshot.workspaces
+            sessions[deviceID]?.workspaces = snapshot.workspaces
+            sessions[deviceID]?.tabs = Self.orderedTabs(
+                snapshot.tabs ?? [],
+                workspaces: snapshot.workspaces
+            )
             sessions[deviceID]?.panes = snapshot.ordinaryTerminalPanes
-            sessions[deviceID]?.tabs = snapshot.tabs ?? []
             let paneIDs = Set((snapshot.panes ?? []).map(\.paneID))
                 .union(snapshot.agents.map(\.paneID))
             if let selected = selectedPane, selected.deviceID == deviceID,
@@ -748,7 +832,9 @@ final class AppModel: ObservableObject {
                         selectedPane = focused
                     }
                 }
-                if selectedPane == nil { selectedPane = firstVisiblePaneRef }
+                if selectedPane == nil {
+                    selectedPane = preferredVisibleAgent()?.ref ?? firstVisiblePaneRef
+                }
             }
         } catch {
             sessions[deviceID]?.connection = .failed(error.localizedDescription)
@@ -951,6 +1037,86 @@ final class AppModel: ObservableObject {
                 actionError = actionErrorMessage(error, device: source.device)
             }
         }
+    }
+
+    /// Reorders an agent tab by dropping it on another agent in the same space.
+    /// Cross-space and cross-device drops are ignored (`tab.move` is in-workspace).
+    func moveAgent(_ source: AgentEntry, onto target: AgentEntry, placeAfter: Bool) {
+        guard source.device.id == target.device.id,
+              source.agent.workspaceID == target.agent.workspaceID
+        else { return }
+        let orderedIDs = orderedTabIDs(
+            deviceID: source.device.id,
+            workspaceID: source.agent.workspaceID
+        )
+        guard let insertIndex = TabReorder.insertIndex(
+            moving: source.agent.tabID,
+            onto: target.agent.tabID,
+            placeAfter: placeAfter,
+            orderedIDs: orderedIDs
+        ) else { return }
+        guard let plan = WorkspaceReorder.plan(
+            moving: source.agent.tabID,
+            onto: target.agent.tabID,
+            placeAfter: placeAfter,
+            orderedIDs: orderedIDs
+        ) else { return }
+
+        if let current = sessions[source.device.id]?.tabs {
+            let scoped = current.filter { $0.workspaceID == source.agent.workspaceID }
+            let reordered = WorkspaceReorder.applying(scoped, id: \.tabID, plan: plan)
+            sessions[source.device.id]?.tabs = Self.replacingTabs(
+                current,
+                workspaceID: source.agent.workspaceID,
+                with: reordered
+            )
+        }
+
+        Task {
+            do {
+                try await service(for: source.device).moveTab(
+                    tabID: source.agent.tabID,
+                    insertIndex: insertIndex
+                )
+                await refresh(source.device.id)
+            } catch {
+                await refresh(source.device.id)
+                actionError = actionErrorMessage(error, device: source.device)
+            }
+        }
+    }
+
+    private static func orderedTabs(_ tabs: [TabInfo], workspaces: [WorkspaceInfo]) -> [TabInfo] {
+        let wsIndex = Dictionary(uniqueKeysWithValues: workspaces.enumerated().map {
+            ($1.workspaceID, $0)
+        })
+        return tabs.sorted {
+            let w0 = wsIndex[$0.workspaceID] ?? Int.max
+            let w1 = wsIndex[$1.workspaceID] ?? Int.max
+            if w0 != w1 { return w0 < w1 }
+            return ($0.number ?? Int.max) < ($1.number ?? Int.max)
+        }
+    }
+
+    private static func replacingTabs(
+        _ tabs: [TabInfo],
+        workspaceID: String,
+        with reordered: [TabInfo]
+    ) -> [TabInfo] {
+        var result: [TabInfo] = []
+        var inserted = false
+        for tab in tabs {
+            if tab.workspaceID == workspaceID {
+                if !inserted {
+                    result.append(contentsOf: reordered)
+                    inserted = true
+                }
+            } else {
+                result.append(tab)
+            }
+        }
+        if !inserted { result.append(contentsOf: reordered) }
+        return result
     }
 
     /// Creates a workspace rooted at the given directory ("~" expands to the device's

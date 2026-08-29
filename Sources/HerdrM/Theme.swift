@@ -68,10 +68,11 @@ enum Theme {
     }
 }
 
-/// Status marker shared by the sidebar rows and the ⌘K search results, so both
-/// surfaces speak the same visual language for "working / needs input / done".
+/// Codex-style conversation marks: spinner while running, a filled unread
+/// dot after a finish you have not opened, nothing once you have looked.
 struct AgentStatusGlyph: View {
     let status: AgentStatus
+    var unreadDone: Bool = false
 
     var body: some View {
         switch status {
@@ -83,10 +84,30 @@ struct AgentStatusGlyph: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.warning)
         case .done:
-            Image(systemName: "checkmark")
-                .font(.system(size: 10.5, weight: .bold))
-                .foregroundStyle(Theme.success)
+            if unreadDone {
+                Circle()
+                    .fill(Theme.working)
+                    .frame(width: 7, height: 7)
+            }
         case .idle, .unknown:
+            EmptyView()
+        }
+    }
+}
+
+/// Space row uses the same glyph as an agent, for the strongest state inside.
+struct SpaceAttentionGlyph: View {
+    let attention: SpaceAttention
+
+    var body: some View {
+        switch attention {
+        case .blocked:
+            AgentStatusGlyph(status: .blocked)
+        case .unreadDone:
+            AgentStatusGlyph(status: .done, unreadDone: true)
+        case .working:
+            AgentStatusGlyph(status: .working)
+        case .none:
             EmptyView()
         }
     }
