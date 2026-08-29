@@ -5,22 +5,25 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
-## [Unreleased]
+## [0.5.3] - 2026-08-29
 
 ### Added
 - Pasting images and files into an attached terminal now works for Cursor,
   Gemini, Grok, OpenCode, and pi, alongside the existing Claude Code, Codex,
   and Copilot support. On a local device an image on the clipboard forwards
   Ctrl+V so the agent attaches the pixels itself; on an SSH device the image
-  or file is staged on that host and its path is pasted.
-- Settings → Agents can now override the binary path for pi.
+  or file is staged on that host and its path is pasted. (#61, thanks
+  @ljxw88!)
+- Settings → Agents can now override the binary path for pi. (#61, thanks
+  @ljxw88!)
 - Sidebar Spaces and Agents share one set of conversation marks: a spinner
   while running, a filled unread dot after a finish you have not opened,
   nothing once viewed, and an exclamation if the agent needs input. A space
-  shows the strongest state among its agents.
+  shows the strongest state among its agents. (#60, thanks @JackieJam!)
 - Agents in the sidebar can be drag-reordered. The drop calls herdr's
   `tab.move` (same RPC the TUI uses) so the order is the session's, not just
   this window. Cross-space drops are ignored. ⌘K still ranks by urgency.
+  (#60, thanks @JackieJam!)
 
 ### Fixed
 - Kimi and pi rows show their bundled brand icon instead of no icon at all —
@@ -28,10 +31,12 @@ the Sparkle update description — a release without a section here fails CI.
   that only match a prefix ("claude-code-next") now resolve to the longest
   matching mark rather than an arbitrary one, and only on a `-` boundary so a
   two-letter kind like `pi` can't claim an unrelated name such as `pilot`.
+  (#61, thanks @ljxw88!)
 - Powerline prompt separators render correctly in light mode: a separator's
   foreground is the neighboring segment's background, so the adapter now
   applies the background transform to it instead of the text-contrast
-  transform that made joins look dark and blended.
+  transform that made joins look dark and blended. (#63, #64, thanks
+  @hualinli!)
 
 ## [0.5.2] - 2026-08-28
 
