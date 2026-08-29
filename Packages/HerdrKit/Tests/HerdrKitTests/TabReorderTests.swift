@@ -12,9 +12,23 @@ final class TabReorderTests: XCTestCase {
     }
 
     func testDropOnLowerHalfOfLastRowAppends() {
+        // Original-list coordinates: herdr subtracts one itself for a forward
+        // move, so append sends the full count, not count - 1.
         XCTAssertEqual(
             TabReorder.insertIndex(moving: "t1", onto: "t3", placeAfter: true, orderedIDs: order),
-            2
+            3
+        )
+    }
+
+    func testForwardDropBeforeALaterRowUsesItsOriginalIndex() {
+        // [t1, t2, t3, t4], t1 dropped on the upper half of t4 → [t2, t3, t1, t4].
+        // herdr: remove t1, insert at 3 - 1 = 2.
+        XCTAssertEqual(
+            TabReorder.insertIndex(
+                moving: "t1", onto: "t4", placeAfter: false,
+                orderedIDs: ["t1", "t2", "t3", "t4"]
+            ),
+            3
         )
     }
 
