@@ -68,15 +68,21 @@ enum BrandIconLoader {
             "deepseek": "deepseek",
             "qwen": "qwen", "qwen-code": "qwen",
             "copilot": "copilot", "github-copilot": "githubcopilot",
+            "kimi": "kimi",
+            "pi": "pi",
         ]
         var base: String?
         if let exact = map[normalized] {
             base = exact
         } else {
-            for (key, value) in map where normalized.hasPrefix(key) {
-                base = value
-                break
-            }
+            // Suffixed kinds ("claude-code-next") fall back to their base mark.
+            // Longest key first so "claude-code" outranks "claude" — a plain
+            // dictionary walk picked an arbitrary one — and the "-" boundary
+            // keeps a two-letter kind like "pi" from claiming "pilot".
+            base = map
+                .filter { normalized.hasPrefix("\($0.key)-") }
+                .max { $0.key.count < $1.key.count }?
+                .value
         }
         guard let base else { return nil }
         if Bundle.main.url(forResource: "\(base)-color", withExtension: "svg") != nil {

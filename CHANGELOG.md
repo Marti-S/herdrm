@@ -5,6 +5,23 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Added
+- Pasting images and files into an attached terminal now works for Cursor,
+  Gemini, Grok, OpenCode, and pi, alongside the existing Claude Code, Codex,
+  and Copilot support. On a local device an image on the clipboard forwards
+  Ctrl+V so the agent attaches the pixels itself; on an SSH device the image
+  or file is staged on that host and its path is pasted.
+- Settings → Agents can now override the binary path for pi.
+
+### Fixed
+- Kimi and pi rows show their bundled brand icon instead of no icon at all —
+  both marks shipped in the app but were missing from the icon lookup. Kinds
+  that only match a prefix ("claude-code-next") now resolve to the longest
+  matching mark rather than an arbitrary one, and only on a `-` boundary so a
+  two-letter kind like `pi` can't claim an unrelated name such as `pilot`.
+
 ## [0.5.2] - 2026-08-28
 
 ### Added
