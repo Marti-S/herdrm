@@ -28,7 +28,30 @@ struct LightTerminalANSIAdapter {
             guard end < pending.count else { break }
 
             let sequence = Array(pending[index...end])
-            output.append(contentsOf: pending[end] == 0x6D ? transformSGR(sequence) : sequence)
+            if pending[end] == 0x6D {
+                // A Powerline separator is a foreground-colored shape painted
+                // over the next segment's background.  Its foreground is not
+                // ordinary text: it is deliberately the previous segment's
+                // background.  Wait for the next scalar so the light-theme
+                // contrast transform does not turn that join into a dark,
+                // blended-looking arrow.
+                if let preservesPowerlineForeground = powerlineFollowsSGR(after: end + 1) {
+                    output.append(contentsOf: transformSGR(
+                        sequence,
+                        preservePowerlineForeground: preservesPowerlineForeground
+                    ))
+                } else if sequenceContainsForegroundColor(sequence) {
+                    // Only a foreground SGR can be the color of a following
+                    // separator. Do not hold resets/background-only updates at
+                    // the end of a PTY read; otherwise typed echo can inherit
+                    // the previous cell's style until another output arrives.
+                    break
+                } else {
+                    output.append(contentsOf: transformSGR(sequence))
+                }
+            } else {
+                output.append(contentsOf: sequence)
+            }
             index = end + 1
         }
 
@@ -94,7 +117,62 @@ struct LightTerminalANSIAdapter {
         return (levels[value / 36], levels[(value / 6) % 6], levels[value % 6])
     }
 
-    private func transformSGR(_ sequence: [UInt8]) -> [UInt8] {
+    private func sequenceContainsForegroundColor(_ sequence: [UInt8]) -> Bool {
+        guard sequence.count >= 3 else { return false }
+        let parameters = sequence[2..<(sequence.count - 1)]
+        let values = String(decoding: parameters, as: UTF8.self)
+            .split(separator: ";", omittingEmptySubsequences: false)
+        return values.contains { $0 == "38" }
+    }
+
+    /// Looks past complete control sequences for the next UTF-8 scalar.
+    /// `nil` means that the current chunk ends before the scalar (or its
+    /// intervening CSI), so the caller must retain the SGR for the next feed.
+    private func powerlineFollowsSGR(after start: Int) -> Bool? {
+        var index = start
+        while index < pending.count {
+            // SGRs are sometimes split into separate writes by a prompt
+            // renderer. Skip a complete CSI while looking for the glyph.
+            if pending[index] == 0x1B {
+                guard index + 1 < pending.count else { return nil }
+                guard pending[index + 1] == 0x5B else { return false }
+                var end = index + 2
+                while end < pending.count, !(0x40...0x7E).contains(pending[end]) {
+                    end += 1
+                }
+                guard end < pending.count else { return nil }
+                index = end + 1
+                continue
+            }
+
+            // Do not classify an incomplete UTF-8 sequence as an ordinary
+            // character: dataReceived can split the glyph across chunks.
+            let first = pending[index]
+            let scalarLength: Int
+            switch first {
+            case 0xC2...0xDF: scalarLength = 2
+            case 0xE0...0xEF: scalarLength = 3
+            case 0xF0...0xF4: scalarLength = 4
+            default:
+                return false
+            }
+            guard index + scalarLength <= pending.count else { return nil }
+            let scalarBytes = pending[index..<(index + scalarLength)]
+            guard let scalar = String(decoding: scalarBytes, as: UTF8.self).unicodeScalars.first else {
+                return false
+            }
+            // Include the thin and rounded Powerline variants as well as the
+            // four shapes SwiftTerm draws itself. All of them use the same
+            // foreground/background layering contract.
+            return (0xE0B0...0xE0D7).contains(scalar.value)
+        }
+        return nil
+    }
+
+    private func transformSGR(
+        _ sequence: [UInt8],
+        preservePowerlineForeground: Bool = false
+    ) -> [UInt8] {
         guard sequence.count >= 3 else { return sequence }
         let parameters = sequence[2..<(sequence.count - 1)]
         let values = String(decoding: parameters, as: UTF8.self)
@@ -111,7 +189,13 @@ struct LightTerminalANSIAdapter {
                let green = Int(values[index + 3]),
                let blue = Int(values[index + 4]),
                (0...255).contains(red), (0...255).contains(green), (0...255).contains(blue) {
-                let light = Self.adapt(red: red, green: green, blue: blue, isBackground: isBackground)
+                let light = preservePowerlineForeground && !isBackground
+                    // Separator foregrounds are neighboring backgrounds, so
+                    // use the background transform rather than the text
+                    // contrast transform. This also keeps dark prompts
+                    // internally consistent after their backgrounds flip.
+                    ? Self.adapt(red: red, green: green, blue: blue, isBackground: true)
+                    : Self.adapt(red: red, green: green, blue: blue, isBackground: isBackground)
                 output += [values[index], "2", String(light.red), String(light.green), String(light.blue)]
                 index += 5
             } else if isColor, index + 2 < values.count, values[index + 1] == "5",
@@ -120,7 +204,9 @@ struct LightTerminalANSIAdapter {
                       // already themed; rewriting them here would flip them twice.
                       (16...255).contains(paletteIndex) {
                 let base = Self.xterm256RGB(paletteIndex)
-                let light = Self.adapt(red: base.red, green: base.green, blue: base.blue, isBackground: isBackground)
+                let light = preservePowerlineForeground && !isBackground
+                    ? Self.adapt(red: base.red, green: base.green, blue: base.blue, isBackground: true)
+                    : Self.adapt(red: base.red, green: base.green, blue: base.blue, isBackground: isBackground)
                 output += [values[index], "2", String(light.red), String(light.green), String(light.blue)]
                 index += 3
             } else {
