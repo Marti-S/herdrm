@@ -1,3 +1,4 @@
+#if os(macOS)
 import Darwin
 import Foundation
 
@@ -469,3 +470,4 @@ private enum TimedProcess {
         }
     }
 }
+#endif  // os(macOS)

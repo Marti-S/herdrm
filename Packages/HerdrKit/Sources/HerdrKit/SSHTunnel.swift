@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 struct SSHAuthenticationConfiguration {
@@ -510,3 +511,4 @@ public actor SSHTunnel {
         return String(detail.suffix(2_000))
     }
 }
+#endif  // os(macOS)

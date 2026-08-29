@@ -11,6 +11,8 @@ options:
 packages:
   HerdrKit:
     path: Packages/HerdrKit
+  HerdrSSH:
+    path: Packages/HerdrSSH
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     # 1.19 ships the marked-text overlay used for IME preedit; do not reimplement it.
@@ -76,3 +78,52 @@ targets:
           CODE_SIGN_IDENTITY: "Developer ID Application: MOE AI LLC (NCFNX3LJ83)"
           ONLY_ACTIVE_ARCH: NO
           ARCHS: "arm64 x86_64"
+
+  HerdrMobile:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - Sources/HerdrMobile
+    dependencies:
+      - package: HerdrKit
+      - package: HerdrSSH
+      - package: SwiftTerm
+    info:
+      path: Sources/HerdrMobile/Info.plist
+      properties:
+        CFBundleName: herdrm
+        CFBundleDisplayName: herdrm
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.developer-tools
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocalNetworkUsageDescription: >-
+          herdrm connects to your Macs over SSH on your local network to reach
+          the herdr session running on them.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.bybee.herdrm.ios
+        PRODUCT_NAME: HerdrMobile
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.10"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: NCFNX3LJ83
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        # The bundled libssh2/OpenSSL xcframeworks ship arm64 device + arm64
+        # simulator slices only (see Packages/HerdrSSH/Artifacts/PROVENANCE.md).
+        ARCHS: arm64
+        ONLY_ACTIVE_ARCH: NO
+        EXCLUDED_ARCHS__sdk_iphonesimulator__: x86_64

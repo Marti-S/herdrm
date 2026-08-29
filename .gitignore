@@ -8,3 +8,4 @@ Sources/HerdrM/Info.plist
 .swiftpm/
 xcuserdata/
 build-rel/
+build-ios/

@@ -13,7 +13,7 @@ public enum AgentAttachmentPathSyntax: String, Decodable, Sendable, Equatable {
     public func format(_ path: String) -> String {
         switch self {
         case .shellQuoted:
-            return HerdrService.shellQuoted(path)
+            return ShellQuoting.quoted(path)
         }
     }
 }

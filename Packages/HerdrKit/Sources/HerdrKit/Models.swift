@@ -277,6 +277,11 @@ public struct HerdrEvent: Sendable {
     public let kind: String
     public let payload: JSONValue
 
+    public init(kind: String, payload: JSONValue) {
+        self.kind = kind
+        self.payload = payload
+    }
+
     /// All parameterless (globally subscribable) kinds in herdr protocol 19.
     /// pane.agent_status_changed / pane.scroll_changed / pane.output_matched are
     /// pane-scoped (require pane_id) and are deliberately absent; status changes
@@ -319,4 +324,10 @@ public enum HerdrError: Error, LocalizedError, Sendable {
         case .fileTransferFailed(let reason): return "file transfer failed: \(reason)"
         }
     }
+}
+
+/// What an embedded terminal attaches to: an agent pane or a bare herdr terminal.
+public enum TerminalAttachTarget: Sendable, Equatable {
+    case agent(paneID: String)
+    case terminal(terminalID: String)
 }

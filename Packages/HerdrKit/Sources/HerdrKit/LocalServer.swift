@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Starts the local herdr server on demand, so a cold boot connects instead of telling the
@@ -222,3 +223,4 @@ private final class ProcessBox: @unchecked Sendable {
         self.process = process
     }
 }
+#endif  // os(macOS)

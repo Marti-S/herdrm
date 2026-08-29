@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Security
 
@@ -185,4 +186,4 @@ public struct SSHCredentialStoreError: LocalizedError, Sendable {
         let detail = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
         return "could not access SSH password in Keychain: \(detail)"
     }
-}
+}#endif  // os(macOS)

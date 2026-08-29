@@ -10,10 +10,22 @@ Design canvas (waku-style sidebar, light/dark): `design/` — published as the
 
 ## Layout
 
-- `Packages/HerdrKit` — SPM library: NDJSON-over-Unix-socket RPC (`SocketRPC`),
-  models, `SSHTunnel` (OpenSSH `-L local.sock:remote.sock` forward), `Device`/`DeviceStore`
-  (persisted to `~/Library/Application Support/HerdrM/devices.json`), `HerdrService` facade.
-- `Sources/HerdrM` — SwiftUI app (XcodeGen `project.yml`), SwiftTerm terminal embed.
+- `Packages/HerdrKit` — SPM library (macOS + iOS): NDJSON-over-Unix-socket RPC
+  (`SocketRPC`), models, `Device`/`DeviceStore` (persisted to
+  `~/Library/Application Support/HerdrM/devices.json`). macOS-only files are
+  `#if os(macOS)`-gated: `SSHTunnel` (OpenSSH forward), `HerdrService` facade,
+  `ShellEnvironment`, `LocalServer`, `DeviceFileService`, `SSHCredentialStore`.
+- `Packages/HerdrSSH` — SPM library (iOS 18+): libssh2 + OpenSSL as prebuilt
+  arm64 xcframeworks (`Artifacts/PROVENANCE.md`), ported from Heeler's
+  HeelerSSH. `SSHConnection` does `direct-streamlocal` to the remote herdr
+  socket (one channel per RPC), PTY exec channels for terminal attach.
+- `Sources/HerdrM` — macOS SwiftUI app (XcodeGen `project.yml`), SwiftTerm embed.
+- `Sources/HerdrMobile` — iOS/iPadOS SwiftUI app (`HerdrMobile` target, iOS 18,
+  iPhone + iPad). Devices are SSH hosts (Ed25519 device key in Keychain or
+  password; TOFU host keys); RPC over `HerdrSSH`; terminal = display-first PTY
+  attach behind an APC bootstrap marker + native composer (`agent.prompt`) +
+  key bar (`pane.send_input` keys). No relay yet — that lands as a second
+  `MobileTransport` implementation.
 - `design/` — design canvas working files (`*.dc.html` artboards + `canvas.json`).
 
 ## Build & test

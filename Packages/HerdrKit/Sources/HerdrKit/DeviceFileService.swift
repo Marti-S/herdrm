@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 public struct DeviceFileEntry: Identifiable, Hashable, Sendable {
@@ -923,3 +924,4 @@ private final class LockedData: @unchecked Sendable {
         lock.withLock { self.data = data }
     }
 }
+#endif  // os(macOS)

@@ -73,7 +73,7 @@ public struct SocketRPC: Sendable {
 
     // MARK: - Wire helpers
 
-    static func encodeRequest(id: String, method: String, params: JSONValue?) -> Data {
+    public static func encodeRequest(id: String, method: String, params: JSONValue?) -> Data {
         // herdr requires `params` to be present even when empty.
         var object: [String: JSONValue] = ["id": .string(id), "method": .string(method)]
         object["params"] = params ?? .object([:])
@@ -81,7 +81,7 @@ public struct SocketRPC: Sendable {
         return data + Data([0x0A])
     }
 
-    static func decodeResponse(_ line: Data?) throws -> JSONValue {
+    public static func decodeResponse(_ line: Data?) throws -> JSONValue {
         guard let line, !line.isEmpty else { throw HerdrError.malformedResponse("empty reply") }
         let value: JSONValue
         do {

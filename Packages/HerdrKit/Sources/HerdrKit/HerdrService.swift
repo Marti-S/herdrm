@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Per-device facade over herdr's socket API. For SSH devices it owns the tunnel.
@@ -275,10 +276,9 @@ public actor HerdrService {
         return names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    /// Wraps a path for the remote shell. Single quotes so nothing inside expands;
-    /// the quote dance survives sh, zsh, and fish login shells alike.
+    /// Wraps a path for the remote shell — see `ShellQuoting.quoted`.
     static func shellQuoted(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        ShellQuoting.quoted(path)
     }
 
     /// Creates a workspace (herdr "space") rooted at a directory.
@@ -682,11 +682,6 @@ public actor HerdrService {
     }
 }
 
-public enum TerminalAttachTarget: Sendable, Equatable {
-    case agent(paneID: String)
-    case terminal(terminalID: String)
-}
-
 public struct TerminalCommand: Sendable {
     public let executable: String
     public let args: [String]
@@ -696,3 +691,4 @@ public struct TerminalCommand: Sendable {
 }
 
 public typealias AttachCommand = TerminalCommand
+#endif  // os(macOS)
