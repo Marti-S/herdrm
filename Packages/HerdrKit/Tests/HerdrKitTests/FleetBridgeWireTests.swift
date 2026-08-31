@@ -26,7 +26,7 @@ final class FleetBridgeWireTests: XCTestCase {
 
     func testSnapshotRoundTrip() throws {
         let descriptor = FleetDeviceDescriptor(
-            id: UUID(), name: "Mac", subtitle: "This Mac", isLocal: true, osID: "macos"
+            id: UUID(), name: "Mac", kind: .local, osID: "macos"
         )
         let snapshot = FleetSnapshot(
             revision: 42,
@@ -34,7 +34,8 @@ final class FleetBridgeWireTests: XCTestCase {
                 FleetDeviceSnapshot(
                     device: descriptor,
                     connection: .connected(version: "0.8.2"),
-                    snapshot: nil
+                    snapshot: nil,
+                    availableAgentKinds: ["codex", "claude"]
                 )
             ]
         )
@@ -43,6 +44,25 @@ final class FleetBridgeWireTests: XCTestCase {
             try FleetBridgeWire.decodeServer(FleetBridgeWire.encodeServer(.snapshot(record))),
             .snapshot(record)
         )
+    }
+
+    func testRemoteDescriptorContainsNoEndpointMetadata() throws {
+        let descriptor = FleetDeviceDescriptor(
+            id: UUID(), name: "Build Mac", kind: .remote, osID: "macos"
+        )
+        let json = String(decoding: try JSONEncoder().encode(descriptor), as: UTF8.self)
+        XCTAssertFalse(json.contains("username"))
+        XCTAssertFalse(json.contains("host"))
+        XCTAssertFalse(json.contains("port"))
+        XCTAssertFalse(json.contains("subtitle"))
+        XCTAssertEqual(descriptor.subtitle, "Remote device")
+    }
+
+    func testFleetReferencesSeparateDevices() {
+        let paneID = "w1:p1"
+        let first = FleetPaneRef(deviceID: UUID(), paneID: paneID)
+        let second = FleetPaneRef(deviceID: UUID(), paneID: paneID)
+        XCTAssertNotEqual(first, second)
     }
 
     func testTerminalRecordsRoundTrip() throws {
