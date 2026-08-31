@@ -25,7 +25,7 @@ enum MobileConnectionState: Equatable {
 }
 
 struct MobileDeviceEntry: Identifiable {
-  enum Source: Equatable {
+  enum Source {
     case bridge
     case direct
   }
