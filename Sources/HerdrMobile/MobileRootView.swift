@@ -6,15 +6,25 @@ import SwiftUI
 struct MobileRootView: View {
     @Bindable var model: MobileAppModel
     @State private var actions = MobileActionCoordinator()
+    @State private var attention = MobileAttentionTracker()
+    @State private var showSearch = false
 
     var body: some View {
         NavigationSplitView {
-            MobileFleetSidebarView(model: model, actions: actions)
+            MobileFleetSidebarView(
+                model: model,
+                actions: actions,
+                attention: attention,
+                showSearch: $showSearch
+            )
         } detail: {
             detail
         }
         .sheet(isPresented: $model.showAddConnection) {
             AddConnectionSheet(model: model)
+        }
+        .sheet(isPresented: $showSearch) {
+            MobileSearchSheet(model: model, attention: attention)
         }
         .sheet(item: $actions.sheet) { route in
             MobileActionSheetHost(route: route, model: model, actions: actions)
@@ -54,7 +64,21 @@ struct MobileRootView: View {
                     .padding()
             }
         }
-        .task { model.activate() }
+        .background(
+            Button("") { showSearch = true }
+                .keyboardShortcut("k", modifiers: .command)
+                .hidden()
+        )
+        .task {
+            model.activate()
+            attention.apply(model.attentionSnapshot)
+        }
+        .onChange(of: model.attentionSnapshot) { _, snapshot in
+            attention.apply(snapshot)
+        }
+        .onChange(of: model.selectedPaneRef) { oldValue, newValue in
+            attention.selectionChanged(from: oldValue, to: newValue)
+        }
     }
 
     @ViewBuilder

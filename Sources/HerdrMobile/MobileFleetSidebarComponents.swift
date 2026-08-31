@@ -6,11 +6,15 @@ struct MobileSpaceRow: View {
     let deviceName: String?
     let count: Int?
     let selected: Bool
+    let attention: SpaceAttention
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "folder")
-                .foregroundStyle(selected ? Color.accentColor : .secondary)
+            MobileAttentionGlyph(
+                attention: attention,
+                fallbackSystemImage: "folder",
+                fallbackColor: selected ? .accentColor : .secondary
+            )
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .fontWeight(selected ? .semibold : .regular)
@@ -38,10 +42,18 @@ struct MobileAgentRow: View {
     let title: String
     let spaceName: String
     let deviceName: String?
+    let unread: Bool
 
     var body: some View {
         HStack(spacing: 10) {
             MobileStatusGlyph(status: agent.status)
+                .overlay(alignment: .bottomTrailing) {
+                    if unread {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 7, height: 7)
+                    }
+                }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).lineLimit(1)
                 HStack(spacing: 4) {
@@ -112,6 +124,28 @@ struct MobileStatusGlyph: View {
         case .idle, .unknown:
             Image(systemName: "circle")
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct MobileAttentionGlyph: View {
+    let attention: SpaceAttention
+    var fallbackSystemImage: String = "folder"
+    var fallbackColor: Color = .secondary
+
+    var body: some View {
+        switch attention {
+        case .blocked:
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.orange)
+        case .unreadDone:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.accentColor)
+        case .working:
+            ProgressView().controlSize(.small)
+        case .none:
+            Image(systemName: fallbackSystemImage)
+                .foregroundStyle(fallbackColor)
         }
     }
 }
