@@ -2,6 +2,7 @@ import HerdrKit
 import SwiftTerm
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// One live transport-neutral terminal session, pumped into a SwiftTerm view.
 ///
@@ -179,6 +180,10 @@ final class MobileAttachSession: ObservableObject {
         }
     }
 
+    func stageAttachment(_ attachment: MobileAttachmentPayload) async throws -> String {
+        try await transport.stageAttachment(attachment)
+    }
+
     func resize(columns: Int, rows: Int) {
         guard columns > 0, rows > 0 else { return }
         let size = TerminalSize(columns: columns, rows: rows)
@@ -224,6 +229,9 @@ struct MobileTerminalScreen: View {
     @StateObject private var session: MobileAttachSession
     @State private var composerText = ""
     @State private var keyboardShown = false
+    @State private var showFileImporter = false
+    @State private var isStagingAttachment = false
+    @State private var attachmentError: String?
     private let title: String
 
     init(transport: MobileTransport, target: TerminalAttachTarget, paneID: String, title: String) {
@@ -248,6 +256,23 @@ struct MobileTerminalScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbarBackground(terminalBackground, for: .navigationBar)
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [.data],
+            allowsMultipleSelection: false,
+            onCompletion: handleAttachmentSelection
+        )
+        .alert(
+            String(localized: "Could Not Attach File"),
+            isPresented: Binding(
+                get: { attachmentError != nil },
+                set: { if !$0 { attachmentError = nil } }
+            )
+        ) {
+            Button(String(localized: "OK"), role: .cancel) {}
+        } message: {
+            Text(attachmentError ?? "")
+        }
         .onDisappear { session.stop() }
     }
 
@@ -331,6 +356,25 @@ struct MobileTerminalScreen: View {
 
     private var composer: some View {
         HStack(spacing: 8) {
+            Button {
+                showFileImporter = true
+            } label: {
+                Group {
+                    if isStagingAttachment {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "paperclip")
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .frame(width: 34, height: 34)
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+            }
+            .disabled(isStagingAttachment)
+            .accessibilityLabel(String(localized: "Attach File"))
+
             TextField(
                 String(localized: "Message the agent…"),
                 text: $composerText,
@@ -362,6 +406,38 @@ struct MobileTerminalScreen: View {
         guard !text.isEmpty else { return }
         session.prompt(text)
         composerText = ""
+    }
+
+    private func handleAttachmentSelection(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            attachmentError = error.localizedDescription
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            isStagingAttachment = true
+            Task { @MainActor in
+                defer { isStagingAttachment = false }
+                do {
+                    let attachment = try await MobileAttachmentLoader.load(from: url)
+                    let path = try await session.stageAttachment(attachment)
+                    appendAttachmentPath(path)
+                } catch {
+                    attachmentError =
+                        (error as? LocalizedError)?.errorDescription
+                        ?? error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func appendAttachmentPath(_ path: String) {
+        let value = ShellQuoting.quoted(path)
+        if composerText.isEmpty {
+            composerText = value
+        } else {
+            let separator = composerText.last?.isWhitespace == true ? "" : " "
+            composerText += separator + value
+        }
     }
 
     private func endedOverlay(_ reason: String) -> some View {
