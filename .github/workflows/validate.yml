@@ -1,0 +1,67 @@
+name: Validate
+
+on:
+  pull_request:
+    paths:
+      - "Packages/HerdrKit/**"
+      - "Packages/HerdrSSH/**"
+      - "Sources/HerdrM/**"
+      - "Sources/HerdrMobile/**"
+      - "project.yml"
+      - "Makefile"
+      - ".github/workflows/validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 35
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Test HerdrKit
+        run: swift test --package-path Packages/HerdrKit
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build macOS app
+        run: |
+          xcodebuild \
+            -project HerdrM.xcodeproj \
+            -scheme HerdrM \
+            -configuration Debug \
+            -sdk macosx \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build-macos \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            build
+
+      - name: Build iOS app
+        run: |
+          xcodebuild \
+            -project HerdrM.xcodeproj \
+            -scheme HerdrMobile \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build-ios \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            build
