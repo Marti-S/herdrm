@@ -27,6 +27,7 @@ struct AddConnectionSheet: View {
   @State private var bridgeToken = ""
   @State private var expectedServerID: UUID?
   @State private var pairingIsLoopbackOnly = false
+  @State private var showPairingScanner = false
 
   @State private var directName = ""
   @State private var directHost = ""
@@ -96,6 +97,11 @@ struct AddConnectionSheet: View {
       } message: {
         Text(errorMessage ?? "")
       }
+      .sheet(isPresented: $showPairingScanner) {
+        MobilePairingScannerSheet { payload in
+          applyPairingJSON(payload)
+        }
+      }
     }
   }
 
@@ -107,26 +113,33 @@ struct AddConnectionSheet: View {
           .frame(minHeight: 90)
           .overlay(alignment: .topLeading) {
             if pairingJSON.isEmpty {
-              Text(String(localized: "Paste mobile-pairing.json here"))
+              Text(String(localized: "Scan or paste mobile-pairing.json"))
                 .foregroundStyle(.tertiary)
                 .padding(.top, 8)
                 .padding(.leading, 5)
                 .allowsHitTesting(false)
             }
           }
-        HStack {
-          Button(String(localized: "Paste from Clipboard")) {
-            pairingJSON = UIPasteboard.general.string ?? ""
-            parsePairingJSON()
-          }
-          Spacer()
-          Button(String(localized: "Apply JSON"), action: parsePairingJSON)
-            .disabled(pairingJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+        Button {
+          showPairingScanner = true
+        } label: {
+          Label(String(localized: "Scan QR Code"), systemImage: "qrcode.viewfinder")
         }
+
+        Button {
+          applyPairingJSON(UIPasteboard.general.string ?? "")
+        } label: {
+          Label(String(localized: "Paste from Clipboard"), systemImage: "doc.on.clipboard")
+        }
+
+        Button(String(localized: "Apply JSON"), action: parsePairingJSON)
+          .disabled(pairingJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
         Text(
           String(
             localized:
-              "On the Mac, copy ~/Library/Application Support/HerdrM/mobile-pairing.json. The host below may be replaced with its Tailscale IP or MagicDNS name."
+              "On the Mac, open herdrm → Mobile Pairing. Scan its QR code or copy the pairing JSON. The host below may be replaced with the Mac's Tailscale IP or MagicDNS name."
           )
         )
         .font(.footnote)
@@ -227,14 +240,20 @@ struct AddConnectionSheet: View {
   }
 
   private func parsePairingJSON() {
+    applyPairingJSON(pairingJSON)
+  }
+
+  private func applyPairingJSON(_ payload: String) {
+    pairingJSON = payload
     do {
-      let info = try MobileBridgePairingInfo.decode(pairingJSON)
+      let info = try MobileBridgePairingInfo.decode(payload)
       bridgeName = info.serverName
       bridgeHost = info.hostHint
       bridgePort = String(info.port)
       bridgeToken = info.token
       expectedServerID = info.serverID
       pairingIsLoopbackOnly = info.loopbackOnly
+      errorMessage = nil
     } catch {
       errorMessage = (error as? LocalizedError)?.errorDescription ?? "\(error)"
     }

@@ -110,6 +110,9 @@ targets:
         NSLocalNetworkUsageDescription: >-
           herdrm connects to your paired Mac bridge or directly to Herdr hosts
           on your local or Tailscale network.
+        NSCameraUsageDescription: >-
+          herdrm uses the camera only to scan the pairing QR code shown by
+          HerdrM on your Mac.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.bybee.herdrm.ios
