@@ -2,18 +2,18 @@ import HerdrKit
 import SwiftTerm
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// One live transport-neutral terminal session, pumped into a SwiftTerm view.
 ///
 /// The session outlives view updates and ends when its transport reports
 /// orderly closure, ownership loss, or a network failure. Direct SSH uses
-/// Herdr's structured observe/control stream; bridge mode can later provide the
-/// same frames without changing this presentation layer.
+/// Herdr's structured observe/control stream; bridge mode provides the same
+/// frames without changing this presentation layer.
 ///
-/// Mobile terminals are display-first (Heeler's ADR 0013 insight): the live
-/// pane renders, but typing goes through the composer (`agent.prompt`) and a
-/// key bar (`pane.send_input` keys), which herdr encodes properly server-side.
-/// Raw keyboard input requires an explicit control lease.
+/// Mobile terminals are display-first: the live pane renders, while Agent
+/// prompts, logical keys, and capability-aware attachments use semantic Herdr
+/// operations. Raw keyboard input still requires an explicit control lease.
 @MainActor
 final class MobileAttachSession: ObservableObject {
     enum Status: Equatable {
@@ -24,23 +24,33 @@ final class MobileAttachSession: ObservableObject {
 
     @Published var status: Status = .connecting
     @Published private(set) var mode: TerminalSessionMode = .observe
+    @Published private(set) var attachmentCapabilities: AgentAttachmentCapabilities?
+    @Published private(set) var attachmentCapabilitiesLoaded = false
 
     let transport: MobileTransport
     let target: TerminalAttachTarget
     let paneID: String
+    let agentKind: String?
 
     private var terminalSession: (any TerminalSession)?
     private var startTask: Task<Void, Never>?
     private var readTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
+    private var attachmentCapabilityTask: Task<Void, Never>?
     private var lifecycleGeneration: UInt64 = 0
     private var lastSize = TerminalSize(columns: 80, rows: 24)
     weak var terminalView: TerminalView?
 
-    init(transport: MobileTransport, target: TerminalAttachTarget, paneID: String) {
+    init(
+        transport: MobileTransport,
+        target: TerminalAttachTarget,
+        paneID: String,
+        agentKind: String?
+    ) {
         self.transport = transport
         self.target = target
         self.paneID = paneID
+        self.agentKind = agentKind
     }
 
     var agentPaneID: String? {
@@ -52,11 +62,22 @@ final class MobileAttachSession: ObservableObject {
         mode.access == .control && status == .running
     }
 
+    var supportsAttachmentUpload: Bool {
+        agentPaneID != nil && transport is any MobileAttachmentTransport
+    }
+
+    var canAttachFiles: Bool {
+        guard supportsAttachmentUpload, let attachmentCapabilities else { return false }
+        return attachmentCapabilities.imagePath != nil
+            || attachmentCapabilities.filePath != nil
+    }
+
     func start(
         columns: Int,
         rows: Int,
         mode requestedMode: TerminalSessionMode = .observe
     ) {
+        loadAttachmentCapabilitiesIfNeeded()
         guard terminalSession == nil, startTask == nil else { return }
 
         let size = TerminalSize(
@@ -148,9 +169,8 @@ final class MobileAttachSession: ObservableObject {
         Task { try? await terminalSession.send(data) }
     }
 
-    /// Sends named keys through herdr's RPC — proper terminal encoding without
-    /// this client knowing the pane's keyboard protocol state. These semantic
-    /// controls remain available while the terminal itself is read-only.
+    /// Sends named keys through Herdr's RPC. These semantic controls remain
+    /// available while the terminal itself is read-only.
     func sendKeys(_ keys: [String]) {
         Task {
             _ = try? await transport.request(
@@ -163,9 +183,8 @@ final class MobileAttachSession: ObservableObject {
         }
     }
 
-    /// Sends a prompt to the agent; herdr delivers and submits it. This remains
-    /// available to an observer because it is a semantic agent operation, not
-    /// raw ownership of the terminal byte stream.
+    /// Sends a prompt to the Agent; this remains available to an observer
+    /// because it does not take raw ownership of the terminal byte stream.
     func prompt(_ text: String) {
         guard let agentPaneID else { return }
         Task {
@@ -179,6 +198,27 @@ final class MobileAttachSession: ObservableObject {
         }
     }
 
+    func attachmentPathSyntax(allImages: Bool) throws -> AgentAttachmentPathSyntax {
+        guard supportsAttachmentUpload else { throw AttachmentUploadError.unavailable }
+        guard let capabilities = attachmentCapabilities else {
+            throw AttachmentUploadError.unsupportedAgent
+        }
+        if allImages, let imagePath = capabilities.imagePath {
+            return imagePath
+        }
+        guard let filePath = capabilities.filePath else {
+            throw AttachmentUploadError.unsupportedAgent
+        }
+        return filePath
+    }
+
+    func stageAttachment(fileName: String, data: Data) async throws -> String {
+        guard let uploader = transport as? any MobileAttachmentTransport else {
+            throw AttachmentUploadError.unavailable
+        }
+        return try await uploader.stageAttachment(fileName: fileName, data: data)
+    }
+
     func resize(columns: Int, rows: Int) {
         guard columns > 0, rows > 0 else { return }
         let size = TerminalSize(columns: columns, rows: rows)
@@ -189,9 +229,6 @@ final class MobileAttachSession: ObservableObject {
         if mode.allowsResize {
             Task { try? await terminalSession.resize(size) }
         } else {
-            // Observe mode negotiates its grid when the stream opens. Coalesce
-            // layout churn before reopening so rotation does not create a
-            // connection storm.
             resizeTask?.cancel()
             resizeTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(250))
@@ -215,6 +252,41 @@ final class MobileAttachSession: ObservableObject {
         terminalSession = nil
     }
 
+    private func loadAttachmentCapabilitiesIfNeeded() {
+        guard supportsAttachmentUpload,
+              !attachmentCapabilitiesLoaded,
+              attachmentCapabilityTask == nil,
+              let agentKind
+        else {
+            if !supportsAttachmentUpload || agentKind == nil {
+                attachmentCapabilitiesLoaded = true
+            }
+            return
+        }
+
+        attachmentCapabilityTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.attachmentCapabilityTask = nil }
+            let registry: AgentAttachmentCapabilityRegistry
+            do {
+                struct Envelope: Decodable { let manifests: [AgentManifestInfo] }
+                let envelope = try await transport.request(
+                    method: "server.agent_manifests",
+                    params: .object([:]),
+                    as: Envelope.self
+                )
+                registry = AgentAttachmentCapabilityRegistry(manifests: envelope.manifests)
+            } catch {
+                // Built-in fallbacks preserve attachment support for known
+                // Agents when an older Herdr server cannot report manifests.
+                registry = AgentAttachmentCapabilityRegistry(manifests: [])
+            }
+            guard !Task.isCancelled else { return }
+            self.attachmentCapabilities = registry.capabilities(for: agentKind)
+            self.attachmentCapabilitiesLoaded = true
+        }
+    }
+
     private static func presentation(_ error: any Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? "\(error)"
     }
@@ -224,11 +296,25 @@ struct MobileTerminalScreen: View {
     @StateObject private var session: MobileAttachSession
     @State private var composerText = ""
     @State private var keyboardShown = false
+    @State private var showingAttachmentPicker = false
+    @State private var isUploadingAttachments = false
+    @State private var attachmentError: String?
     private let title: String
 
-    init(transport: MobileTransport, target: TerminalAttachTarget, paneID: String, title: String) {
+    init(
+        transport: MobileTransport,
+        target: TerminalAttachTarget,
+        paneID: String,
+        title: String,
+        agentKind: String? = nil
+    ) {
         _session = StateObject(
-            wrappedValue: MobileAttachSession(transport: transport, target: target, paneID: paneID)
+            wrappedValue: MobileAttachSession(
+                transport: transport,
+                target: target,
+                paneID: paneID,
+                agentKind: agentKind
+            )
         )
         self.title = title
     }
@@ -248,6 +334,23 @@ struct MobileTerminalScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbarBackground(terminalBackground, for: .navigationBar)
+        .fileImporter(
+            isPresented: $showingAttachmentPicker,
+            allowedContentTypes: [.data],
+            allowsMultipleSelection: true,
+            onCompletion: handleAttachmentSelection
+        )
+        .alert(
+            String(localized: "Attachment Failed"),
+            isPresented: Binding(
+                get: { attachmentError != nil },
+                set: { if !$0 { attachmentError = nil } }
+            )
+        ) {
+            Button(String(localized: "OK"), role: .cancel) {}
+        } message: {
+            Text(attachmentError ?? "")
+        }
         .onDisappear { session.stop() }
     }
 
@@ -331,6 +434,8 @@ struct MobileTerminalScreen: View {
 
     private var composer: some View {
         HStack(spacing: 8) {
+            attachmentControl
+
             TextField(
                 String(localized: "Message the agent…"),
                 text: $composerText,
@@ -353,15 +458,82 @@ struct MobileTerminalScreen: View {
                             ? SwiftUI.Color.white.opacity(0.25) : SwiftUI.Color.accentColor
                     )
             }
-            .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(
+                isUploadingAttachments
+                    || composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var attachmentControl: some View {
+        if session.supportsAttachmentUpload {
+            if isUploadingAttachments || !session.attachmentCapabilitiesLoaded {
+                ProgressView()
+                    .tint(.white)
+                    .controlSize(.small)
+                    .frame(width: 30, height: 30)
+            } else if session.canAttachFiles {
+                Button {
+                    showingAttachmentPicker = true
+                } label: {
+                    Image(systemName: "paperclip")
+                        .foregroundStyle(.white.opacity(0.8))
+                        .frame(width: 30, height: 30)
+                        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                }
+                .disabled(isUploadingAttachments)
+                .accessibilityLabel(String(localized: "Attach Files"))
+            }
         }
     }
 
     private func sendPrompt() {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty, !isUploadingAttachments else { return }
         session.prompt(text)
         composerText = ""
+    }
+
+    private func handleAttachmentSelection(_ result: Result<[URL], any Error>) {
+        switch result {
+        case .failure(let error):
+            attachmentError = error.localizedDescription
+        case .success(let urls):
+            Task { await stageAttachments(from: urls) }
+        }
+    }
+
+    @MainActor
+    private func stageAttachments(from urls: [URL]) async {
+        guard !isUploadingAttachments else { return }
+        isUploadingAttachments = true
+        defer { isUploadingAttachments = false }
+        do {
+            let attachments = try await MobilePickedAttachment.load(urls: urls)
+            let syntax = try session.attachmentPathSyntax(
+                allImages: attachments.allSatisfy(\.isImage)
+            )
+            var paths: [String] = []
+            paths.reserveCapacity(attachments.count)
+            for attachment in attachments {
+                let path = try await session.stageAttachment(
+                    fileName: attachment.fileName,
+                    data: attachment.data
+                )
+                paths.append(path)
+            }
+            let insertion = paths.map(syntax.format).joined(separator: " ")
+            guard !insertion.isEmpty else { return }
+            if composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                composerText = insertion
+            } else {
+                composerText += " " + insertion
+            }
+        } catch {
+            attachmentError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
     }
 
     private func endedOverlay(_ reason: String) -> some View {
@@ -385,7 +557,6 @@ struct MobileTerminalScreen: View {
     }
 }
 
-/// UIKit host for SwiftTerm's iOS TerminalView, wired to the attach session.
 private struct MobileTerminalHost: UIViewRepresentable {
     let session: MobileAttachSession
     @Binding var keyboardShown: Bool

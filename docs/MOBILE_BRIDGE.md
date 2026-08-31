@@ -50,6 +50,19 @@ The endpoint metadata is stored in iOS user defaults. The pairing token is store
 
 The iOS sidebar opens in **All Devices** mode. Device, Space, Agent, and terminal identities are globally qualified by the Mac device UUID, so equal Herdr pane IDs on two machines do not collide. Direct SSH remains available as an advanced fallback for a standalone Herdr host.
 
+## Attachments
+
+Bridge-backed Agent composers expose a paperclip when the Agent manifest advertises an image or file path capability. iOS reads up to five security-scoped files at a time, bounded to 16 MiB per file and 32 MiB per selection.
+
+Each file is sent through an authenticated, device-scoped bridge request. The Mac writes it into a private `MobileUploads` directory and passes it through the existing `HerdrService.stageAttachment` path:
+
+- local Mac Agents receive the private Mac path;
+- Agents on an SSH-backed fleet device receive the remote staged path;
+- temporary Mac copies for remote devices are removed after successful transfer;
+- old local staging directories are pruned after seven days.
+
+The returned device-local paths are formatted with the Agent manifest's attachment syntax and inserted into the native iOS composer. The user can add instructions before sending the prompt. Direct SSH fallback does not expose this upload path yet; it fails closed rather than bypassing the Mac-owned staging model.
+
 ## Protocol
 
 Every TCP connection is newline-delimited JSON and starts with `bridge.hello`. After authentication, one connection owns exactly one operation:
@@ -61,4 +74,4 @@ Every TCP connection is newline-delimited JSON and starts with `bridge.hello`. A
 
 Terminal control remains explicit. Observer streams cannot send raw input or resize commands, and takeover is only requested when the client sets it in `TerminalSessionMode`.
 
-The initial allowlist covers snapshots, ping, agent prompt/start/rename, pane input/close, workspace create/rename/close, and tab create/rename. Extend this list deliberately rather than turning the bridge into an arbitrary shell or unrestricted socket proxy.
+The allowlist covers snapshots, ping, Agent manifests, attachment staging, agent prompt/start/rename, pane input/close, workspace create/rename/close, and tab create/rename. Extend this list deliberately rather than turning the bridge into an arbitrary shell or unrestricted socket proxy.

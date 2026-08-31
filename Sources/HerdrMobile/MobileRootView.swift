@@ -93,7 +93,8 @@ struct MobileRootView: View {
                 transport: transport,
                 target: .agent(paneID: entry.agent.paneID),
                 paneID: entry.agent.paneID,
-                title: entry.agent.title(tabLabel: model.tabLabel(for: entry))
+                title: entry.agent.title(tabLabel: model.tabLabel(for: entry)),
+                agentKind: entry.agent.agent
             )
             .id(entry.ref)
         } else if let entry = model.selectedTerminalPane,

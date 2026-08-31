@@ -28,6 +28,32 @@ extension FleetBridgeServer {
             let snapshot = deviceSessionSnapshot(device: device, model: model)
             return .object(["snapshot": try jsonValue(snapshot)])
 
+        case "server.agent_manifests":
+            let manifests = try await service.agentManifests()
+            return .object([
+                "manifests": .array(manifests.map(manifestValue))
+            ])
+
+        case "attachment.stage":
+            let fileName = try requiredString(params, "name")
+            let encoded = try requiredString(params, "bytes")
+            let maximumEncodedBytes = ((AttachmentUploadPolicy.maximumFileBytes + 2) / 3) * 4
+            guard encoded.utf8.count <= maximumEncodedBytes,
+                  let data = Data(base64Encoded: encoded)
+            else {
+                throw FleetBridgeHostError.invalidRequest(
+                    "attachment.stage contains invalid or oversized base64 data."
+                )
+            }
+            try AttachmentUploadPolicy.validateFileSize(data.count)
+            let path = try await FleetBridgeAttachmentStore.stage(
+                data: data,
+                fileName: fileName,
+                device: device,
+                service: service
+            )
+            return .object(["path": .string(path)])
+
         case "agent.prompt":
             try await service.prompt(
                 target: try requiredString(params, "target"),
@@ -112,5 +138,31 @@ extension FleetBridgeServer {
         default:
             throw FleetBridgeHostError.unsupportedMethod(request.method)
         }
+    }
+
+    private func manifestValue(_ manifest: AgentManifestInfo) -> JSONValue {
+        var value: [String: JSONValue] = [
+            "agent": .string(manifest.agent),
+            "aliases": .array(manifest.aliases.map(JSONValue.string)),
+        ]
+        if let capabilities = manifest.capabilities {
+            var capabilityValue: [String: JSONValue] = [:]
+            if let attachments = capabilities.attachments {
+                var attachmentValue: [String: JSONValue] = [
+                    "native_clipboard_image_data": .bool(
+                        attachments.nativeClipboardImageData
+                    )
+                ]
+                if let imagePath = attachments.imagePath {
+                    attachmentValue["image_path"] = .string(imagePath.rawValue)
+                }
+                if let filePath = attachments.filePath {
+                    attachmentValue["file_path"] = .string(filePath.rawValue)
+                }
+                capabilityValue["attachments"] = .object(attachmentValue)
+            }
+            value["capabilities"] = .object(capabilityValue)
+        }
+        return .object(value)
     }
 }
