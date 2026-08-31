@@ -2,6 +2,19 @@
 
 HerdrM starts an authenticated fleet bridge on macOS. The bridge owns the Mac app's existing device sessions, so a mobile client sees the same local and SSH-backed Herdr devices without copying their credentials to the phone.
 
+## Mobile Pairing window
+
+Choose **herdrm → Mobile Pairing…** on the Mac to administer mobile access. The window:
+
+- displays a QR representation and selectable copy of the complete pairing JSON;
+- reveals the protected pairing file in Finder;
+- enables or disables the bridge;
+- changes the listening port and loopback policy;
+- applies settings by restarting the in-process bridge;
+- rotates the Keychain-backed token after destructive confirmation.
+
+Rotating the token disconnects existing clients and invalidates their saved pairing until they import the new data.
+
 ## Network exposure
 
 The bridge is enabled by default and listens only on `127.0.0.1:45983`. The token is random, stored in the macOS Keychain, and exported for pairing in a mode-`0600` file:
@@ -10,7 +23,7 @@ The bridge is enabled by default and listens only on `127.0.0.1:45983`. The toke
 ~/Library/Application Support/HerdrM/mobile-pairing.json
 ```
 
-For Tailscale, expose that loopback TCP port with a raw TCP forward, or explicitly allow the listener on all Mac interfaces and restart HerdrM:
+For Tailscale, expose that loopback TCP port with a raw TCP forward, or enable **Listen beyond loopback** in the Mobile Pairing window and restart the bridge. The equivalent command is:
 
 ```sh
 defaults write dev.bybee.herdrm fleetBridge.bindAllInterfaces -bool true
@@ -18,7 +31,7 @@ defaults write dev.bybee.herdrm fleetBridge.bindAllInterfaces -bool true
 
 Use the Mac's Tailscale IP or MagicDNS name from the iOS client. The bridge token is still required even when tailnet ACLs restrict the port.
 
-The listener can be disabled or moved to another port:
+The listener can also be disabled or moved through the pairing window. Equivalent defaults commands are:
 
 ```sh
 defaults write dev.bybee.herdrm fleetBridge.enabled -bool false
@@ -27,11 +40,11 @@ defaults write dev.bybee.herdrm fleetBridge.port -int 45983
 
 ## Pairing iPhone or iPad
 
-1. Start HerdrM on the Mac once so it writes `mobile-pairing.json`.
-2. Copy the JSON contents to the iPhone or iPad through a trusted channel.
-3. In HerdrM for iOS, choose **Pair Mac Bridge** and tap **Paste Pairing JSON**.
+1. Open **herdrm → Mobile Pairing…** on the Mac.
+2. Copy the Pairing JSON to the iPhone or iPad through a trusted channel. The QR code contains the same data for future scanner support.
+3. In HerdrM for iOS choose **Add Connection → Mac Bridge** and paste the JSON.
 4. Replace the suggested host with the Mac's Tailscale IP or MagicDNS name when necessary.
-5. Confirm the port and pair.
+5. Confirm the port and add the bridge.
 
 The endpoint metadata is stored in iOS user defaults. The pairing token is stored separately in the device-only Keychain. Remote SSH passwords, keys, host configuration, and reconnect state remain on the Mac.
 
