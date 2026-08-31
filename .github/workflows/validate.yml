@@ -23,11 +23,18 @@ concurrency:
 
 jobs:
   build-and-test:
-    runs-on: macos-15
+    # HerdrSSH uses Swift tools 6.2. The macOS 26 image ships Xcode 26.x,
+    # while macos-15 currently defaults to a Swift 6.1 toolchain.
+    runs-on: macos-26
     timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
