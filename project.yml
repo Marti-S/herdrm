@@ -108,8 +108,8 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSLocalNetworkUsageDescription: >-
-          herdrm connects to your Macs over SSH on your local network to reach
-          the herdr session running on them.
+          herdrm connects to your paired Mac bridge or directly to Herdr hosts
+          on your local or Tailscale network.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.bybee.herdrm.ios
