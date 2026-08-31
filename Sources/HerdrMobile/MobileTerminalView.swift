@@ -1,12 +1,14 @@
 import HerdrKit
-import HerdrSSH
 import SwiftTerm
 import SwiftUI
 import UIKit
 
-/// One live attach: a PTY channel running `herdr … attach` on the device,
-/// pumped into a SwiftTerm view. The session outlives view updates; it ends
-/// when the channel EOFs (takeover by another client, pane closed, network).
+/// One live transport-neutral terminal session, pumped into a SwiftTerm view.
+///
+/// The session outlives view updates and ends when its transport reports
+/// orderly closure, ownership loss, or a network failure. Direct SSH currently
+/// adapts a PTY; bridge mode can later supply structured observe/control frames
+/// without changing this presentation layer.
 ///
 /// Mobile terminals are display-first (Heeler's ADR 0013 insight): the live
 /// pane renders, but typing goes through the composer (`agent.prompt`) and a
@@ -23,11 +25,8 @@ final class MobileAttachSession: ObservableObject {
     @Published var status: Status = .connecting
     let transport: MobileTransport
     let target: TerminalAttachTarget
-    private var channel: SSHPTYChannel?
+    private var terminalSession: (any TerminalSession)?
     private var readTask: Task<Void, Never>?
-    /// Bytes before the bootstrap marker are shell rc chatter, not pane output.
-    private var sawBootstrapMarker = false
-    private var bootstrapBuffer = Data()
     weak var terminalView: TerminalView?
 
     /// The herdr pane behind this attach, for key/prompt RPCs.
@@ -45,20 +44,22 @@ final class MobileAttachSession: ObservableObject {
     }
 
     func start(columns: Int, rows: Int) {
-        guard channel == nil else { return }
+        guard terminalSession == nil else { return }
         status = .connecting
-        sawBootstrapMarker = false
-        bootstrapBuffer.removeAll()
         Task {
             do {
-                let channel = try await transport.openTerminal(
-                    command: MobileAttach.command(target: target),
+                let size = TerminalSize(
                     columns: max(columns, 20),
                     rows: max(rows, 5)
                 )
-                self.channel = channel
+                let terminalSession = try await transport.openTerminalSession(
+                    target: target,
+                    mode: .control(takeover: true),
+                    size: size
+                )
+                self.terminalSession = terminalSession
                 self.status = .running
-                self.pump(channel)
+                self.pump(terminalSession)
             } catch {
                 self.status = .ended(
                     (error as? LocalizedError)?.errorDescription ?? "\(error)"
@@ -67,13 +68,13 @@ final class MobileAttachSession: ObservableObject {
         }
     }
 
-    private func pump(_ channel: SSHPTYChannel) {
+    private func pump(_ terminalSession: any TerminalSession) {
         readTask = Task { [weak self] in
             do {
                 while !Task.isCancelled {
-                    guard let data = try await channel.read(timeout: .seconds(3600)) else { break }
-                    guard !data.isEmpty else { continue }
-                    self?.ingest(data)
+                    guard let frame = try await terminalSession.read() else { break }
+                    guard !frame.bytes.isEmpty else { continue }
+                    self?.feed(frame.bytes)
                 }
             } catch {}
             guard let self, !Task.isCancelled else { return }
@@ -83,36 +84,14 @@ final class MobileAttachSession: ObservableObject {
         }
     }
 
-    private func ingest(_ data: Data) {
-        guard !sawBootstrapMarker else {
-            feed(data)
-            return
-        }
-        bootstrapBuffer.append(data)
-        guard let range = bootstrapBuffer.firstRange(of: MobileAttach.bootstrapMarker) else {
-            // Cap the gate so a herdr that never prints the marker (old
-            // binary, exec failure output) still shows its error text.
-            if bootstrapBuffer.count > 8192 {
-                sawBootstrapMarker = true
-                feed(bootstrapBuffer)
-                bootstrapBuffer.removeAll()
-            }
-            return
-        }
-        sawBootstrapMarker = true
-        let payload = bootstrapBuffer.suffix(from: range.upperBound)
-        bootstrapBuffer.removeAll()
-        if !payload.isEmpty { feed(Data(payload)) }
-    }
-
     private func feed(_ data: Data) {
         terminalView?.feed(byteArray: ArraySlice([UInt8](data)))
     }
 
     func send(_ bytes: ArraySlice<UInt8>) {
-        guard let channel else { return }
+        guard let terminalSession else { return }
         let data = Data(bytes)
-        Task { try? await channel.write(data, timeout: .seconds(10)) }
+        Task { try? await terminalSession.send(data) }
     }
 
     /// Sends named keys through herdr's RPC — proper terminal encoding without
@@ -144,17 +123,18 @@ final class MobileAttachSession: ObservableObject {
     }
 
     func resize(columns: Int, rows: Int) {
-        guard let channel, columns > 0, rows > 0 else { return }
-        Task { try? await channel.resize(columns: columns, rows: rows, timeout: .seconds(5)) }
+        guard let terminalSession, columns > 0, rows > 0 else { return }
+        let size = TerminalSize(columns: columns, rows: rows)
+        Task { try? await terminalSession.resize(size) }
     }
 
     func stop() {
         readTask?.cancel()
         readTask = nil
-        if let channel {
-            Task { try? await channel.close(timeout: .seconds(2)) }
+        if let terminalSession {
+            Task { await terminalSession.close() }
         }
-        channel = nil
+        terminalSession = nil
     }
 }
 
