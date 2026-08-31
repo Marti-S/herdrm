@@ -1,4 +1,5 @@
 import Foundation
+import HerdrKit
 import Security
 
 struct FleetBridgeHostConfiguration: Equatable {

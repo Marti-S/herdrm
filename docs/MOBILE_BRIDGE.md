@@ -25,6 +25,18 @@ defaults write dev.bybee.herdrm fleetBridge.enabled -bool false
 defaults write dev.bybee.herdrm fleetBridge.port -int 45983
 ```
 
+## Pairing iPhone or iPad
+
+1. Start HerdrM on the Mac once so it writes `mobile-pairing.json`.
+2. Copy the JSON contents to the iPhone or iPad through a trusted channel.
+3. In HerdrM for iOS, choose **Pair Mac Bridge** and tap **Paste Pairing JSON**.
+4. Replace the suggested host with the Mac's Tailscale IP or MagicDNS name when necessary.
+5. Confirm the port and pair.
+
+The endpoint metadata is stored in iOS user defaults. The pairing token is stored separately in the device-only Keychain. Remote SSH passwords, keys, host configuration, and reconnect state remain on the Mac.
+
+The iOS sidebar opens in **All Devices** mode. Device, Space, Agent, and terminal identities are globally qualified by the Mac device UUID, so equal Herdr pane IDs on two machines do not collide. Direct SSH remains available as an advanced fallback for a standalone Herdr host.
+
 ## Protocol
 
 Every TCP connection is newline-delimited JSON and starts with `bridge.hello`. After authentication, one connection owns exactly one operation:

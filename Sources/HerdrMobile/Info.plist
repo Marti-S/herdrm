@@ -23,7 +23,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>herdrm connects to your Macs over SSH on your local network to reach the herdr session running on them.</string>
+	<string>herdrm connects to your paired Mac bridge or directly to Herdr hosts on your local or Tailscale network.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
