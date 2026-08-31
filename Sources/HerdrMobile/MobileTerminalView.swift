@@ -1,17 +1,19 @@
 import HerdrKit
-import HerdrSSH
 import SwiftTerm
 import SwiftUI
 import UIKit
 
-/// One live attach: a PTY channel running `herdr … attach` on the device,
-/// pumped into a SwiftTerm view. The session outlives view updates; it ends
-/// when the channel EOFs (takeover by another client, pane closed, network).
+/// One live transport-neutral terminal session, pumped into a SwiftTerm view.
+///
+/// The session outlives view updates and ends when its transport reports
+/// orderly closure, ownership loss, or a network failure. Direct SSH uses
+/// Herdr's structured observe/control stream; bridge mode can later provide the
+/// same frames without changing this presentation layer.
 ///
 /// Mobile terminals are display-first (Heeler's ADR 0013 insight): the live
 /// pane renders, but typing goes through the composer (`agent.prompt`) and a
 /// key bar (`pane.send_input` keys), which herdr encodes properly server-side.
-/// A keyboard toggle still allows raw typing for TUI menus that need it.
+/// Raw keyboard input requires an explicit control lease.
 @MainActor
 final class MobileAttachSession: ObservableObject {
     enum Status: Equatable {
@@ -21,17 +23,19 @@ final class MobileAttachSession: ObservableObject {
     }
 
     @Published var status: Status = .connecting
+    @Published private(set) var mode: TerminalSessionMode = .observe
+
     let transport: MobileTransport
     let target: TerminalAttachTarget
-    private var channel: SSHPTYChannel?
-    private var readTask: Task<Void, Never>?
-    /// Bytes before the bootstrap marker are shell rc chatter, not pane output.
-    private var sawBootstrapMarker = false
-    private var bootstrapBuffer = Data()
-    weak var terminalView: TerminalView?
-
-    /// The herdr pane behind this attach, for key/prompt RPCs.
     let paneID: String
+
+    private var terminalSession: (any TerminalSession)?
+    private var startTask: Task<Void, Never>?
+    private var readTask: Task<Void, Never>?
+    private var resizeTask: Task<Void, Never>?
+    private var lifecycleGeneration: UInt64 = 0
+    private var lastSize = TerminalSize(columns: 80, rows: 24)
+    weak var terminalView: TerminalView?
 
     init(transport: MobileTransport, target: TerminalAttachTarget, paneID: String) {
         self.transport = transport
@@ -44,65 +48,94 @@ final class MobileAttachSession: ObservableObject {
         return nil
     }
 
-    func start(columns: Int, rows: Int) {
-        guard channel == nil else { return }
+    var isControlling: Bool {
+        mode.access == .control && status == .running
+    }
+
+    func start(
+        columns: Int,
+        rows: Int,
+        mode requestedMode: TerminalSessionMode = .observe
+    ) {
+        guard terminalSession == nil, startTask == nil else { return }
+
+        let size = TerminalSize(
+            columns: max(columns, 20),
+            rows: max(rows, 5)
+        )
+        lastSize = size
+        mode = requestedMode
         status = .connecting
-        sawBootstrapMarker = false
-        bootstrapBuffer.removeAll()
-        Task {
+        lifecycleGeneration &+= 1
+        let generation = lifecycleGeneration
+
+        startTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.lifecycleGeneration == generation {
+                    self.startTask = nil
+                }
+            }
             do {
-                let channel = try await transport.openTerminal(
-                    command: MobileAttach.command(target: target),
-                    columns: max(columns, 20),
-                    rows: max(rows, 5)
+                let terminalSession = try await transport.openTerminalSession(
+                    target: target,
+                    mode: requestedMode,
+                    size: size
                 )
-                self.channel = channel
+                guard !Task.isCancelled, self.lifecycleGeneration == generation else {
+                    await terminalSession.close()
+                    return
+                }
+                self.terminalSession = terminalSession
                 self.status = .running
-                self.pump(channel)
+                self.pump(terminalSession, generation: generation)
             } catch {
-                self.status = .ended(
-                    (error as? LocalizedError)?.errorDescription ?? "\(error)"
-                )
+                guard !Task.isCancelled, self.lifecycleGeneration == generation else { return }
+                self.status = .ended(Self.presentation(error))
             }
         }
     }
 
-    private func pump(_ channel: SSHPTYChannel) {
+    func observe() {
+        restart(mode: .observe)
+    }
+
+    func requestControl(takeover: Bool) {
+        restart(mode: .control(takeover: takeover))
+    }
+
+    private func restart(mode: TerminalSessionMode) {
+        let size = lastSize
+        stop()
+        start(columns: size.columns, rows: size.rows, mode: mode)
+    }
+
+    private func pump(
+        _ terminalSession: any TerminalSession,
+        generation: UInt64
+    ) {
         readTask = Task { [weak self] in
+            var endingReason = String(localized: "Session ended")
             do {
                 while !Task.isCancelled {
-                    guard let data = try await channel.read(timeout: .seconds(3600)) else { break }
-                    guard !data.isEmpty else { continue }
-                    self?.ingest(data)
+                    guard let frame = try await terminalSession.read() else { break }
+                    guard !frame.bytes.isEmpty else { continue }
+                    self?.feed(frame.bytes)
                 }
-            } catch {}
-            guard let self, !Task.isCancelled else { return }
-            if case .running = self.status {
-                self.status = .ended(String(localized: "Session ended"))
+            } catch {
+                endingReason = Self.presentation(error)
             }
-        }
-    }
 
-    private func ingest(_ data: Data) {
-        guard !sawBootstrapMarker else {
-            feed(data)
-            return
-        }
-        bootstrapBuffer.append(data)
-        guard let range = bootstrapBuffer.firstRange(of: MobileAttach.bootstrapMarker) else {
-            // Cap the gate so a herdr that never prints the marker (old
-            // binary, exec failure output) still shows its error text.
-            if bootstrapBuffer.count > 8192 {
-                sawBootstrapMarker = true
-                feed(bootstrapBuffer)
-                bootstrapBuffer.removeAll()
+            await terminalSession.close()
+            guard
+                let self,
+                !Task.isCancelled,
+                self.lifecycleGeneration == generation
+            else { return }
+            if case .running = self.status {
+                self.status = .ended(endingReason)
             }
-            return
         }
-        sawBootstrapMarker = true
-        let payload = bootstrapBuffer.suffix(from: range.upperBound)
-        bootstrapBuffer.removeAll()
-        if !payload.isEmpty { feed(Data(payload)) }
     }
 
     private func feed(_ data: Data) {
@@ -110,13 +143,14 @@ final class MobileAttachSession: ObservableObject {
     }
 
     func send(_ bytes: ArraySlice<UInt8>) {
-        guard let channel else { return }
+        guard let terminalSession, mode.allowsInput else { return }
         let data = Data(bytes)
-        Task { try? await channel.write(data, timeout: .seconds(10)) }
+        Task { try? await terminalSession.send(data) }
     }
 
     /// Sends named keys through herdr's RPC — proper terminal encoding without
-    /// this client knowing the pane's keyboard protocol state.
+    /// this client knowing the pane's keyboard protocol state. These semantic
+    /// controls remain available while the terminal itself is read-only.
     func sendKeys(_ keys: [String]) {
         Task {
             _ = try? await transport.request(
@@ -129,7 +163,9 @@ final class MobileAttachSession: ObservableObject {
         }
     }
 
-    /// Sends a prompt to the agent; herdr delivers and submits it.
+    /// Sends a prompt to the agent; herdr delivers and submits it. This remains
+    /// available to an observer because it is a semantic agent operation, not
+    /// raw ownership of the terminal byte stream.
     func prompt(_ text: String) {
         guard let agentPaneID else { return }
         Task {
@@ -144,17 +180,43 @@ final class MobileAttachSession: ObservableObject {
     }
 
     func resize(columns: Int, rows: Int) {
-        guard let channel, columns > 0, rows > 0 else { return }
-        Task { try? await channel.resize(columns: columns, rows: rows, timeout: .seconds(5)) }
+        guard columns > 0, rows > 0 else { return }
+        let size = TerminalSize(columns: columns, rows: rows)
+        guard size != lastSize else { return }
+        lastSize = size
+
+        guard let terminalSession else { return }
+        if mode.allowsResize {
+            Task { try? await terminalSession.resize(size) }
+        } else {
+            // Observe mode negotiates its grid when the stream opens. Coalesce
+            // layout churn before reopening so rotation does not create a
+            // connection storm.
+            resizeTask?.cancel()
+            resizeTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self, !Task.isCancelled else { return }
+                self.restart(mode: .observe)
+            }
+        }
     }
 
     func stop() {
+        lifecycleGeneration &+= 1
+        resizeTask?.cancel()
+        resizeTask = nil
+        startTask?.cancel()
+        startTask = nil
         readTask?.cancel()
         readTask = nil
-        if let channel {
-            Task { try? await channel.close(timeout: .seconds(2)) }
+        if let terminalSession {
+            Task { await terminalSession.close() }
         }
-        channel = nil
+        terminalSession = nil
+    }
+
+    private static func presentation(_ error: any Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? "\(error)"
     }
 }
 
@@ -215,6 +277,24 @@ struct MobileTerminalScreen: View {
             KeyChip("⏎") { session.sendKeys(["enter"]) }
             KeyChip("^C") { session.sendKeys(["ctrl+c"]) }
             Spacer()
+            sessionControl
+        }
+    }
+
+    @ViewBuilder
+    private var sessionControl: some View {
+        if session.isControlling {
+            Button {
+                keyboardShown = false
+                session.observe()
+            } label: {
+                Image(systemName: "eye")
+                    .foregroundStyle(.white.opacity(0.75))
+                    .frame(width: 34, height: 30)
+                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+            }
+            .accessibilityLabel(String(localized: "Release Control"))
+
             Button {
                 keyboardShown.toggle()
             } label: {
@@ -223,6 +303,29 @@ struct MobileTerminalScreen: View {
                     .frame(width: 34, height: 30)
                     .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
             }
+        } else {
+            controlMenu
+                .disabled(session.status != .running)
+        }
+    }
+
+    private var controlMenu: some View {
+        Menu {
+            Button(String(localized: "Request Control")) {
+                keyboardShown = false
+                session.requestControl(takeover: false)
+            }
+            Button(String(localized: "Take Over"), role: .destructive) {
+                keyboardShown = false
+                session.requestControl(takeover: true)
+            }
+        } label: {
+            Label(String(localized: "Control"), systemImage: "keyboard")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
         }
     }
 
@@ -266,14 +369,19 @@ struct MobileTerminalScreen: View {
             Text(reason)
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.8))
-            Button(String(localized: "Reconnect")) {
-                session.stop()
-                session.start(columns: 80, rows: 24)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 10) {
+                Button(String(localized: "Observe")) {
+                    keyboardShown = false
+                    session.observe()
+                }
+                .buttonStyle(.borderedProminent)
+                controlMenu
             }
-            .buttonStyle(.borderedProminent)
         }
         .padding(24)
         .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
+        .padding(20)
     }
 }
 
