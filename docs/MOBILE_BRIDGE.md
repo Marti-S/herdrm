@@ -41,14 +41,26 @@ defaults write dev.bybee.herdrm fleetBridge.port -int 45983
 ## Pairing iPhone or iPad
 
 1. Open **herdrm → Mobile Pairing…** on the Mac.
-2. Copy the Pairing JSON to the iPhone or iPad through a trusted channel. The QR code contains the same data for future scanner support.
-3. In HerdrM for iOS choose **Add Connection → Mac Bridge** and paste the JSON.
+2. In HerdrM for iOS choose **Add Connection → Mac Bridge**.
+3. Scan the QR code, or paste the pairing JSON copied from the Mac.
 4. Replace the suggested host with the Mac's Tailscale IP or MagicDNS name when necessary.
 5. Confirm the port and add the bridge.
 
 The endpoint metadata is stored in iOS user defaults. The pairing token is stored separately in the device-only Keychain. Remote SSH passwords, keys, host configuration, and reconnect state remain on the Mac.
 
 The iOS sidebar opens in **All Devices** mode. Device, Space, Agent, and terminal identities are globally qualified by the Mac device UUID, so equal Herdr pane IDs on two machines do not collide. Direct SSH remains available as an advanced fallback for a standalone Herdr host.
+
+## Agent attachments
+
+The paperclip in an Agent terminal opens the iOS Files picker. HerdrM stages the selected file on the target device, then inserts that device-local path into the Agent composer without automatically sending the prompt.
+
+- Files are limited to **32 MiB** so their base64 bridge envelope remains below the protocol's existing 64 MiB record bound.
+- The phone validates that the selection is a regular file and reads security-scoped URLs only for the duration of the transfer.
+- Filenames are stripped of path components, control characters, and reserved separators before they enter any managed cache.
+- Files for this Mac are stored under `~/Library/Application Support/HerdrM/MobileAttachments` with a mode-`0700` directory and mode-`0600` files. Entries older than seven days are pruned when another file is staged.
+- Files for an SSH-backed device are first received by the Mac and then transferred with the Mac app's existing authenticated SFTP service. The temporary Mac copy is removed after staging.
+- Direct SSH fallback uploads to `~/.cache/herdrm/mobile-uploads` on the target with mode `0600`, a partial filename, and an atomic final rename.
+- Remote SSH credentials remain on the Mac in bridge mode and never enter the attachment payload.
 
 ## Protocol
 
@@ -61,4 +73,4 @@ Every TCP connection is newline-delimited JSON and starts with `bridge.hello`. A
 
 Terminal control remains explicit. Observer streams cannot send raw input or resize commands, and takeover is only requested when the client sets it in `TerminalSessionMode`.
 
-The initial allowlist covers snapshots, ping, agent prompt/start/rename, pane input/close, workspace create/rename/close, and tab create/rename. Extend this list deliberately rather than turning the bridge into an arbitrary shell or unrestricted socket proxy.
+The allowlist covers snapshots, ping, attachment staging, Agent prompt/start/rename, pane input/close, workspace create/rename/close, and tab create/rename. Extend this list deliberately rather than turning the bridge into an arbitrary shell or unrestricted socket proxy.
