@@ -70,11 +70,15 @@ struct MobileRootView: View {
                 .hidden()
         )
         .task {
+            MobileNotificationManager.shared.setup(model: model)
             model.activate()
-            attention.apply(model.attentionSnapshot)
+            let snapshot = model.attentionSnapshot
+            attention.apply(snapshot)
+            MobileNotificationManager.shared.process(model: model)
         }
         .onChange(of: model.attentionSnapshot) { _, snapshot in
             attention.apply(snapshot)
+            MobileNotificationManager.shared.process(model: model)
         }
         .onChange(of: model.selectedPaneRef) { oldValue, newValue in
             attention.selectionChanged(from: oldValue, to: newValue)
