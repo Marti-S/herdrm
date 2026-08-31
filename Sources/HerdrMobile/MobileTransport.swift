@@ -37,7 +37,6 @@ enum MobileTransportError: LocalizedError {
     case hostKeyChanged(fingerprint: String)
     case missingPassword
     case homeProbeFailed
-    case unsupportedTerminalMode
     case invalidTerminalSize
 
     var errorDescription: String? {
@@ -50,8 +49,6 @@ enum MobileTransportError: LocalizedError {
             return String(localized: "No password saved for this device.")
         case .homeProbeFailed:
             return String(localized: "Could not resolve the home directory on the device.")
-        case .unsupportedTerminalMode:
-            return String(localized: "Direct SSH does not support read-only terminal observation yet.")
         case .invalidTerminalSize:
             return String(localized: "Terminal columns and rows must be greater than zero.")
         }
@@ -212,29 +209,29 @@ final class SSHDirectTransport: MobileTransport {
         }
     }
 
-    /// Opens the current direct-SSH PTY implementation behind the semantic
-    /// terminal session boundary. Read-only observation will be implemented by
-    /// a structured Herdr terminal-session adapter rather than by pretending a
-    /// PTY takeover is an observer.
+    /// Opens Herdr's structured terminal observer/controller over one SSH PTY.
+    /// The remote command disables terminal echo and post-processing, so the
+    /// channel carries only Herdr's NDJSON protocol rather than a rendered TUI.
     func openTerminalSession(
         target: TerminalAttachTarget,
         mode: TerminalSessionMode,
         size: TerminalSize
     ) async throws -> any TerminalSession {
-        guard mode.access == .control else {
-            throw MobileTransportError.unsupportedTerminalMode
-        }
         guard size.isValid else {
             throw MobileTransportError.invalidTerminalSize
         }
 
         let channel = try await connection.openPTY(
-            command: MobileAttach.command(target: target, takeover: mode.takeover),
+            command: MobileAttach.structuredCommand(
+                target: target,
+                mode: mode,
+                size: size
+            ),
             columns: size.columns,
             rows: size.rows,
             timeout: .seconds(15)
         )
-        return SSHPTYTerminalSession(
+        return SSHStructuredTerminalSession(
             channel: channel,
             mode: mode,
             initialSize: size
@@ -257,17 +254,38 @@ enum MobileAttach {
         Data([0x1B, 0x5F]) + Data("herdrm-attach".utf8) + Data([0x1B, 0x5C])
     private static let markerPrintf = #"printf '\033_herdrm-attach\033\\'"#
 
-    /// The remote command for attaching to an agent pane or a bare terminal.
-    static func command(target: TerminalAttachTarget, takeover: Bool) -> String {
-        let attach: String
+    /// Runs Herdr's machine-readable terminal session surface. The SSH channel
+    /// currently requests a PTY because HerdrSSH has no streaming exec channel;
+    /// stty makes that PTY a transparent byte pipe by disabling echo, canonical
+    /// input, and output newline conversion before Herdr starts.
+    static func structuredCommand(
+        target: TerminalAttachTarget,
+        mode: TerminalSessionMode,
+        size: TerminalSize
+    ) -> String {
+        let targetValue: String
         switch target {
         case .agent(let paneID):
-            attach = "herdr agent attach \(ShellQuoting.quoted(paneID))"
+            targetValue = paneID
         case .terminal(let terminalID):
-            attach = "herdr terminal attach \(ShellQuoting.quoted(terminalID))"
+            targetValue = terminalID
         }
-        let takeoverFlag = takeover ? " --takeover" : ""
-        let script = "\(pathExport); \(markerPrintf); exec \(attach)\(takeoverFlag)"
+
+        let action: String
+        switch mode.access {
+        case .observe:
+            action = "observe"
+        case .control:
+            action = "control"
+        }
+        let takeoverFlag = mode.takeover ? " --takeover" : ""
+        let sessionCommand = "herdr terminal session \(action) "
+            + ShellQuoting.quoted(targetValue)
+            + takeoverFlag
+            + " --cols \(size.columns) --rows \(size.rows)"
+        let script = "\(pathExport); "
+            + "stty -echo -icanon -opost min 1 time 0; "
+            + "\(markerPrintf); exec \(sessionCommand)"
         return "/bin/sh -c \(ShellQuoting.quoted(script))"
     }
 }
