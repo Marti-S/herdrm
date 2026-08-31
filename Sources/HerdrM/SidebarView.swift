@@ -330,6 +330,8 @@ struct SidebarView: View {
             && model.selectedPane == entry.ref
             && model.selectedShellID == nil
         let unread = model.isUnread(entry)
+        let status = model.agentDisplayStatus(for: entry)
+        let kind = model.agentDisplayKind(for: entry)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(entry.title)
@@ -337,10 +339,10 @@ struct SidebarView: View {
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                AgentStatusGlyph(status: agent.status, unreadDone: unread)
+                AgentStatusGlyph(status: status, unreadDone: unread)
             }
             HStack(spacing: 5) {
-                AgentKindBadge(kind: agent.agent)
+                AgentKindBadge(kind: kind)
                 Text("·")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textGhost)
@@ -352,7 +354,7 @@ struct SidebarView: View {
                     .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                if agent.status == .blocked {
+                if status == .blocked {
                     Text("needs input")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.warning)
@@ -403,13 +405,19 @@ struct SidebarView: View {
                 }
             )
         }
+        .task(id: entry.id) {
+            while !Task.isCancelled {
+                await model.refreshAtomicActivity(for: entry)
+                try? await Task.sleep(for: .milliseconds(750))
+            }
+        }
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(accessibilityLabel(unread: unread))
+        .accessibilityLabel(accessibilityLabel(status: status, unread: unread))
     }
 
-    private func accessibilityLabel(unread: Bool) -> String {
+    private func accessibilityLabel(status: AgentStatus, unread: Bool) -> String {
         var parts = [entry.title]
-        switch entry.agent.status {
+        switch status {
         case .working: parts.append(String(localized: "Working"))
         case .blocked: parts.append(String(localized: "Needs input"))
         case .done where unread: parts.append(String(localized: "Unread"))

@@ -2,8 +2,9 @@ import AppKit
 import SwiftTerm
 import SwiftUI
 
-/// A two-pane split with a draggable divider and a persisted ratio. `axis == nil` shows
-/// `first()` filling the whole area; the second pane and the divider are what come and go.
+/// A two-pane split with a draggable divider and a persisted ratio. `axis == nil`
+/// shows `first()` filling the whole area. `second()` remains mounted at zero size
+/// so app-owned shell processes survive while another Space is selected.
 ///
 /// The `GeometryReader` and the layout are present in every state on purpose, and the axis
 /// is switched with `AnyLayout` rather than by branching. Do not "simplify" this into
@@ -44,10 +45,19 @@ struct SplitContainer<First: View, Second: View>: View {
                     .opacity(paneOpacity(for: .agent))
                 if let axis {
                     divider(axis: axis, total: total)
-                    second()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(paneOpacity(for: .shell))
                 }
+                second()
+                    .frame(
+                        width: axis == nil ? 0 : nil,
+                        height: axis == nil ? 0 : nil
+                    )
+                    .frame(
+                        maxWidth: axis == nil ? 0 : .infinity,
+                        maxHeight: axis == nil ? 0 : .infinity
+                    )
+                    .opacity(axis == nil ? 0 : paneOpacity(for: .shell))
+                    .allowsHitTesting(axis != nil)
+                    .clipped()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // A gesture cancelled without onEnded leaves a stale anchor;

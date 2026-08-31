@@ -69,7 +69,7 @@ enum BrandIconLoader {
             "qwen": "qwen", "qwen-code": "qwen",
             "copilot": "copilot", "github-copilot": "githubcopilot",
             "kimi": "kimi",
-            "pi": "pi",
+            "pi": "pi", "atomic": "pi",
         ]
         var base: String?
         if let exact = map[normalized] {

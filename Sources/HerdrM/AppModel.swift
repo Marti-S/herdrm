@@ -64,6 +64,29 @@ enum SplitAxis { case vertical, horizontal }
 /// keyboard-driven resize.
 enum SplitSide { case agent, shell }
 
+private final class WeakTerminalViewBox {
+    weak var view: LocalProcessTerminalView?
+
+    init(_ view: LocalProcessTerminalView?) {
+        self.view = view
+    }
+}
+
+/// Atomic keeps the Pi-compatible one-cell ∀ indicator while workflows and
+/// subagents replace the accompanying "Working..." text. Herdr's Pi manifest
+/// matches that literal text, so the macOS sidebar also checks the live glyph.
+enum AtomicActivityDetector {
+    static func isWorking(in text: String) -> Bool {
+        text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .suffix(8)
+            .contains { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return trimmed == "∀" || trimmed.hasPrefix("∀ ")
+            }
+    }
+}
+
 /// A standalone local or SSH shell shown as its own sidebar entry — app-owned,
 /// outside any herdr space (unlike the persistent herdr terminals under
 /// TERMINALS) and not the ⌘D split.
@@ -102,6 +125,14 @@ enum AgentBinaryOverrides {
 
 @MainActor
 final class AppModel: ObservableObject {
+    struct SpaceSplitSession: Identifiable {
+        let id: UUID
+        let space: SpaceRef
+        var axis: SplitAxis
+        var activeSide: SplitSide
+        var ratio: Double
+    }
+
     @Published var devices: [Device]
     /// All devices stay connected in parallel; this only filters the sidebar.
     @Published var deviceFilter: UUID? {
@@ -134,27 +165,41 @@ final class AppModel: ObservableObject {
     @Published var showNewSpace = false
     @Published var showSearch = false
     @Published var isFileManagerActive = false
-    @Published var shellSplitAxis: SplitAxis?
+    @Published var shellSplitAxis: SplitAxis? {
+        didSet { persistCurrentSplitSession() }
+    }
     /// Set by `reveal` when a jump lands while the ⌘D split is open, and consumed once the
     /// main window is key again. Only an actual jump sets it: dismissing the search with
     /// Escape never calls `reveal`, and the sidebar assigns `selectedPane` directly.
     @Published var pendingSplitAgentFocus = false
     /// The pane that currently holds the keyboard within the ⌘D split. Reset to
     /// the agent side whenever the split closes so reopening it is predictable.
-    @Published var activeSplitSide: SplitSide = .agent
+    @Published var activeSplitSide: SplitSide = .agent {
+        didSet { persistCurrentSplitSession() }
+    }
     /// Persisted divider ratio for the ⌘D split, shared with the resize commands.
     /// Deliberately not `@AppStorage`: that publishes only from inside a View, so the
     /// menu commands would write UserDefaults without ever redrawing the split.
     @Published var splitRatio: Double =
         UserDefaults.standard.object(forKey: AppModel.splitRatioKey) as? Double ?? 0.5
     {
-        didSet { UserDefaults.standard.set(splitRatio, forKey: AppModel.splitRatioKey) }
+        didSet {
+            UserDefaults.standard.set(splitRatio, forKey: AppModel.splitRatioKey)
+            persistCurrentSplitSession()
+        }
     }
     static let splitRatioKey = "terminal.splitRatio"
+    /// One app-owned sidecar shell per Space that has explicitly opened ⌘D.
+    @Published private var splitSessionsBySpace: [SpaceRef: SpaceSplitSession] = [:]
+    private var splitShellViews: [SpaceRef: WeakTerminalViewBox] = [:]
+    private var restoringSplitSession = false
     /// Live terminal views of the ⌘D split, used by menu commands to move focus.
     /// Held weakly so the views are not kept alive by the model.
     weak var splitAgentView: LocalProcessTerminalView?
     weak var splitShellView: LocalProcessTerminalView?
+    @Published private var atomicPaneRefs: Set<PaneRef> = []
+    @Published private var atomicWorkingPanes: Set<PaneRef> = []
+    @Published private var branchesByPane: [PaneRef: String] = [:]
     /// Standalone terminals. Their views stay alive while deselected —
     /// unlike agents, a local shell has no server side to reattach to.
     @Published var shellSessions: [ShellSession] = []
@@ -452,6 +497,156 @@ final class AppModel: ObservableObject {
         return nil
     }
 
+    var attachedSpaceRef: SpaceRef? {
+        guard selectedShellID == nil, !isFileManagerActive else { return nil }
+        return selectedAttachedEntry.map {
+            SpaceRef(deviceID: $0.device.id, workspaceID: $0.workspaceID)
+        }
+    }
+
+    var spaceSplitSessions: [SpaceSplitSession] {
+        splitSessionsBySpace.values.sorted {
+            if $0.space.deviceID != $1.space.deviceID {
+                return $0.space.deviceID.uuidString < $1.space.deviceID.uuidString
+            }
+            return $0.space.workspaceID < $1.space.workspaceID
+        }
+    }
+
+    /// Restores the split owned by the selected Space, or closes the visual
+    /// split without destroying shells owned by other Spaces.
+    func activateSplitSession(for space: SpaceRef?) {
+        restoringSplitSession = true
+        defer { restoringSplitSession = false }
+        guard let space, let session = splitSessionsBySpace[space] else {
+            shellSplitAxis = nil
+            activeSplitSide = .agent
+            splitShellView = nil
+            return
+        }
+        shellSplitAxis = session.axis
+        activeSplitSide = session.activeSide
+        splitRatio = session.ratio
+        splitShellView = splitShellViews[space]?.view
+    }
+
+    func registerSplitShellView(_ view: LocalProcessTerminalView, for space: SpaceRef) {
+        splitShellViews[space] = WeakTerminalViewBox(view)
+        if attachedSpaceRef == space {
+            splitShellView = view
+        }
+    }
+
+    func closeSplitSession(for space: SpaceRef) {
+        splitShellViews.removeValue(forKey: space)
+        if attachedSpaceRef == space {
+            shellSplitAxis = nil
+            activeSplitSide = .agent
+        } else {
+            splitSessionsBySpace.removeValue(forKey: space)
+        }
+    }
+
+    private func persistCurrentSplitSession() {
+        guard !restoringSplitSession, let space = attachedSpaceRef else { return }
+        guard let axis = shellSplitAxis else {
+            splitSessionsBySpace.removeValue(forKey: space)
+            splitShellViews.removeValue(forKey: space)
+            splitShellView = nil
+            return
+        }
+        if var session = splitSessionsBySpace[space] {
+            session.axis = axis
+            session.activeSide = activeSplitSide
+            session.ratio = splitRatio
+            splitSessionsBySpace[space] = session
+        } else {
+            splitSessionsBySpace[space] = SpaceSplitSession(
+                id: UUID(),
+                space: space,
+                axis: axis,
+                activeSide: activeSplitSide,
+                ratio: splitRatio
+            )
+        }
+        splitShellView = splitShellViews[space]?.view
+    }
+
+    private func pruneSplitSessions(deviceID: UUID, validWorkspaceIDs: Set<String>) {
+        let stale = splitSessionsBySpace.keys.filter {
+            $0.deviceID == deviceID && !validWorkspaceIDs.contains($0.workspaceID)
+        }
+        for space in stale {
+            splitSessionsBySpace.removeValue(forKey: space)
+            splitShellViews.removeValue(forKey: space)
+        }
+    }
+
+    func agentDisplayKind(for entry: AgentEntry) -> String {
+        isAtomicAgent(entry) ? "atomic" : entry.agent.agent
+    }
+
+    func agentDisplayStatus(for entry: AgentEntry) -> AgentStatus {
+        let status = entry.agent.status
+        if atomicWorkingPanes.contains(entry.ref) {
+            return .working
+        }
+        return status
+    }
+
+    private func isAtomicAgent(_ entry: AgentEntry) -> Bool {
+        if atomicPaneRefs.contains(entry.ref) { return true }
+        let candidates: [String?] = [
+            entry.tabLabel,
+            entry.agent.name,
+            entry.agent.customTitle,
+            entry.agent.terminalTitleStripped,
+            entry.agent.terminalTitle,
+            entry.title,
+        ]
+        return candidates.compactMap { value in
+            value?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+        }.contains { value in
+            value == "atomic" || value.hasPrefix("atomic-")
+        }
+    }
+
+    func refreshAtomicActivity(for entry: AgentEntry) async {
+        guard isAtomicAgent(entry),
+              let read = try? await service(for: entry.device).readPane(paneID: entry.agent.paneID),
+              !Task.isCancelled
+        else { return }
+        var next = atomicWorkingPanes
+        if AtomicActivityDetector.isWorking(in: read.text) {
+            next.insert(entry.ref)
+        } else {
+            next.remove(entry.ref)
+        }
+        if next != atomicWorkingPanes {
+            atomicWorkingPanes = next
+        }
+    }
+
+    func branchName(for entry: AgentEntry) -> String? {
+        branchesByPane[entry.ref]
+    }
+
+    func refreshBranch(for entry: AgentEntry) async {
+        guard let cwd = entry.agent.cwd, !cwd.isEmpty else {
+            branchesByPane.removeValue(forKey: entry.ref)
+            return
+        }
+        let branch = await service(for: entry.device).gitBranch(at: cwd)
+        guard !Task.isCancelled else { return }
+        if let branch, !branch.isEmpty {
+            branchesByPane[entry.ref] = branch
+        } else {
+            branchesByPane.removeValue(forKey: entry.ref)
+        }
+    }
+
     private var firstVisiblePaneRef: PaneRef? {
         visibleAgents.first?.ref ?? visibleTerminals.first?.ref
     }
@@ -655,16 +850,34 @@ final class AppModel: ObservableObject {
                 AgentAttachmentCapabilityRegistry(manifests: manifests)
             let advertised = manifests.map(\.agent)
             if device(deviceID)?.isLocal == true {
-                let found = await service.installedAgents(
+                let overrides = AgentBinaryOverrides.load()
+                var found = await service.installedAgents(
                     from: advertised,
-                    overrides: AgentBinaryOverrides.load()
+                    overrides: overrides
                 )
+                if advertised.contains("pi"),
+                   let atomic = await service.installedAgents(
+                       from: ["atomic"],
+                       overrides: overrides
+                   ).first {
+                    if let piIndex = found.firstIndex(where: { $0.kind == "pi" }) {
+                        found.insert(atomic, at: piIndex + 1)
+                    } else {
+                        found.append(atomic)
+                    }
+                }
                 sessions[deviceID]?.agentCatalog = .loaded(
                     kinds: found.map(\.kind),
                     paths: Dictionary(uniqueKeysWithValues: found.map { ($0.kind, $0.path) })
                 )
             } else {
-                sessions[deviceID]?.agentCatalog = .loaded(kinds: advertised)
+                var kinds = advertised
+                var paths: [String: String] = [:]
+                if let piIndex = kinds.firstIndex(of: "pi"), !kinds.contains("atomic") {
+                    kinds.insert("atomic", at: piIndex + 1)
+                    paths["atomic"] = "atomic"
+                }
+                sessions[deviceID]?.agentCatalog = .loaded(kinds: kinds, paths: paths)
             }
         } catch {
             sessions[deviceID]?.agentCatalog = .failed(error.localizedDescription)
@@ -770,6 +983,7 @@ final class AppModel: ObservableObject {
         guard !device.isLocal else { return }
         removeSSHPassword(for: device.id)
         if sshAuthenticationRequest?.deviceID == device.id { sshAuthenticationRequest = nil }
+        pruneSplitSessions(deviceID: device.id, validWorkspaceIDs: [])
         stopSession(device.id)
         devices.removeAll { $0.id == device.id }
         store.save(devices)
@@ -810,6 +1024,10 @@ final class AppModel: ObservableObject {
                 workspaces: snapshot.workspaces
             )
             sessions[deviceID]?.panes = snapshot.ordinaryTerminalPanes
+            pruneSplitSessions(
+                deviceID: deviceID,
+                validWorkspaceIDs: Set(snapshot.workspaces.map(\.workspaceID))
+            )
             let paneIDs = Set((snapshot.panes ?? []).map(\.paneID))
                 .union(snapshot.agents.map(\.paneID))
             if let selected = selectedPane, selected.deviceID == deviceID,
@@ -1182,23 +1400,35 @@ final class AppModel: ObservableObject {
             do {
                 let pane = try await service.createTab(workspaceID: workspaceID, cwd: nil, label: kind)
                 createdPane = pane
-                do {
-                    try await service.startAgent(
-                        name: kind,
-                        kind: kind,
+                if kind == "atomic" {
+                    let binary = session(device.id).agentCatalog.paths[kind]
+                        ?? HerdrService.binaryName(for: kind)
+                    try await service.startPiCompatibleAgent(
+                        executable: binary,
                         paneID: pane,
                         args: args,
                         waitForShell: true
                     )
-                } catch HerdrError.rpc(let code, _) where code == "agent_name_taken" {
-                    let suffix = String(UUID().uuidString.prefix(4)).lowercased()
-                    try await service.startAgent(
-                        name: "\(kind)-\(suffix)",
-                        kind: kind,
-                        paneID: pane,
-                        args: args,
-                        waitForShell: true
-                    )
+                    atomicPaneRefs.insert(PaneRef(deviceID: device.id, paneID: pane))
+                } else {
+                    do {
+                        try await service.startAgent(
+                            name: kind,
+                            kind: kind,
+                            paneID: pane,
+                            args: args,
+                            waitForShell: true
+                        )
+                    } catch HerdrError.rpc(let code, _) where code == "agent_name_taken" {
+                        let suffix = String(UUID().uuidString.prefix(4)).lowercased()
+                        try await service.startAgent(
+                            name: "\(kind)-\(suffix)",
+                            kind: kind,
+                            paneID: pane,
+                            args: args,
+                            waitForShell: true
+                        )
+                    }
                 }
                 await refresh(device.id)
                 isFileManagerActive = false

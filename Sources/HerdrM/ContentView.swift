@@ -111,17 +111,11 @@ struct DetailView: View {
                 .zIndex(1)
             Rectangle().fill(Theme.hairline).frame(height: 1)
             detailContent
-                // Losing the selected agent tears the SplitContainer down without
-                // resetting the axis, which would leave the same phantom split.
-                //
-                // Load-bearing beyond that: this is the ONLY thing that clears the axis
-                // when the agent goes away. `dismantleNSView` nils the coordinator's
-                // onExit before killing the shell, so the shell's own onExit never fires
-                // on teardown. Remove this and "split open with no agent selected"
-                // becomes reachable, which is a state a deferred focus request can be
-                // armed into with nothing left in the tree to consume it.
-                .onChange(of: model.selectedAttachedEntry?.id) { _, id in
-                    if id == nil { model.shellSplitAxis = nil }
+                // Cmd+D is Space-scoped. Changing the selected pane restores only
+                // that Space's sidecar shell; shells in other Spaces stay mounted.
+                .onChange(of: model.attachedSpaceRef) { _, space in
+                    model.activateSplitSession(for: space)
+                    splitTracker.shellView = model.splitShellView
                 }
                 .onChange(of: model.isFileManagerActive) { _, active in
                     if active { hasOpenedFileManager = true }
@@ -181,26 +175,30 @@ struct DetailView: View {
                 switch attached {
                 case .agent(let entry):
                     let agent = entry.agent
-                    statusGlyph(agent.status)
                     Text(entry.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
                         .layoutPriority(1)
                         .help((agent.cwd as NSString?)?.abbreviatingWithTildeInPath ?? "")
                     Spacer(minLength: 12)
-                    AgentKindBadge(kind: agent.agent)
-                    Text("\u{b7}")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Theme.textGhost)
                     Text(model.spaceName(deviceID: entry.device.id, workspaceID: agent.workspaceID))
-                        .font(.system(size: 11.5))
+                        .font(.system(size: 11.5, weight: .regular))
                         .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
+                    if let branch = model.branchName(for: entry) {
+                        Text("\u{b7}")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.textGhost)
+                        Text(branch)
+                            .font(.system(size: 11.5, weight: .regular))
+                            .foregroundStyle(Theme.textTertiary)
+                            .lineLimit(1)
+                            .help(branch)
+                    }
                     if model.showsRowDeviceBadges {
                         DeviceChip(device: entry.device)
                     }
-                    statusPill(agent.status)
                 case .terminal(let entry):
                     Image(systemName: "terminal")
                         .font(.system(size: 12, weight: .semibold))
@@ -230,42 +228,18 @@ struct DetailView: View {
         .padding(.leading, sidebarCollapsed ? 10 : 14)
         .padding(.trailing, 12)
         .frame(height: TitlebarMetrics.height)
-    }
-
-    @ViewBuilder
-    private func statusGlyph(_ status: AgentStatus) -> some View {
-        switch status {
-        case .working:
-            SpinnerView(color: Theme.working).frame(width: 13, height: 13)
-        case .blocked:
-            Image(systemName: "exclamationmark.circle")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Theme.warning)
-        case .done:
-            EmptyView()
-        case .idle, .unknown:
-            EmptyView()
-        }
-    }
-
-    @ViewBuilder
-    private func statusPill(_ status: AgentStatus) -> some View {
-        let label: String? = {
-            switch status {
-            case .working: return String(localized: "Working")
-            case .blocked: return String(localized: "Needs input")
-            case .done: return String(localized: "Done")
-            case .idle, .unknown: return nil
+        .task(id: selectedAgentBranchTaskID) {
+            guard let entry = model.selectedEntry else { return }
+            while !Task.isCancelled {
+                await model.refreshBranch(for: entry)
+                try? await Task.sleep(for: .seconds(10))
             }
-        }()
-        if let label {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.statusColor(status))
-                .padding(.horizontal, 8)
-                .frame(height: 20)
-                .background(Theme.statusColor(status).opacity(0.13), in: Capsule())
         }
+    }
+
+    private var selectedAgentBranchTaskID: String {
+        guard let entry = model.selectedEntry else { return "none" }
+        return "\(entry.id)|\(entry.agent.cwd ?? "")"
     }
 
     // MARK: - Terminal
@@ -315,8 +289,65 @@ struct DetailView: View {
         .background(Theme.terminalBackground)
     }
 
-    @ViewBuilder
     private var attachedTerminal: some View {
+        SplitContainer(
+            axis: model.selectedAttachedEntry == nil ? nil : model.shellSplitAxis,
+            activeSide: model.activeSplitSide,
+            ratio: $model.splitRatio
+        ) {
+            attachedPrimary
+        } second: {
+            splitShellTerminals
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.terminalBackground)
+        .overlay(alignment: .bottomTrailing) {
+            if uploadingAttachment { uploadIndicator }
+        }
+        .onAppear {
+            model.activateSplitSession(for: model.attachedSpaceRef)
+            splitTracker.onSideChanged = { model.activeSplitSide = $0 }
+            splitTracker.start()
+            splitTracker.shellView = model.splitShellView
+        }
+        .onChange(of: model.selectedAttachedEntry?.id) { _, id in
+            endedAttachKey = nil
+            uploadingAttachment = false
+            if id == nil {
+                model.pendingSplitAgentFocus = false
+            } else if model.shellSplitAxis != nil {
+                focusTerminal(model.splitAgentView)
+            }
+        }
+        // Keyed on the window becoming key rather than on a delay: that is the event
+        // that follows the sheet's responder restore. Filtered to the terminal's own
+        // window and consumed no matter which window it was, so a pending request can
+        // never survive to a later, unrelated activation — coming back from ⌘Tab or
+        // closing Settings would otherwise yank the keyboard into a live pane.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            guard model.pendingSplitAgentFocus else { return }
+            model.pendingSplitAgentFocus = false
+            guard let window = note.object as? NSWindow,
+                  window === model.splitAgentView?.window
+            else { return }
+            focusTerminal(model.splitAgentView)
+        }
+        // Splitting moves the keyboard to the shell, so closing the split has to
+        // hand it back — by ⌘W or by the shell exiting on its own. Reset the
+        // tracked side to the agent so the next split starts predictably.
+        .onChange(of: model.shellSplitAxis) { _, axis in
+            if axis == nil {
+                model.activeSplitSide = .agent
+                model.pendingSplitAgentFocus = false
+                focusRemainingTerminal()
+            } else {
+                splitTracker.shellView = model.splitShellView
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var attachedPrimary: some View {
         if let entry = model.selectedAttachedEntry {
             let attachmentCapabilities: AgentAttachmentCapabilities? = {
                 guard case .agent(let agentEntry) = entry else { return nil }
@@ -325,44 +356,12 @@ struct DetailView: View {
                     agentKind: agentEntry.agent.agentKindRaw
                 )
             }()
-            SplitContainer(
-                axis: model.shellSplitAxis,
-                activeSide: model.activeSplitSide,
-                ratio: $model.splitRatio
-            ) {
-                ZStack {
-                    AttachTerminalView(
-                        device: entry.device,
-                        target: entry.attachTarget,
-                        serverVersion: model.serverVersion(deviceID: entry.device.id),
-                        attachmentCapabilities: attachmentCapabilities,
-                        fontName: terminalFontName,
-                        fontSize: terminalFontSize,
-                        thinStrokes: terminalThinStrokes,
-                        fontWeight: terminalFontWeight,
-                        lineSpacing: terminalLineSpacing,
-                        dark: colorScheme == .dark,
-                        mouseReporting: terminalMouseReporting,
-                        onAttachmentError: { model.actionError = $0 },
-                        onAttachmentUploadingChanged: { uploadingAttachment = $0 },
-                        onExit: { code in
-                            endedAttachKey = entry.id
-                            endedAttachCode = code
-                        },
-                        onViewReady: {
-                            splitTracker.agentView = $0
-                            model.splitAgentView = $0
-                        }
-                    )
-                        .id("attach-\(entry.id)-\(colorScheme)-\(attachRetry)")
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                    if endedAttachKey == entry.id {
-                        attachEndedOverlay(entry)
-                    }
-                }
-            } second: {
-                ShellTerminalView(
+            ZStack {
+                AttachTerminalView(
+                    device: entry.device,
+                    target: entry.attachTarget,
+                    serverVersion: model.serverVersion(deviceID: entry.device.id),
+                    attachmentCapabilities: attachmentCapabilities,
                     fontName: terminalFontName,
                     fontSize: terminalFontSize,
                     thinStrokes: terminalThinStrokes,
@@ -370,63 +369,25 @@ struct DetailView: View {
                     lineSpacing: terminalLineSpacing,
                     dark: colorScheme == .dark,
                     mouseReporting: terminalMouseReporting,
-                    onExit: { _ in model.shellSplitAxis = nil },
+                    onAttachmentError: { model.actionError = $0 },
+                    onAttachmentUploadingChanged: { uploadingAttachment = $0 },
+                    onExit: { code in
+                        endedAttachKey = entry.id
+                        endedAttachCode = code
+                    },
                     onViewReady: {
-                        splitTracker.shellView = $0
-                        model.splitShellView = $0
+                        splitTracker.agentView = $0
+                        model.splitAgentView = $0
                     }
                 )
-                    // Deliberately not keyed on colorScheme like the attach above:
-                    // a new id tears the view down and kills the shell with whatever
-                    // was running in it, and unlike a herdr pane a local shell has no
-                    // server-side state to reattach to. updateNSView re-themes it.
-                    .id("shell")
+                    .id("attach-\(entry.id)-\(colorScheme)-\(attachRetry)")
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.terminalBackground)
-            .overlay(alignment: .bottomTrailing) {
-                if uploadingAttachment { uploadIndicator }
-            }
-            .onAppear {
-                // Single source of truth: the tracker writes straight into the model
-                // instead of holding its own copy for a second onChange to mirror.
-                splitTracker.onSideChanged = { model.activeSplitSide = $0 }
-                splitTracker.start()
-            }
-            .onChange(of: entry.id) { _, _ in
-                endedAttachKey = nil
-                uploadingAttachment = false
-                if model.shellSplitAxis != nil { focusTerminal(model.splitAgentView) }
-            }
-            // Keyed on the window becoming key rather than on a delay: that is the event
-            // that follows the sheet's responder restore. Filtered to the terminal's own
-            // window and consumed no matter which window it was, so a pending request can
-            // never survive to a later, unrelated activation — coming back from ⌘Tab or
-            // closing Settings would otherwise yank the keyboard into a live pane.
-            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
-                guard model.pendingSplitAgentFocus else { return }
-                model.pendingSplitAgentFocus = false
-                guard let window = note.object as? NSWindow,
-                      window === model.splitAgentView?.window
-                else { return }
-                focusTerminal(model.splitAgentView)
-            }
-            // Splitting moves the keyboard to the shell, so closing the split has to
-            // hand it back — by ⌘W or by the shell exiting on its own. Reset the
-            // tracked side to the agent so the next split starts predictably.
-            .onChange(of: model.shellSplitAxis) { _, axis in
-                if axis == nil {
-                    model.activeSplitSide = .agent
-                    model.pendingSplitAgentFocus = false
-                    focusRemainingTerminal()
+                if endedAttachKey == entry.id {
+                    attachEndedOverlay(entry)
                 }
             }
         } else {
-            // The .onReceive below only exists on the branch above, so a request armed
-            // while no pane is selected would have no consumer and would be cashed in by
-            // some later activation. Revealing a pane that has since gone away lands here.
             VStack(spacing: 10) {
                 Image(systemName: "terminal")
                     .font(.system(size: 28, weight: .light))
@@ -448,7 +409,35 @@ struct DetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.terminalBackground)
-            .onAppear { model.pendingSplitAgentFocus = false }
+        }
+    }
+
+    private var splitShellTerminals: some View {
+        ZStack {
+            ForEach(model.spaceSplitSessions) { session in
+                let active = model.attachedSpaceRef == session.space
+                ShellTerminalView(
+                    fontName: terminalFontName,
+                    fontSize: terminalFontSize,
+                    thinStrokes: terminalThinStrokes,
+                    fontWeight: terminalFontWeight,
+                    lineSpacing: terminalLineSpacing,
+                    dark: colorScheme == .dark,
+                    mouseReporting: terminalMouseReporting,
+                    onExit: { _ in model.closeSplitSession(for: session.space) },
+                    onViewReady: { view in
+                        model.registerSplitShellView(view, for: session.space)
+                        if active {
+                            splitTracker.shellView = view
+                        }
+                    }
+                )
+                    .id("space-shell-\(session.id.uuidString)")
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .opacity(active ? 1 : 0)
+                    .allowsHitTesting(active)
+            }
         }
     }
 

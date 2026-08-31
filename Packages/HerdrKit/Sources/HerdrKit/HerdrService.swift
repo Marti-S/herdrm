@@ -276,6 +276,62 @@ public actor HerdrService {
         return names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
+    /// Resolves the current Git branch for a directory on this device. Detached
+    /// HEADs fall back to a short commit id; non-repositories return nil.
+    public func gitBranch(at path: String) async -> String? {
+        let absolute = (try? await absolutePath(path)) ?? path
+        let output: String?
+        switch device.kind {
+        case .local:
+            output = await Self.localGitBranch(at: absolute)
+        case .ssh(let target):
+            let quoted = Self.shellQuoted(absolute)
+            output = try? await SSHTunnel.runSSH(
+                target: target,
+                command: "\(SSHTunnel.remotePathExport); "
+                    + "git -C \(quoted) symbolic-ref --quiet --short HEAD 2>/dev/null "
+                    + "|| git -C \(quoted) rev-parse --short HEAD 2>/dev/null",
+                timeout: 8,
+                credentialID: device.id
+            )
+        }
+        return output?
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private static func localGitBranch(at path: String) async -> String? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let symbolic = runGit([
+                    "-C", path, "symbolic-ref", "--quiet", "--short", "HEAD",
+                ])
+                let detached = symbolic == nil
+                    ? runGit(["-C", path, "rev-parse", "--short", "HEAD"])
+                    : nil
+                continuation.resume(returning: symbolic ?? detached)
+            }
+        }
+    }
+
+    private static func runGit(_ arguments: [String]) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+    }
+
     /// Wraps a path for the remote shell — see `ShellQuoting.quoted`.
     static func shellQuoted(_ path: String) -> String {
         ShellQuoting.quoted(path)
@@ -374,6 +430,51 @@ public actor HerdrService {
         guard let paneID = result["root_pane"]?["pane_id"]?.stringValue
         else { throw HerdrError.malformedResponse("tab.create returned no root_pane.pane_id") }
         return paneID
+    }
+
+    /// Runs a command in a newly-created pane after its login shell has finished
+    /// initializing. Text and Enter are sent separately so bracketed-paste mode
+    /// cannot turn the command into an inert multiline paste.
+    public func runShellCommand(
+        _ command: String,
+        paneID: String,
+        waitForShell: Bool = false
+    ) async throws {
+        if waitForShell, let pinnedTerminalID = try? await paneTerminalID(paneID) {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: Self.paneShellReadinessTimeout)
+            while clock.now < deadline,
+                  await paneShellStillInitializing(paneID, pinnedTerminalID: pinnedTerminalID) {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        try await sendInput(paneID: paneID, text: command)
+        try await sendKeys(paneID: paneID, keys: ["enter"])
+    }
+
+    /// Launches a Pi-compatible CLI through a Pi-named symlink so Herdr's
+    /// existing process and screen detectors classify forks such as Atomic as
+    /// Pi without requiring a second server-side harness.
+    public func startPiCompatibleAgent(
+        executable: String,
+        paneID: String,
+        args: [String] = [],
+        waitForShell: Bool = false
+    ) async throws {
+        let quotedExecutable = Self.shellQuoted(executable)
+        let quotedArguments = args.map(Self.shellQuoted).joined(separator: " ")
+        let argumentSuffix = quotedArguments.isEmpty ? "" : " \(quotedArguments)"
+        let command =
+            "atomic_binary=$(command -v \(quotedExecutable)) || exit 127; "
+            + "shim_dir=\"${TMPDIR:-/tmp}/herdrm-agent-shims\"; "
+            + "mkdir -p \"$shim_dir\" && "
+            + "ln -sf \"$atomic_binary\" \"$shim_dir/pi\" && "
+            + "exec \"$shim_dir/pi\"\(argumentSuffix)"
+        try await runShellCommand(
+            command,
+            paneID: paneID,
+            waitForShell: waitForShell
+        )
     }
 
     public func startAgent(

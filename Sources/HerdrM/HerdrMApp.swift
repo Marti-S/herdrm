@@ -107,16 +107,15 @@ struct HerdrMApp: App {
             }
 
             CommandMenu("Terminal") {
-                // Guarded on selectedAttachedEntry, not just on the model: with the placeholder
-                // on screen there is no SplitContainer to render into, so a split would
-                // be invisible yet leave shellSplitAxis non-nil — and the next ⌘W would
-                // "close" that phantom instead of the window.
+                // Guarded on the active Herdr Space: standalone terminals and Files keep
+                // the prior pane selected for fast restoration, but must not mutate a
+                // hidden Space split.
                 Button("Split Vertically") { focusedModel?.shellSplitAxis = .vertical }
                     .keyboardShortcut("d", modifiers: .command)
-                    .disabled(focusedModel?.selectedAttachedEntry == nil)
+                    .disabled(focusedModel?.attachedSpaceRef == nil)
                 Button("Split Horizontally") { focusedModel?.shellSplitAxis = .horizontal }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
-                    .disabled(focusedModel?.selectedAttachedEntry == nil)
+                    .disabled(focusedModel?.attachedSpaceRef == nil)
 
                 Divider()
 
@@ -275,6 +274,7 @@ struct AgentsSettingsView: View {
         ("kimi", "Kimi", "kimi"),
         ("opencode", "OpenCode", "opencode"),
         ("pi", "Pi", "pi"),
+        ("atomic", "Atomic", "atomic"),
         ("copilot", "Copilot", "copilot"),
     ]
 
