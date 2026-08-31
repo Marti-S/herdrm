@@ -72,7 +72,7 @@ targets:
       configs:
         Debug:
           # real identity so UserNotifications & friends work in dev builds
-          CODE_SIGN_IDENTITY: "Developer ID Application: MOE AI LLC (NCFNX3LJ83)"
+          CODE_SIGN_IDENTITY: "Developer ID Application: MOE AI LLC (NCFN3LJ83)"
           ONLY_ACTIVE_ARCH: YES
         Release:
           CODE_SIGN_IDENTITY: "Developer ID Application: MOE AI LLC (NCFNX3LJ83)"
@@ -110,6 +110,9 @@ targets:
         NSLocalNetworkUsageDescription: >-
           herdrm connects to your paired Mac bridge or directly to Herdr hosts
           on your local or Tailscale network.
+        NSCameraUsageDescription: >-
+          herdrm uses the camera only to scan the pairing QR code shown by
+          HerdrM on your Mac.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.bybee.herdrm.ios
