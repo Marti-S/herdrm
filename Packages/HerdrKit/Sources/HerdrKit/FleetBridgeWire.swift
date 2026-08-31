@@ -1,37 +1,84 @@
 import Foundation
 
 /// Versioned, newline-delimited protocol used between HerdrM on the Mac and a
-/// paired mobile client. Each TCP connection authenticates first and then owns
-/// exactly one operation: snapshot, subscription, RPC, or terminal stream.
+/// paired mobile client. Each TCP connection performs a mutual challenge-
+/// response handshake and then owns exactly one operation: snapshot,
+/// subscription, RPC, or terminal stream.
 public enum FleetBridgeProtocol {
-    public static let version = 1
+    public static let version = 2
     public static let defaultPort: UInt16 = 45_983
     public static let maximumRecordBytes = 64 * 1024 * 1024
 }
 
+/// The client starts authentication with a fresh nonce. The pairing secret is
+/// deliberately absent and never crosses the network after initial pairing.
 public struct FleetBridgeHello: Codable, Equatable, Sendable {
     public let protocolVersion: Int
-    public let token: String
     public let clientID: UUID
     public let clientName: String
+    public let clientNonce: Data
 
     public init(
         protocolVersion: Int = FleetBridgeProtocol.version,
-        token: String,
         clientID: UUID,
-        clientName: String
+        clientName: String,
+        clientNonce: Data
     ) {
         self.protocolVersion = protocolVersion
-        self.token = token
         self.clientID = clientID
         self.clientName = clientName
+        self.clientNonce = clientNonce
     }
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol"
-        case token
         case clientID = "client_id"
         case clientName = "client_name"
+        case clientNonce = "client_nonce"
+    }
+}
+
+/// The server proves possession of the pairing secret before the client sends
+/// its own proof. The proof binds both nonces and both stable endpoint IDs.
+public struct FleetBridgeChallenge: Codable, Equatable, Sendable {
+    public let protocolVersion: Int
+    public let serverID: UUID
+    public let serverName: String
+    public let serverNonce: Data
+    public let serverProof: Data
+
+    public init(
+        protocolVersion: Int = FleetBridgeProtocol.version,
+        serverID: UUID,
+        serverName: String,
+        serverNonce: Data,
+        serverProof: Data
+    ) {
+        self.protocolVersion = protocolVersion
+        self.serverID = serverID
+        self.serverName = serverName
+        self.serverNonce = serverNonce
+        self.serverProof = serverProof
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol"
+        case serverID = "server_id"
+        case serverName = "server_name"
+        case serverNonce = "server_nonce"
+        case serverProof = "server_proof"
+    }
+}
+
+public struct FleetBridgeAuthentication: Codable, Equatable, Sendable {
+    public let clientProof: Data
+
+    public init(clientProof: Data) {
+        self.clientProof = clientProof
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case clientProof = "client_proof"
     }
 }
 
@@ -267,6 +314,7 @@ public struct FleetBridgeErrorRecord: Codable, Equatable, Sendable {
 
 public enum FleetBridgeClientRecord: Equatable, Sendable {
     case hello(FleetBridgeHello)
+    case authenticate(FleetBridgeAuthentication)
     case snapshot(FleetBridgeSnapshotRequest)
     case subscribe(FleetBridgeSubscribeRequest)
     case rpc(FleetBridgeRPCRequest)
@@ -277,6 +325,7 @@ public enum FleetBridgeClientRecord: Equatable, Sendable {
 }
 
 public enum FleetBridgeServerRecord: Equatable, Sendable {
+    case challenge(FleetBridgeChallenge)
     case welcome(FleetBridgeWelcome)
     case snapshot(FleetBridgeSnapshotRecord)
     case rpc(FleetBridgeRPCResponse)
@@ -309,6 +358,7 @@ public enum FleetBridgeWire {
     public static func encodeClient(_ record: FleetBridgeClientRecord) throws -> Data {
         switch record {
         case .hello(let value): return try line(type: "bridge.hello", payload: value)
+        case .authenticate(let value): return try line(type: "bridge.authenticate", payload: value)
         case .snapshot(let value): return try line(type: "fleet.snapshot", payload: value)
         case .subscribe(let value): return try line(type: "fleet.subscribe", payload: value)
         case .rpc(let value): return try line(type: "herdr.request", payload: value)
@@ -323,6 +373,7 @@ public enum FleetBridgeWire {
         let envelope = try decodeEnvelope(data)
         switch envelope.type {
         case "bridge.hello": return .hello(try decode(FleetBridgeHello.self, payload: envelope.payload))
+        case "bridge.authenticate": return .authenticate(try decode(FleetBridgeAuthentication.self, payload: envelope.payload))
         case "fleet.snapshot": return .snapshot(try decode(FleetBridgeSnapshotRequest.self, payload: envelope.payload))
         case "fleet.subscribe": return .subscribe(try decode(FleetBridgeSubscribeRequest.self, payload: envelope.payload))
         case "herdr.request": return .rpc(try decode(FleetBridgeRPCRequest.self, payload: envelope.payload))
@@ -336,6 +387,7 @@ public enum FleetBridgeWire {
 
     public static func encodeServer(_ record: FleetBridgeServerRecord) throws -> Data {
         switch record {
+        case .challenge(let value): return try line(type: "bridge.challenge", payload: value)
         case .welcome(let value): return try line(type: "bridge.welcome", payload: value)
         case .snapshot(let value): return try line(type: "fleet.snapshot", payload: value)
         case .rpc(let value): return try line(type: "herdr.response", payload: value)
@@ -348,6 +400,7 @@ public enum FleetBridgeWire {
     public static func decodeServer(_ data: Data) throws -> FleetBridgeServerRecord {
         let envelope = try decodeEnvelope(data)
         switch envelope.type {
+        case "bridge.challenge": return .challenge(try decode(FleetBridgeChallenge.self, payload: envelope.payload))
         case "bridge.welcome": return .welcome(try decode(FleetBridgeWelcome.self, payload: envelope.payload))
         case "fleet.snapshot": return .snapshot(try decode(FleetBridgeSnapshotRecord.self, payload: envelope.payload))
         case "herdr.response": return .rpc(try decode(FleetBridgeRPCResponse.self, payload: envelope.payload))
