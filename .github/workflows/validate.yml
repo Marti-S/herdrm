@@ -1,0 +1,177 @@
+name: Validate
+
+on:
+  pull_request:
+    paths:
+      - "Packages/HerdrKit/**"
+      - "Packages/HerdrSSH/**"
+      - "Sources/HerdrM/**"
+      - "Sources/HerdrMobile/**"
+      - "project.yml"
+      - "Makefile"
+      - ".github/workflows/validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    # HerdrSSH uses Swift tools 6.2. The macOS 26 image ships Xcode 26.x,
+    # while macos-15 currently defaults to a Swift 6.1 toolchain.
+    runs-on: macos-26
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Test HerdrKit
+        id: kit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/HerdrKit 2>&1 | tee herdrkit-test.log
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Xcode packages
+        id: packages
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          for attempt in 1 2 3; do
+            echo "Package resolution attempt ${attempt}/3"
+            if xcodebuild \
+              -resolvePackageDependencies \
+              -project HerdrM.xcodeproj \
+              -clonedSourcePackagesDirPath build-packages \
+              -skipPackagePluginValidation \
+              2>&1 | tee package-resolve.log; then
+              exit 0
+            fi
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Build macOS app
+        id: macos
+        if: always() && steps.packages.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project HerdrM.xcodeproj \
+            -scheme HerdrM \
+            -configuration Debug \
+            -sdk macosx \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build-macos \
+            -clonedSourcePackagesDirPath build-packages \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            build 2>&1 | tee macos-build.log
+
+      - name: Build iOS app
+        id: ios
+        if: always() && steps.packages.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project HerdrM.xcodeproj \
+            -scheme HerdrMobile \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build-ios \
+            -clonedSourcePackagesDirPath build-packages \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            build 2>&1 | tee ios-build.log
+
+      - name: Publish validation summary
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          KIT_OUTCOME: ${{ steps.kit.outcome }}
+          PACKAGES_OUTCOME: ${{ steps.packages.outcome }}
+          MACOS_OUTCOME: ${{ steps.macos.outcome }}
+          IOS_OUTCOME: ${{ steps.ios.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- herdrm-validate -->';
+            const stripAnsi = value => value.replace(/\u001b\[[0-9;]*m/g, '');
+            const diagnostics = (path, label) => {
+              if (!fs.existsSync(path)) return [];
+              const lines = stripAnsi(fs.readFileSync(path, 'utf8')).split('\n');
+              const selected = [];
+              const pattern = /(^|\s)(fatal )?error:|Undefined symbols|ld: error|could not resolve package dependencies|failed to clone|RPC failed|repository not found/i;
+              for (let index = 0; index < lines.length; index += 1) {
+                if (!pattern.test(lines[index])) continue;
+                const start = Math.max(0, index - 1);
+                const end = Math.min(lines.length, index + 4);
+                for (let cursor = start; cursor < end; cursor += 1) {
+                  const line = lines[cursor].trim();
+                  if (line) selected.push(`[${label}] ${line}`);
+                }
+              }
+              return [...new Set(selected)].slice(-100);
+            };
+
+            const outcomes = {
+              HerdrKit: process.env.KIT_OUTCOME,
+              Packages: process.env.PACKAGES_OUTCOME,
+              macOS: process.env.MACOS_OUTCOME,
+              iOS: process.env.IOS_OUTCOME,
+            };
+            const failed = Object.entries(outcomes)
+              .filter(([, outcome]) => outcome !== 'success')
+              .map(([name]) => name);
+            const lines = [
+              ...diagnostics('herdrkit-test.log', 'HerdrKit'),
+              ...diagnostics('package-resolve.log', 'Packages'),
+              ...diagnostics('macos-build.log', 'macOS'),
+              ...diagnostics('ios-build.log', 'iOS'),
+            ];
+            const body = failed.length === 0
+              ? `${marker}\n✅ HerdrKit tests and both Apple targets build successfully.`
+              : `${marker}\n❌ Validation failed: ${failed.join(', ')}.\n\n` +
+                (lines.length ? `\`\`\`text\n${lines.join('\n')}\n\`\`\`` : 'No filtered compiler diagnostics were found; inspect the workflow log.');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const previous = comments.find(comment => comment.body?.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: previous.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Fail validation
+        if: always() && (steps.kit.outcome != 'success' || steps.packages.outcome != 'success' || steps.macos.outcome != 'success' || steps.ios.outcome != 'success')
+        run: exit 1

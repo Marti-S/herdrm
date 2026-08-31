@@ -28,6 +28,22 @@ extension FleetBridgeServer {
             let snapshot = deviceSessionSnapshot(device: device, model: model)
             return .object(["snapshot": try jsonValue(snapshot)])
 
+        case "bridge.attachment.stage":
+            let fileName = try requiredString(params, "file_name")
+            guard case .string(let encodedBytes)? = params["bytes"],
+                  let bytes = Data(base64Encoded: encodedBytes)
+            else {
+                throw FleetBridgeHostError.invalidRequest(
+                    "bridge.attachment.stage requires valid base64 bytes."
+                )
+            }
+            let path = try await stageAttachment(
+                deviceID: device.id,
+                fileName: fileName,
+                bytes: bytes
+            )
+            return .object(["path": .string(path)])
+
         case "agent.prompt":
             try await service.prompt(
                 target: try requiredString(params, "target"),

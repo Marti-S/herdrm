@@ -223,11 +223,11 @@ final class MobileBridgeSession {
   init(
     bridge: MobileBridge,
     clientID: UUID = MobileClientIdentity.id,
-    clientName: String = MobileClientIdentity.name
+    clientName: String? = nil
   ) {
     self.bridge = bridge
     self.clientID = clientID
-    self.clientName = clientName
+    self.clientName = clientName ?? MobileClientIdentity.name
   }
 
   func reconnect() async {
