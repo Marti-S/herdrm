@@ -1,727 +1,493 @@
 import Foundation
 import HerdrKit
-import Observation
-
-/// Connection state shown for either a paired Mac bridge or a direct SSH host.
-enum MobileConnectionState: Equatable {
-    case idle
-    case connecting
-    case connected(version: String)
-    case failed(String)
-}
-
-enum MobileSourceID: Hashable {
-    case bridge(UUID)
-    case direct(UUID)
-}
-
-struct MobileSpaceEntry: Identifiable {
-    let device: FleetDeviceDescriptor
-    let workspace: WorkspaceInfo
-
-    var ref: FleetSpaceRef {
-        FleetSpaceRef(deviceID: device.id, workspaceID: workspace.workspaceID)
-    }
-    var id: FleetSpaceRef { ref }
-}
-
-struct MobileAgentEntry: Identifiable {
-    let device: FleetDeviceDescriptor
-    let agent: AgentInfo
-    let tabLabel: String?
-
-    var ref: FleetPaneRef {
-        FleetPaneRef(deviceID: device.id, paneID: agent.paneID)
-    }
-    var id: FleetPaneRef { ref }
-    var title: String { agent.title(tabLabel: tabLabel) }
-}
-
-struct MobileTerminalEntry: Identifiable {
-    let device: FleetDeviceDescriptor
-    let pane: PaneInfo
-    let tabLabel: String?
-
-    var ref: FleetPaneRef {
-        FleetPaneRef(deviceID: device.id, paneID: pane.paneID)
-    }
-    var id: FleetPaneRef { ref }
-
-    var title: String {
-        if let terminalTitle = pane.terminalTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !terminalTitle.isEmpty {
-            return terminalTitle
-        }
-        if let tabLabel { return tabLabel }
-        if let cwd = pane.cwd, !cwd.isEmpty {
-            let basename = URL(fileURLWithPath: cwd).lastPathComponent
-            if !basename.isEmpty { return basename }
-        }
-        return String(localized: "Terminal")
-    }
-}
-
-/// One directly configured SSH device. This remains an advanced fallback for
-/// reaching a standalone Herdr host without a Mac fleet bridge.
-@MainActor
-final class MobileDeviceSession {
-    let device: MobileDevice
-    var state: MobileConnectionState = .idle
-    var snapshot: SessionSnapshot?
-    private(set) var transport: MobileTransport?
-    private var eventTask: Task<Void, Never>?
-    private var refreshPending = false
-
-    var onChange: (() -> Void)?
-
-    init(device: MobileDevice) {
-        self.device = device
-    }
-
-    func connect() async {
-        switch state {
-        case .connecting, .connected:
-            return
-        case .idle, .failed:
-            break
-        }
-
-        eventTask?.cancel()
-        eventTask = nil
-        if let existing = transport {
-            await existing.close()
-            transport = nil
-        }
-        state = .connecting
-        onChange?()
-        do {
-            let transport = try await SSHDirectTransport.connect(device: device)
-            let pong = try await transport.request(
-                method: "ping", params: .object([:]), as: PingResult.self
-            )
-            guard pong.protocolVersion >= 17 else {
-                await transport.close()
-                throw HerdrError.incompatibleProtocol(pong.protocolVersion)
-            }
-            self.transport = transport
-            state = .connected(version: pong.version)
-            await refresh()
-            startEventPump()
-        } catch {
-            transport = nil
-            state = .failed(Self.presentation(error))
-        }
-        onChange?()
-    }
-
-    func disconnect() async {
-        eventTask?.cancel()
-        eventTask = nil
-        if let transport { await transport.close() }
-        transport = nil
-        state = .idle
-        onChange?()
-    }
-
-    func refresh() async {
-        guard let transport else { return }
-        struct Envelope: Codable { let snapshot: SessionSnapshot }
-        do {
-            snapshot = try await transport.request(
-                method: "session.snapshot", as: Envelope.self
-            ).snapshot
-            onChange?()
-        } catch {
-            // Keep the last useful snapshot. The event stream decides whether
-            // the underlying connection is gone.
-        }
-    }
-
-    private func startEventPump() {
-        guard let transport else { return }
-        eventTask?.cancel()
-        eventTask = Task { [weak self] in
-            do {
-                for try await _ in transport.events(kinds: HerdrEvent.allKinds) {
-                    await self?.scheduleRefresh()
-                }
-            } catch {}
-            guard let self, !Task.isCancelled else { return }
-            if case .connected = self.state {
-                self.state = .failed(String(localized: "Connection lost"))
-                self.onChange?()
-            }
-        }
-    }
-
-    private func scheduleRefresh() async {
-        guard !refreshPending else { return }
-        refreshPending = true
-        try? await Task.sleep(for: .milliseconds(300))
-        refreshPending = false
-        await refresh()
-    }
-
-    private static func presentation(_ error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? "\(error)"
-    }
-}
-
-/// Long-lived subscription to one paired Mac's aggregate fleet. It reconnects
-/// with backoff and always accepts a complete snapshot after reconnect.
-@MainActor
-final class MobileBridgeHostSession {
-    let endpoint: MobileBridgeEndpoint
-    var state: MobileConnectionState = .idle
-    var snapshot: FleetSnapshot?
-    var onChange: (() -> Void)?
-
-    private var task: Task<Void, Never>?
-    private var generation: UInt64 = 0
-
-    init(endpoint: MobileBridgeEndpoint) {
-        self.endpoint = endpoint
-    }
-
-    func connect() {
-        if task != nil {
-            if case .failed = state {
-                task?.cancel()
-                task = nil
-            } else {
-                return
-            }
-        }
-        guard let token = MobileBridgeSecretStore.token(for: endpoint.id) else {
-            state = .failed(String(localized: "This Mac has no saved pairing token."))
-            onChange?()
-            return
-        }
-
-        generation &+= 1
-        let currentGeneration = generation
-        task = Task { [weak self] in
-            guard let self else { return }
-            defer {
-                if self.generation == currentGeneration {
-                    self.task = nil
-                }
-            }
-            var backoff: Double = 1
-            while !Task.isCancelled, self.generation == currentGeneration {
-                self.state = .connecting
-                self.onChange?()
-                do {
-                    let stream = MobileBridgeClient.snapshots(
-                        endpoint: self.endpoint,
-                        token: token,
-                        afterRevision: self.snapshot?.revision
-                    )
-                    for try await snapshot in stream {
-                        backoff = 1
-                        self.snapshot = snapshot
-                        self.state = .connected(version: "bridge")
-                        self.onChange?()
-                    }
-                    if !Task.isCancelled {
-                        throw MobileBridgeClientError.connectionClosed
-                    }
-                } catch {
-                    guard !Task.isCancelled else { break }
-                    self.state = .failed(Self.presentation(error))
-                    self.onChange?()
-                }
-                guard !Task.isCancelled else { break }
-                try? await Task.sleep(for: .seconds(backoff))
-                backoff = min(backoff * 2, 30)
-            }
-        }
-    }
-
-    func refresh() async {
-        guard let token = MobileBridgeSecretStore.token(for: endpoint.id) else { return }
-        do {
-            snapshot = try await MobileBridgeClient.snapshot(endpoint: endpoint, token: token)
-            state = .connected(version: "bridge")
-            onChange?()
-        } catch {
-            state = .failed(Self.presentation(error))
-            onChange?()
-        }
-    }
-
-    func disconnect() {
-        generation &+= 1
-        task?.cancel()
-        task = nil
-        state = .idle
-        onChange?()
-    }
-
-    private static func presentation(_ error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? "\(error)"
-    }
-}
+import SwiftUI
 
 @MainActor
 @Observable
 final class MobileAppModel {
-    var bridgeHosts: [MobileBridgeEndpoint] = []
-    var directDevices: [MobileDevice] = []
-    var selectedSourceID: MobileSourceID?
-    var selectedFleetDeviceID: UUID?
-    var selectedSpaceRef: FleetSpaceRef?
-    var selectedPaneRef: FleetPaneRef?
-    var showAddBridge = false
-    var showAddDevice = false
-    private(set) var revision = 0
+  var bridge: MobileBridge?
+  var directDevices: [MobileDevice] = []
+  /// nil means All Devices.
+  var selectedDeviceID: UUID?
+  var selectedSpaceRef: FleetSpaceRef?
+  var selectedPaneRef: FleetPaneRef?
+  var showAddConnection = false
+  var actionError: String?
 
-    private let bridgeStore = MobileBridgeStore()
-    private let deviceStore = MobileDeviceStore()
-    private var bridgeSessions: [UUID: MobileBridgeHostSession] = [:]
-    private var directSessions: [UUID: MobileDeviceSession] = [:]
-    private var bridgeTransports: [UUID: BridgeDeviceTransport] = [:]
+  /// Bumped by nested, non-Observable session state.
+  private(set) var revision = 0
 
-    init() {
-        bridgeHosts = bridgeStore.load()
-        directDevices = deviceStore.load()
-        if let bridge = bridgeHosts.first {
-            selectedSourceID = .bridge(bridge.id)
-            selectedFleetDeviceID = nil
-        } else if let device = directDevices.first {
-            selectedSourceID = .direct(device.id)
-            selectedFleetDeviceID = device.id
-        }
+  private let directStore = MobileDeviceStore()
+  private let bridgeStore = MobileBridgeStore()
+  private var directSessions: [UUID: MobileDeviceSession] = [:]
+  private var bridgeSession: MobileBridgeSession?
+
+  init() {
+    bridge = bridgeStore.load()
+    directDevices = directStore.load()
+    configureBridgeSession()
+    selectedDeviceID = bridge == nil ? directDevices.first?.id : nil
+  }
+
+  var hasConfiguredSources: Bool {
+    bridge != nil || !directDevices.isEmpty
+  }
+
+  var deviceEntries: [MobileDeviceEntry] {
+    _ = revision
+    var result: [MobileDeviceEntry] = []
+
+    if let bridgeSession,
+      let fleet = bridgeSession.snapshot
+    {
+      let bridgeIsLive = bridgeSession.state.isConnected
+      for device in fleet.devices {
+        result.append(
+          MobileDeviceEntry(
+            id: device.id,
+            source: .bridge,
+            name: device.device.name,
+            subtitle: device.device.subtitle,
+            state: bridgeIsLive ? MobileConnectionState(device.connection) : bridgeSession.state,
+            snapshot: device.snapshot,
+            availableAgentKinds: device.availableAgentKinds
+          ))
+      }
     }
 
-    // MARK: - Source lifecycle
+    for device in directDevices {
+      let session = directSession(for: device.id)
+      result.append(
+        MobileDeviceEntry(
+          id: device.id,
+          source: .direct,
+          name: device.name,
+          subtitle: device.subtitle,
+          state: session?.state ?? .idle,
+          snapshot: session?.snapshot,
+          availableAgentKinds: []
+        ))
+    }
+    return result
+  }
 
-    var hasSources: Bool { !bridgeHosts.isEmpty || !directDevices.isEmpty }
+  var selectedDevice: MobileDeviceEntry? {
+    guard let selectedDeviceID else { return nil }
+    return deviceEntries.first { $0.id == selectedDeviceID }
+  }
 
-    var selectedBridge: MobileBridgeEndpoint? {
-        guard case .bridge(let id)? = selectedSourceID else { return nil }
-        return bridgeHosts.first { $0.id == id }
+  var selectedConnectionState: MobileConnectionState {
+    _ = revision
+    if let selectedDevice { return selectedDevice.state }
+
+    if let bridgeSession, !bridgeSession.state.isConnected {
+      return bridgeSession.state
+    }
+    let states = deviceEntries.map(\.state)
+    if let failed = states.first(where: {
+      if case .failed = $0 { return true }
+      return false
+    }) {
+      return failed
+    }
+    if states.contains(.connecting) { return .connecting }
+    if !states.isEmpty, states.allSatisfy(\.isConnected) {
+      return .connected(version: "")
+    }
+    return states.isEmpty ? .idle : .connecting
+  }
+
+  var bridgeConnectionState: MobileConnectionState {
+    _ = revision
+    return bridgeSession?.state ?? .idle
+  }
+
+  func activate() {
+    if let bridgeSession {
+      Task { await bridgeSession.reconnect() }
+    }
+    for device in directDevices {
+      guard let session = directSession(for: device.id) else { continue }
+      Task { await session.reconnect() }
+    }
+  }
+
+  func deactivate() {
+    let bridgeSession = bridgeSession
+    let sessions = Array(directSessions.values)
+    Task {
+      await bridgeSession?.disconnect()
+      for session in sessions {
+        await session.disconnect()
+      }
+    }
+  }
+
+  func refreshAll() async {
+    await bridgeSession?.refresh()
+    for session in directSessions.values {
+      await session.refresh()
+    }
+  }
+
+  func selectDevice(_ id: UUID?) {
+    guard id != selectedDeviceID else { return }
+    selectedDeviceID = id
+    selectedSpaceRef = nil
+    selectedPaneRef = nil
+    if let id,
+      let direct = directDevices.first(where: { $0.id == id }),
+      let session = directSession(for: direct.id)
+    {
+      Task { await session.connect() }
+    }
+  }
+
+  func selectSpace(_ ref: FleetSpaceRef?) {
+    selectedSpaceRef = ref
+    guard let ref else { return }
+    if let selectedPaneRef,
+      selectedPaneRef.deviceID == ref.deviceID,
+      let snapshot = snapshot(for: ref.deviceID)
+    {
+      let workspaceID =
+        snapshot.agents
+        .first { $0.paneID == selectedPaneRef.paneID }?.workspaceID
+        ?? snapshot.ordinaryTerminalPanes
+        .first { $0.paneID == selectedPaneRef.paneID }?.workspaceID
+      if workspaceID == ref.workspaceID { return }
     }
 
-    var selectedDirectDevice: MobileDevice? {
-        guard case .direct(let id)? = selectedSourceID else { return nil }
-        return directDevices.first { $0.id == id }
+    let candidates = agents
+    selectedPaneRef =
+      candidates.first(where: { $0.agent.status == .blocked })?.ref
+      ?? candidates.first(where: { $0.agent.status == .done })?.ref
+      ?? candidates.first(where: { $0.agent.status == .working })?.ref
+      ?? candidates.first?.ref
+      ?? terminalPanes.first?.ref
+  }
+
+  func transport(for deviceID: UUID) -> (any MobileTransport)? {
+    _ = revision
+    if bridgeSession?.snapshot?.device(deviceID) != nil {
+      return bridgeSession?.transport(for: deviceID)
     }
+    return directSession(for: deviceID)?.transport
+  }
 
-    var selectedSourceName: String {
-        selectedBridge?.name ?? selectedDirectDevice?.name ?? String(localized: "No Connection")
+  // MARK: - Source management
+
+  func addBridge(
+    name: String,
+    host: String,
+    port: UInt16,
+    token: String,
+    expectedServerID: UUID?
+  ) throws {
+    let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedHost.isEmpty, port > 0 else {
+      throw FleetBridgeClientError.invalidEndpoint
     }
-
-    var selectedSourceSubtitle: String {
-        selectedBridge?.subtitle ?? selectedDirectDevice?.subtitle ?? ""
+    guard let expectedServerID else {
+      throw MobileBridgePairingError.invalid(
+        "The Mac identity is missing. Paste its pairing JSON or enter its server ID.")
     }
-
-    var selectedSourceIsBridge: Bool { selectedBridge != nil }
-
-    var selectedSourceConnectionState: MobileConnectionState {
-        _ = revision
-        switch selectedSourceID {
-        case .bridge(let id): return bridgeSession(for: id)?.state ?? .idle
-        case .direct(let id): return directSession(for: id)?.state ?? .idle
-        case nil: return .idle
-        }
+    guard !trimmedToken.isEmpty else {
+      throw MobileBridgePairingError.invalid("The pairing token is missing.")
     }
+    let id = expectedServerID
+    let next = MobileBridge(
+      id: id,
+      expectedServerID: expectedServerID,
+      name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? trimmedHost : name.trimmingCharacters(in: .whitespacesAndNewlines),
+      host: trimmedHost,
+      port: port
+    )
+    try MobileBridgeSecretStore.setToken(trimmedToken, for: id)
 
-    func activate() {
-        connectSelectedSource()
+    if let previous = bridge, previous.id != id {
+      try? MobileBridgeSecretStore.removeToken(for: previous.id)
     }
+    let oldSession = bridgeSession
+    bridge = next
+    bridgeStore.save(next)
+    configureBridgeSession()
+    selectedDeviceID = nil
+    selectedSpaceRef = nil
+    selectedPaneRef = nil
+    Task { await oldSession?.disconnect() }
+    bridgeSession?.connect()
+  }
 
-    func connectSelectedSource() {
-        switch selectedSourceID {
-        case .bridge(let id): bridgeSession(for: id)?.connect()
-        case .direct(let id):
-            guard let session = directSession(for: id) else { return }
-            Task { await session.connect() }
-        case nil: break
-        }
+  func removeBridge() {
+    guard let bridge else { return }
+    let oldSession = bridgeSession
+    try? MobileBridgeSecretStore.removeToken(for: bridge.id)
+    self.bridge = nil
+    bridgeStore.save(nil)
+    bridgeSession = nil
+    selectedDeviceID = directDevices.first?.id
+    selectedSpaceRef = nil
+    selectedPaneRef = nil
+    revision += 1
+    Task { await oldSession?.disconnect() }
+  }
+
+  func addDirectDevice(
+    name: String,
+    host: String,
+    port: UInt16,
+    username: String,
+    authMethod: MobileDevice.AuthMethod,
+    password: String
+  ) {
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let device = MobileDevice(
+      name: trimmedName.isEmpty ? host : trimmedName,
+      host: host.trimmingCharacters(in: .whitespacesAndNewlines),
+      port: port,
+      username: username.trimmingCharacters(in: .whitespacesAndNewlines),
+      authMethod: authMethod
+    )
+    if authMethod == .password {
+      MobileSecretStore.setPassword(password, for: device.id)
     }
+    directDevices.append(device)
+    directStore.save(directDevices)
+    selectDevice(device.id)
+  }
 
-    func refreshActive() async {
-        switch selectedSourceID {
-        case .bridge(let id): await bridgeSession(for: id)?.refresh()
-        case .direct(let id): await directSession(for: id)?.refresh()
-        case nil: break
-        }
+  var deviceKeyAuthorizedLine: String {
+    DeviceKey.authorizedKeysLine(DeviceKey.ensure())
+  }
+
+  func removeDirectDevice(_ id: UUID) {
+    guard let device = directDevices.first(where: { $0.id == id }) else { return }
+    if let session = directSessions.removeValue(forKey: id) {
+      Task { await session.disconnect() }
     }
-
-    func selectBridge(_ id: UUID) {
-        if selectedSourceID == .bridge(id) {
-            bridgeSession(for: id)?.connect()
-            return
-        }
-        selectedSourceID = .bridge(id)
-        selectedFleetDeviceID = nil
-        selectedSpaceRef = nil
-        selectedPaneRef = nil
-        bridgeTransports.removeAll()
-        connectSelectedSource()
+    MobileSecretStore.removePassword(for: device.id)
+    KnownHostsStore.unpin(host: device.host, port: device.port)
+    directDevices.removeAll { $0.id == id }
+    directStore.save(directDevices)
+    if selectedDeviceID == id {
+      selectedDeviceID = bridge == nil ? directDevices.first?.id : nil
+      selectedSpaceRef = nil
+      selectedPaneRef = nil
     }
+    revision += 1
+  }
 
-    func selectDirectDevice(_ id: UUID) {
-        if selectedSourceID == .direct(id) {
-            guard let session = directSession(for: id) else { return }
-            Task { await session.connect() }
-            return
-        }
-        selectedSourceID = .direct(id)
-        selectedFleetDeviceID = id
-        selectedSpaceRef = nil
-        selectedPaneRef = nil
-        bridgeTransports.removeAll()
-        connectSelectedSource()
-    }
+  // MARK: - Derived fleet lists
 
-    func selectFleetDevice(_ id: UUID?) {
-        guard id != selectedFleetDeviceID else { return }
-        selectedFleetDeviceID = id
-        selectedSpaceRef = nil
-        selectedPaneRef = nil
-    }
-
-    // MARK: - Source management
-
-    func addBridge(
-        name: String,
-        host: String,
-        port: UInt16,
-        token: String,
-        serverID: UUID? = nil
-    ) {
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        var endpoint = MobileBridgeEndpoint(
-            serverID: serverID,
-            name: trimmedName.isEmpty ? trimmedHost : trimmedName,
-            host: trimmedHost,
-            port: port
+  var spaces: [MobileSpaceEntry] {
+    _ = revision
+    return scopedDevices.flatMap { device in
+      (device.snapshot?.workspaces ?? []).map {
+        MobileSpaceEntry(
+          ref: FleetSpaceRef(deviceID: device.id, workspaceID: $0.workspaceID),
+          workspace: $0,
+          device: device
         )
-        if let serverID,
-           let index = bridgeHosts.firstIndex(where: { $0.serverID == serverID }) {
-            endpoint.id = bridgeHosts[index].id
-            bridgeSessions[endpoint.id]?.disconnect()
-            bridgeSessions.removeValue(forKey: endpoint.id)
-            bridgeHosts[index] = endpoint
-        } else {
-            bridgeHosts.append(endpoint)
-        }
-        MobileBridgeSecretStore.setToken(
-            token.trimmingCharacters(in: .whitespacesAndNewlines),
-            for: endpoint.id
+      }
+    }
+  }
+
+  var agents: [MobileAgentEntry] {
+    _ = revision
+    var entries = scopedDevices.flatMap { device in
+      (device.snapshot?.agents ?? []).map {
+        MobileAgentEntry(
+          ref: FleetPaneRef(deviceID: device.id, paneID: $0.paneID),
+          agent: $0,
+          device: device
         )
-        bridgeStore.save(bridgeHosts)
-        bridgeTransports.removeAll()
-        selectBridge(endpoint.id)
+      }
+    }
+    if let selectedSpaceRef {
+      entries = entries.filter {
+        $0.ref.deviceID == selectedSpaceRef.deviceID
+          && $0.agent.workspaceID == selectedSpaceRef.workspaceID
+      }
     }
 
-    func addDirectDevice(
-        name: String,
-        host: String,
-        port: UInt16,
-        username: String,
-        authMethod: MobileDevice.AuthMethod,
-        password: String
-    ) {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let device = MobileDevice(
-            name: trimmedName.isEmpty ? host : trimmedName,
-            host: host.trimmingCharacters(in: .whitespacesAndNewlines),
-            port: port,
-            username: username.trimmingCharacters(in: .whitespacesAndNewlines),
-            authMethod: authMethod
+    let deviceRank = Dictionary(
+      uniqueKeysWithValues: scopedDevices.enumerated().map { ($1.id, $0) }
+    )
+    return entries.sorted { lhs, rhs in
+      if lhs.agent.status.sortBucket != rhs.agent.status.sortBucket {
+        return lhs.agent.status.sortBucket < rhs.agent.status.sortBucket
+      }
+      let leftDevice = deviceRank[lhs.ref.deviceID] ?? Int.max
+      let rightDevice = deviceRank[rhs.ref.deviceID] ?? Int.max
+      if leftDevice != rightDevice { return leftDevice < rightDevice }
+      let leftWorkspace = workspaceRank(
+        deviceID: lhs.ref.deviceID,
+        workspaceID: lhs.agent.workspaceID
+      )
+      let rightWorkspace = workspaceRank(
+        deviceID: rhs.ref.deviceID,
+        workspaceID: rhs.agent.workspaceID
+      )
+      if leftWorkspace != rightWorkspace { return leftWorkspace < rightWorkspace }
+      return tabRank(deviceID: lhs.ref.deviceID, tabID: lhs.agent.tabID)
+        < tabRank(deviceID: rhs.ref.deviceID, tabID: rhs.agent.tabID)
+    }
+  }
+
+  var terminalPanes: [MobileTerminalEntry] {
+    _ = revision
+    var entries = scopedDevices.flatMap { device in
+      (device.snapshot?.ordinaryTerminalPanes ?? []).map {
+        MobileTerminalEntry(
+          ref: FleetPaneRef(deviceID: device.id, paneID: $0.paneID),
+          pane: $0,
+          device: device
         )
-        if authMethod == .password {
-            MobileSecretStore.setPassword(password, for: device.id)
-        }
-        directDevices.append(device)
-        deviceStore.save(directDevices)
-        selectDirectDevice(device.id)
+      }
     }
-
-    var deviceKeyAuthorizedLine: String {
-        DeviceKey.authorizedKeysLine(DeviceKey.ensure())
+    if let selectedSpaceRef {
+      entries = entries.filter {
+        $0.ref.deviceID == selectedSpaceRef.deviceID
+          && $0.pane.workspaceID == selectedSpaceRef.workspaceID
+      }
     }
+    return entries
+  }
 
-    func removeSelectedSource() {
-        switch selectedSourceID {
-        case .bridge(let id): removeBridge(id)
-        case .direct(let id): removeDirectDevice(id)
-        case nil: break
-        }
+  var selectedAgent: MobileAgentEntry? {
+    guard let selectedPaneRef else { return nil }
+    return agentsAcrossFleet.first { $0.ref == selectedPaneRef }
+  }
+
+  var selectedTerminalPane: MobileTerminalEntry? {
+    guard let selectedPaneRef else { return nil }
+    return terminalsAcrossFleet.first { $0.ref == selectedPaneRef }
+  }
+
+  func tabLabel(for entry: MobileAgentEntry) -> String? {
+    snapshot(for: entry.ref.deviceID)?.tabs?
+      .first { $0.tabID == entry.agent.tabID }?.customLabel
+  }
+
+  func spaceName(deviceID: UUID, workspaceID: String) -> String {
+    snapshot(for: deviceID)?.workspaces
+      .first { $0.workspaceID == workspaceID }?.label ?? workspaceID
+  }
+
+  func terminalLabel(for entry: MobileTerminalEntry) -> String {
+    if let tabID = entry.pane.tabID,
+      let label = snapshot(for: entry.ref.deviceID)?.tabs?
+        .first(where: { $0.tabID == tabID })?.customLabel
+    {
+      return label
     }
+    if let title = entry.pane.terminalTitle, !title.isEmpty { return title }
+    return String(localized: "Terminal")
+  }
 
-    private func removeBridge(_ id: UUID) {
-        bridgeSessions.removeValue(forKey: id)?.disconnect()
-        MobileBridgeSecretStore.removeToken(for: id)
-        bridgeHosts.removeAll { $0.id == id }
-        bridgeStore.save(bridgeHosts)
-        chooseFallbackSource()
+  var showsDeviceBadges: Bool {
+    selectedDeviceID == nil && deviceEntries.count > 1
+  }
+
+  private var scopedDevices: [MobileDeviceEntry] {
+    if let selectedDeviceID {
+      return deviceEntries.filter { $0.id == selectedDeviceID }
     }
+    return deviceEntries
+  }
 
-    private func removeDirectDevice(_ id: UUID) {
-        if let session = directSessions.removeValue(forKey: id) {
-            Task { await session.disconnect() }
-        }
-        if let device = directDevices.first(where: { $0.id == id }) {
-            MobileSecretStore.removePassword(for: id)
-            KnownHostsStore.unpin(host: device.host, port: device.port)
-        }
-        directDevices.removeAll { $0.id == id }
-        deviceStore.save(directDevices)
-        chooseFallbackSource()
-    }
-
-    private func chooseFallbackSource() {
-        selectedSpaceRef = nil
-        selectedPaneRef = nil
-        bridgeTransports.removeAll()
-        if let bridge = bridgeHosts.first {
-            selectedSourceID = .bridge(bridge.id)
-            selectedFleetDeviceID = nil
-        } else if let device = directDevices.first {
-            selectedSourceID = .direct(device.id)
-            selectedFleetDeviceID = device.id
-        } else {
-            selectedSourceID = nil
-            selectedFleetDeviceID = nil
-        }
-        connectSelectedSource()
-    }
-
-    // MARK: - Fleet projection
-
-    var fleetDevices: [FleetDeviceSnapshot] {
-        _ = revision
-        switch selectedSourceID {
-        case .bridge(let id):
-            return bridgeSession(for: id)?.snapshot?.devices ?? []
-        case .direct(let id):
-            guard let device = directDevices.first(where: { $0.id == id }),
-                  let session = directSession(for: id)
-            else { return [] }
-            return [FleetDeviceSnapshot(
-                device: FleetDeviceDescriptor(
-                    id: device.id,
-                    name: device.name,
-                    subtitle: device.subtitle,
-                    isLocal: false
-                ),
-                connection: fleetConnection(session.state),
-                snapshot: session.snapshot
-            )]
-        case nil:
-            return []
-        }
-    }
-
-    var scopedDevices: [FleetDeviceSnapshot] {
-        if let selectedFleetDeviceID {
-            return fleetDevices.filter { $0.id == selectedFleetDeviceID }
-        }
-        return fleetDevices
-    }
-
-    var showsDeviceBadges: Bool { fleetDevices.count > 1 }
-
-    var spaces: [MobileSpaceEntry] {
-        scopedDevices.flatMap { device in
-            (device.snapshot?.workspaces ?? []).map {
-                MobileSpaceEntry(device: device.device, workspace: $0)
-            }
-        }
-    }
-
-    var agents: [MobileAgentEntry] {
-        var entries = scopedDevices.flatMap { device -> [MobileAgentEntry] in
-            let tabs = Dictionary(uniqueKeysWithValues:
-                (device.snapshot?.tabs ?? []).compactMap { tab in
-                    tab.customLabel.map { (tab.tabID, $0) }
-                }
-            )
-            return (device.snapshot?.agents ?? []).map { agent in
-                MobileAgentEntry(
-                    device: device.device,
-                    agent: agent,
-                    tabLabel: tabs[agent.tabID]
-                )
-            }
-        }
-        if let selectedSpaceRef {
-            entries = entries.filter {
-                $0.device.id == selectedSpaceRef.deviceID
-                    && $0.agent.workspaceID == selectedSpaceRef.workspaceID
-            }
-        }
-        let deviceRank = Dictionary(uniqueKeysWithValues:
-            fleetDevices.enumerated().map { ($1.id, $0) }
+  private var agentsAcrossFleet: [MobileAgentEntry] {
+    deviceEntries.flatMap { device in
+      (device.snapshot?.agents ?? []).map {
+        MobileAgentEntry(
+          ref: FleetPaneRef(deviceID: device.id, paneID: $0.paneID),
+          agent: $0,
+          device: device
         )
-        return entries.sorted { lhs, rhs in
-            if lhs.agent.status.sortBucket != rhs.agent.status.sortBucket {
-                return lhs.agent.status.sortBucket < rhs.agent.status.sortBucket
-            }
-            let leftRank = deviceRank[lhs.device.id] ?? Int.max
-            let rightRank = deviceRank[rhs.device.id] ?? Int.max
-            if leftRank != rightRank { return leftRank < rightRank }
-            return lhs.agent.paneID < rhs.agent.paneID
-        }
+      }
+    }
+  }
+
+  private var terminalsAcrossFleet: [MobileTerminalEntry] {
+    deviceEntries.flatMap { device in
+      (device.snapshot?.ordinaryTerminalPanes ?? []).map {
+        MobileTerminalEntry(
+          ref: FleetPaneRef(deviceID: device.id, paneID: $0.paneID),
+          pane: $0,
+          device: device
+        )
+      }
+    }
+  }
+
+  private func snapshot(for deviceID: UUID) -> SessionSnapshot? {
+    if let snapshot = bridgeSession?.snapshot?.device(deviceID)?.snapshot {
+      return snapshot
+    }
+    return directSession(for: deviceID)?.snapshot
+  }
+
+  private func directSession(for deviceID: UUID) -> MobileDeviceSession? {
+    if let existing = directSessions[deviceID] { return existing }
+    guard let device = directDevices.first(where: { $0.id == deviceID }) else { return nil }
+    let session = MobileDeviceSession(device: device)
+    session.onChange = { [weak self] in
+      self?.revision += 1
+      self?.reconcileSelection()
+    }
+    directSessions[deviceID] = session
+    return session
+  }
+
+  private func configureBridgeSession() {
+    guard let bridge else {
+      bridgeSession = nil
+      return
+    }
+    let session = MobileBridgeSession(bridge: bridge)
+    session.onChange = { [weak self] in
+      self?.revision += 1
+      self?.reconcileSelection()
+    }
+    bridgeSession = session
+  }
+
+  private func workspaceRank(deviceID: UUID, workspaceID: String) -> Int {
+    snapshot(for: deviceID)?.workspaces
+      .firstIndex { $0.workspaceID == workspaceID } ?? Int.max
+  }
+
+  private func tabRank(deviceID: UUID, tabID: String) -> Int {
+    snapshot(for: deviceID)?.tabs?
+      .firstIndex { $0.tabID == tabID } ?? Int.max
+  }
+
+  private func reconcileSelection() {
+    if let selectedSpaceRef {
+      guard let snapshot = snapshot(for: selectedSpaceRef.deviceID) else {
+        self.selectedSpaceRef = nil
+        self.selectedPaneRef = nil
+        return
+      }
+      if !snapshot.workspaces.contains(where: {
+        $0.workspaceID == selectedSpaceRef.workspaceID
+      }) {
+        self.selectedSpaceRef = nil
+      }
     }
 
-    var terminals: [MobileTerminalEntry] {
-        var entries = scopedDevices.flatMap { device -> [MobileTerminalEntry] in
-            guard let snapshot = device.snapshot else { return [] }
-            let tabs = Dictionary(uniqueKeysWithValues:
-                (snapshot.tabs ?? []).compactMap { tab in
-                    tab.customLabel.map { (tab.tabID, $0) }
-                }
-            )
-            return snapshot.ordinaryTerminalPanes.map { pane in
-                MobileTerminalEntry(
-                    device: device.device,
-                    pane: pane,
-                    tabLabel: pane.tabID.flatMap { tabs[$0] }
-                )
-            }
-        }
-        if let selectedSpaceRef {
-            entries = entries.filter {
-                $0.device.id == selectedSpaceRef.deviceID
-                    && $0.pane.workspaceID == selectedSpaceRef.workspaceID
-            }
-        }
-        return entries.sorted {
-            if $0.device.id != $1.device.id {
-                return $0.device.name.localizedStandardCompare($1.device.name) == .orderedAscending
-            }
-            return $0.pane.paneID < $1.pane.paneID
-        }
+    if let selectedPaneRef {
+      guard let snapshot = snapshot(for: selectedPaneRef.deviceID) else {
+        self.selectedPaneRef = nil
+        return
+      }
+      let paneExists =
+        snapshot.agents.contains { $0.paneID == selectedPaneRef.paneID }
+        || snapshot.ordinaryTerminalPanes.contains { $0.paneID == selectedPaneRef.paneID }
+      if !paneExists { self.selectedPaneRef = nil }
     }
-
-    var selectedAgentEntry: MobileAgentEntry? {
-        guard let selectedPaneRef else { return nil }
-        return agents.first { $0.ref == selectedPaneRef }
-            ?? allAgentEntries.first { $0.ref == selectedPaneRef }
-    }
-
-    var selectedTerminalEntry: MobileTerminalEntry? {
-        guard let selectedPaneRef else { return nil }
-        return terminals.first { $0.ref == selectedPaneRef }
-            ?? allTerminalEntries.first { $0.ref == selectedPaneRef }
-    }
-
-    func selectSpace(_ ref: FleetSpaceRef?) {
-        selectedSpaceRef = ref
-        if let selectedPaneRef,
-           let ref,
-           selectedPaneRef.deviceID != ref.deviceID {
-            self.selectedPaneRef = nil
-        }
-    }
-
-    func spaceName(deviceID: UUID, workspaceID: String) -> String {
-        fleetDevices.first { $0.id == deviceID }?.snapshot?.workspaces
-            .first { $0.workspaceID == workspaceID }?.label ?? workspaceID
-    }
-
-    func transport(for deviceID: UUID) -> MobileTransport? {
-        switch selectedSourceID {
-        case .bridge(let bridgeID):
-            guard let endpoint = bridgeHosts.first(where: { $0.id == bridgeID }),
-                  let token = MobileBridgeSecretStore.token(for: bridgeID)
-            else { return nil }
-            if let existing = bridgeTransports[deviceID] { return existing }
-            let transport = BridgeDeviceTransport(
-                endpoint: endpoint,
-                deviceID: deviceID,
-                token: token
-            )
-            bridgeTransports[deviceID] = transport
-            return transport
-        case .direct(let id) where id == deviceID:
-            return directSession(for: id)?.transport
-        default:
-            return nil
-        }
-    }
-
-    func connectionState(for deviceID: UUID) -> MobileConnectionState {
-        guard let device = fleetDevices.first(where: { $0.id == deviceID }) else { return .idle }
-        return mobileConnection(device.connection)
-    }
-
-    // MARK: - Sessions
-
-    private func bridgeSession(for id: UUID) -> MobileBridgeHostSession? {
-        if let existing = bridgeSessions[id] { return existing }
-        guard let endpoint = bridgeHosts.first(where: { $0.id == id }) else { return nil }
-        let session = MobileBridgeHostSession(endpoint: endpoint)
-        session.onChange = { [weak self] in self?.revision += 1 }
-        bridgeSessions[id] = session
-        return session
-    }
-
-    private func directSession(for id: UUID) -> MobileDeviceSession? {
-        if let existing = directSessions[id] { return existing }
-        guard let device = directDevices.first(where: { $0.id == id }) else { return nil }
-        let session = MobileDeviceSession(device: device)
-        session.onChange = { [weak self] in self?.revision += 1 }
-        directSessions[id] = session
-        return session
-    }
-
-    private var allAgentEntries: [MobileAgentEntry] {
-        fleetDevices.flatMap { device -> [MobileAgentEntry] in
-            let tabs = Dictionary(uniqueKeysWithValues:
-                (device.snapshot?.tabs ?? []).compactMap { tab in
-                    tab.customLabel.map { (tab.tabID, $0) }
-                }
-            )
-            return (device.snapshot?.agents ?? []).map {
-                MobileAgentEntry(
-                    device: device.device,
-                    agent: $0,
-                    tabLabel: tabs[$0.tabID]
-                )
-            }
-        }
-    }
-
-    private var allTerminalEntries: [MobileTerminalEntry] {
-        fleetDevices.flatMap { device -> [MobileTerminalEntry] in
-            guard let snapshot = device.snapshot else { return [] }
-            let tabs = Dictionary(uniqueKeysWithValues:
-                (snapshot.tabs ?? []).compactMap { tab in
-                    tab.customLabel.map { (tab.tabID, $0) }
-                }
-            )
-            return snapshot.ordinaryTerminalPanes.map {
-                MobileTerminalEntry(
-                    device: device.device,
-                    pane: $0,
-                    tabLabel: $0.tabID.flatMap { tabs[$0] }
-                )
-            }
-        }
-    }
-
-    private func fleetConnection(_ state: MobileConnectionState) -> FleetConnectionInfo {
-        switch state {
-        case .idle: return .idle
-        case .connecting: return .connecting
-        case .connected(let version): return .connected(version: version)
-        case .failed(let message): return .failed(message)
-        }
-    }
-
-    private func mobileConnection(_ info: FleetConnectionInfo) -> MobileConnectionState {
-        switch info.phase {
-        case .idle: return .idle
-        case .connecting: return .connecting
-        case .connected: return .connected(version: info.version ?? "")
-        case .failed: return .failed(info.message ?? String(localized: "Connection failed"))
-        }
-    }
+  }
 }
