@@ -1,7 +1,7 @@
 import Foundation
 
 /// Stable identity for a workspace inside a multi-device Herdr fleet.
-public struct FleetSpaceRef: Codable, Hashable, Sendable {
+public struct FleetSpaceRef: Codable, Hashable, Sendable, Identifiable {
     public let deviceID: UUID
     public let workspaceID: String
 
@@ -9,10 +9,12 @@ public struct FleetSpaceRef: Codable, Hashable, Sendable {
         self.deviceID = deviceID
         self.workspaceID = workspaceID
     }
+
+    public var id: Self { self }
 }
 
 /// Stable identity for a pane inside a multi-device Herdr fleet.
-public struct FleetPaneRef: Codable, Hashable, Sendable {
+public struct FleetPaneRef: Codable, Hashable, Sendable, Identifiable {
     public let deviceID: UUID
     public let paneID: String
 
@@ -20,29 +22,52 @@ public struct FleetPaneRef: Codable, Hashable, Sendable {
         self.deviceID = deviceID
         self.paneID = paneID
     }
+
+    public var id: Self { self }
+}
+
+/// Stable identity for a tab inside a multi-device Herdr fleet.
+public struct FleetTabRef: Codable, Hashable, Sendable, Identifiable {
+    public let deviceID: UUID
+    public let tabID: String
+
+    public init(deviceID: UUID, tabID: String) {
+        self.deviceID = deviceID
+        self.tabID = tabID
+    }
+
+    public var id: Self { self }
 }
 
 /// The non-secret device metadata a Mac host publishes to paired clients.
+///
+/// SSH usernames, hosts, ports, socket paths, passwords, and private keys stay
+/// host-owned and never appear in the bridge snapshot.
 public struct FleetDeviceDescriptor: Codable, Identifiable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        case local
+        case remote
+    }
+
     public let id: UUID
     public let name: String
-    public let subtitle: String
-    public let isLocal: Bool
+    public let kind: Kind
     public let osID: String?
 
     public init(
         id: UUID,
         name: String,
-        subtitle: String,
-        isLocal: Bool,
+        kind: Kind,
         osID: String? = nil
     ) {
         self.id = id
         self.name = name
-        self.subtitle = subtitle
-        self.isLocal = isLocal
+        self.kind = kind
         self.osID = osID
     }
+
+    public var isLocal: Bool { kind == .local }
+    public var subtitle: String { isLocal ? "This Mac" : "Remote device" }
 }
 
 public enum FleetConnectionPhase: String, Codable, Sendable {
@@ -64,8 +89,8 @@ public struct FleetConnectionInfo: Codable, Equatable, Sendable {
         message: String? = nil
     ) {
         self.phase = phase
-        self.version = version
-        self.message = message
+        self.version = phase == .connected ? version : nil
+        self.message = phase == .failed ? message : nil
     }
 
     public static let idle = FleetConnectionInfo(phase: .idle)
@@ -78,6 +103,15 @@ public struct FleetConnectionInfo: Codable, Equatable, Sendable {
     public static func failed(_ message: String) -> FleetConnectionInfo {
         FleetConnectionInfo(phase: .failed, message: message)
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            phase: try container.decode(FleetConnectionPhase.self, forKey: .phase),
+            version: try container.decodeIfPresent(String.self, forKey: .version),
+            message: try container.decodeIfPresent(String.self, forKey: .message)
+        )
+    }
 }
 
 /// One device as seen by the Mac host at a fleet revision.
@@ -85,17 +119,36 @@ public struct FleetDeviceSnapshot: Codable, Identifiable, Equatable, Sendable {
     public let device: FleetDeviceDescriptor
     public let connection: FleetConnectionInfo
     public let snapshot: SessionSnapshot?
+    public let availableAgentKinds: [String]
 
     public var id: UUID { device.id }
 
     public init(
         device: FleetDeviceDescriptor,
         connection: FleetConnectionInfo,
-        snapshot: SessionSnapshot?
+        snapshot: SessionSnapshot?,
+        availableAgentKinds: [String] = []
     ) {
         self.device = device
         self.connection = connection
         self.snapshot = snapshot
+        self.availableAgentKinds = availableAgentKinds
+    }
+
+    public func agent(paneID: String) -> AgentInfo? {
+        snapshot?.agents.first { $0.paneID == paneID }
+    }
+
+    public func terminal(paneID: String) -> PaneInfo? {
+        snapshot?.ordinaryTerminalPanes.first { $0.paneID == paneID }
+    }
+
+    public func workspace(workspaceID: String) -> WorkspaceInfo? {
+        snapshot?.workspaces.first { $0.workspaceID == workspaceID }
+    }
+
+    public func tab(tabID: String) -> TabInfo? {
+        snapshot?.tabs?.first { $0.tabID == tabID }
     }
 }
 
@@ -112,6 +165,30 @@ public struct FleetSnapshot: Codable, Equatable, Sendable {
 
     public func device(_ id: UUID) -> FleetDeviceSnapshot? {
         devices.first { $0.id == id }
+    }
+
+    public func agent(_ ref: FleetPaneRef) -> AgentInfo? {
+        device(ref.deviceID)?.agent(paneID: ref.paneID)
+    }
+
+    public func terminal(_ ref: FleetPaneRef) -> PaneInfo? {
+        device(ref.deviceID)?.terminal(paneID: ref.paneID)
+    }
+
+    public func workspace(_ ref: FleetSpaceRef) -> WorkspaceInfo? {
+        device(ref.deviceID)?.workspace(workspaceID: ref.workspaceID)
+    }
+
+    public func tab(_ ref: FleetTabRef) -> TabInfo? {
+        device(ref.deviceID)?.tab(tabID: ref.tabID)
+    }
+
+    public var agentCount: Int {
+        devices.reduce(0) { $0 + ($1.snapshot?.agents.count ?? 0) }
+    }
+
+    public var terminalCount: Int {
+        devices.reduce(0) { $0 + ($1.snapshot?.ordinaryTerminalPanes.count ?? 0) }
     }
 }
 
