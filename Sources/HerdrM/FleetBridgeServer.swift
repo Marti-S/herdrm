@@ -213,6 +213,12 @@ final class FleetBridgeServer {
         case .failed(let message): connection = .failed(message)
         }
 
+        let availableAgentKinds: [String]
+        switch state.agentCatalog {
+        case .loaded(let kinds, _): availableAgentKinds = kinds
+        case .loading, .failed: availableAgentKinds = []
+        }
+
         let hasSnapshot = !state.agents.isEmpty
             || !state.workspaces.isEmpty
             || !state.tabs.isEmpty
@@ -222,12 +228,12 @@ final class FleetBridgeServer {
             device: FleetDeviceDescriptor(
                 id: device.id,
                 name: device.name,
-                subtitle: device.subtitle,
-                isLocal: device.isLocal,
+                kind: device.isLocal ? .local : .remote,
                 osID: device.osID
             ),
             connection: connection,
-            snapshot: hasSnapshot ? deviceSessionSnapshot(device: device, model: model) : nil
+            snapshot: hasSnapshot ? deviceSessionSnapshot(device: device, model: model) : nil,
+            availableAgentKinds: availableAgentKinds
         )
     }
 
