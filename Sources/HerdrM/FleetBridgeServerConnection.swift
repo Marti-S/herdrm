@@ -8,6 +8,7 @@ final class FleetBridgeServerConnection {
 
     private enum Stage {
         case hello
+        case authenticate(hello: FleetBridgeHello, serverNonce: Data)
         case operation
         case subscribed(requestID: UUID)
         case terminal(streamID: UUID, process: FleetBridgeTerminalProcess)
@@ -46,10 +47,12 @@ final class FleetBridgeServerConnection {
         receive()
         handshakeTimeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(10))
-            guard let self, !Task.isCancelled else { return }
-            if case .hello = self.stage {
-                self.fail(code: "handshake_timeout", message: "Bridge hello timed out.", fatal: true)
-            }
+            guard let self, !Task.isCancelled, self.isAwaitingAuthentication else { return }
+            self.fail(
+                code: "handshake_timeout",
+                message: "Bridge authentication timed out.",
+                fatal: true
+            )
         }
     }
 
@@ -76,6 +79,15 @@ final class FleetBridgeServerConnection {
     private var isClosed: Bool {
         if case .closed = stage { return true }
         return false
+    }
+
+    private var isAwaitingAuthentication: Bool {
+        switch stage {
+        case .hello, .authenticate:
+            return true
+        default:
+            return false
+        }
     }
 
     private func receive() {
@@ -105,6 +117,12 @@ final class FleetBridgeServerConnection {
                 try await handle(FleetBridgeWire.decodeClient(line))
                 if isClosed { return }
             }
+        } catch is FleetBridgeAuthenticationError {
+            fail(
+                code: "authentication_failed",
+                message: "Bridge authentication failed.",
+                fatal: true
+            )
         } catch let error as FleetBridgeHostError {
             fail(code: error.code, message: error.localizedDescription, fatal: true)
         } catch let error as FleetBridgeWireError {
@@ -118,7 +136,9 @@ final class FleetBridgeServerConnection {
         switch stage {
         case .hello:
             guard case .hello(let hello) = record else {
-                throw FleetBridgeHostError.invalidRequest("The first record must be bridge.hello.")
+                throw FleetBridgeHostError.invalidRequest(
+                    "The first record must be bridge.hello."
+                )
             }
             guard hello.protocolVersion == FleetBridgeProtocol.version else {
                 fail(
@@ -128,11 +148,50 @@ final class FleetBridgeServerConnection {
                 )
                 return
             }
-            guard FleetBridgeCredentialStore.constantTimeMatches(
-                hello.token,
-                server.currentToken
+            guard !hello.clientName.isEmpty, hello.clientName.utf8.count <= 256 else {
+                throw FleetBridgeHostError.invalidRequest("The client name is invalid.")
+            }
+            try FleetBridgeAuthenticator.validateNonce(hello.clientNonce)
+            let serverNonce = try FleetBridgeAuthenticator.randomNonce()
+            let proof = try FleetBridgeAuthenticator.serverProof(
+                token: server.currentToken,
+                clientID: hello.clientID,
+                clientName: hello.clientName,
+                serverID: server.serverID,
+                clientNonce: hello.clientNonce,
+                serverNonce: serverNonce
+            )
+            stage = .authenticate(hello: hello, serverNonce: serverNonce)
+            send(.challenge(FleetBridgeChallenge(
+                serverID: server.serverID,
+                serverName: server.serverName,
+                serverNonce: serverNonce,
+                serverProof: proof
+            )))
+
+        case .authenticate(let hello, let serverNonce):
+            guard case .authenticate(let authentication) = record else {
+                throw FleetBridgeHostError.invalidRequest(
+                    "The challenge must be followed by bridge.authenticate."
+                )
+            }
+            let expected = try FleetBridgeAuthenticator.clientProof(
+                token: server.currentToken,
+                clientID: hello.clientID,
+                clientName: hello.clientName,
+                serverID: server.serverID,
+                clientNonce: hello.clientNonce,
+                serverNonce: serverNonce
+            )
+            guard FleetBridgeAuthenticator.verify(
+                authentication.clientProof,
+                equals: expected
             ) else {
-                fail(code: "authentication_failed", message: "The pairing token is invalid.", fatal: true)
+                fail(
+                    code: "authentication_failed",
+                    message: "Bridge authentication failed.",
+                    fatal: true
+                )
                 return
             }
             handshakeTimeout?.cancel()
@@ -223,7 +282,7 @@ final class FleetBridgeServerConnection {
 
             default:
                 throw FleetBridgeHostError.invalidRequest(
-                    "Choose snapshot, subscription, RPC, or terminal after the hello."
+                    "Choose snapshot, subscription, RPC, or terminal after authentication."
                 )
             }
 
