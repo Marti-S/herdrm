@@ -14,8 +14,13 @@ public enum FleetAttachment {
         let basename = pathNeutral.split(separator: "/", omittingEmptySubsequences: true)
             .last
             .map(String.init) ?? ""
+        let trimmedBasename = basename.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBasename.isEmpty,
+              trimmedBasename != ".",
+              trimmedBasename != ".."
+        else { return "attachment" }
 
-        let filteredScalars = basename.unicodeScalars.map { scalar -> UnicodeScalar in
+        let filteredScalars = trimmedBasename.unicodeScalars.map { scalar -> UnicodeScalar in
             if CharacterSet.controlCharacters.contains(scalar)
                 || scalar == "/"
                 || scalar == "\\"
@@ -25,10 +30,10 @@ public enum FleetAttachment {
             }
             return scalar
         }
-        var value = String(String.UnicodeScalarView(filteredScalars))
+        let value = String(String.UnicodeScalarView(filteredScalars))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.isEmpty || value == "." || value == ".." {
-            value = "attachment"
+        guard !value.isEmpty, value != ".", value != ".." else {
+            return "attachment"
         }
 
         var result = ""
