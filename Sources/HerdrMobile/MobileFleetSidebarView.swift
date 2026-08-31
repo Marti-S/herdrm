@@ -3,6 +3,8 @@ import SwiftUI
 struct MobileFleetSidebarView: View {
     @Bindable var model: MobileAppModel
     let actions: MobileActionCoordinator
+    let attention: MobileAttentionTracker
+    @Binding var showSearch: Bool
 
     var body: some View {
         List(selection: $model.selectedPaneRef) {
@@ -22,7 +24,14 @@ struct MobileFleetSidebarView: View {
             ToolbarItem(placement: .topBarLeading) {
                 MobileDeviceSwitcherMenu(model: model)
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showSearch = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityLabel(String(localized: "Search Fleet"))
+
                 MobileAddMenu(model: model, actions: actions)
             }
         }
@@ -76,8 +85,12 @@ struct MobileFleetSidebarView: View {
                     model.selectDevice(nil)
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: "square.stack.3d.up")
-                            .foregroundStyle(model.selectedDeviceID == nil ? Color.accentColor : .secondary)
+                        MobileAttentionGlyph(
+                            attention: attention.attention(for: model.deviceEntries),
+                            fallbackSystemImage: "square.stack.3d.up",
+                            fallbackColor: model.selectedDeviceID == nil
+                                ? .accentColor : .secondary
+                        )
                         Text(String(localized: "All Devices"))
                             .fontWeight(model.selectedDeviceID == nil ? .semibold : .regular)
                         Spacer()
@@ -89,6 +102,7 @@ struct MobileFleetSidebarView: View {
                 .buttonStyle(.plain)
 
                 ForEach(model.deviceEntries) { device in
+                    let deviceAttention = attention.attention(for: device)
                     Button {
                         model.selectDevice(device.id)
                     } label: {
@@ -102,6 +116,13 @@ struct MobileFleetSidebarView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
+                            }
+                            Spacer()
+                            if deviceAttention != .none {
+                                MobileAttentionGlyph(
+                                    attention: deviceAttention,
+                                    fallbackSystemImage: "desktopcomputer"
+                                )
                             }
                         }
                     }
@@ -120,7 +141,8 @@ struct MobileFleetSidebarView: View {
                     label: String(localized: "All Spaces"),
                     deviceName: nil,
                     count: model.spaces.count,
-                    selected: model.selectedSpaceRef == nil
+                    selected: model.selectedSpaceRef == nil,
+                    attention: attention.attention(for: model.spaces)
                 )
             }
             .buttonStyle(.plain)
@@ -133,7 +155,8 @@ struct MobileFleetSidebarView: View {
                         label: entry.workspace.label,
                         deviceName: model.showsDeviceBadges ? entry.device.name : nil,
                         count: nil,
-                        selected: model.selectedSpaceRef == entry.ref
+                        selected: model.selectedSpaceRef == entry.ref,
+                        attention: attention.attention(for: entry)
                     )
                 }
                 .buttonStyle(.plain)
@@ -170,7 +193,8 @@ struct MobileFleetSidebarView: View {
                             deviceID: entry.device.id,
                             workspaceID: entry.agent.workspaceID
                         ),
-                        deviceName: model.showsDeviceBadges ? entry.device.name : nil
+                        deviceName: model.showsDeviceBadges ? entry.device.name : nil,
+                        unread: attention.isUnread(entry.ref)
                     )
                 }
                 .contextMenu {
