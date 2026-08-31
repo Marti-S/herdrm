@@ -5,11 +5,15 @@ import HerdrSSH
 
 /// How the phone reaches a device's herdr session. Today: direct SSH with a
 /// `direct-streamlocal` channel per RPC (herdr is one-request-per-connection).
-/// A relay transport slots in behind the same face later.
+/// A bridge transport slots in behind the same semantic interface later.
 protocol MobileTransport: Sendable {
     func request(method: String, params: JSONValue) async throws -> JSONValue
     func events(kinds: [String]) -> AsyncThrowingStream<HerdrEvent, Error>
-    func openTerminal(command: String, columns: Int, rows: Int) async throws -> SSHPTYChannel
+    func openTerminalSession(
+        target: TerminalAttachTarget,
+        mode: TerminalSessionMode,
+        size: TerminalSize
+    ) async throws -> any TerminalSession
     func close() async
 }
 
@@ -33,6 +37,7 @@ enum MobileTransportError: LocalizedError {
     case hostKeyChanged(fingerprint: String)
     case missingPassword
     case homeProbeFailed
+    case invalidTerminalSize
 
     var errorDescription: String? {
         switch self {
@@ -44,6 +49,8 @@ enum MobileTransportError: LocalizedError {
             return String(localized: "No password saved for this device.")
         case .homeProbeFailed:
             return String(localized: "Could not resolve the home directory on the device.")
+        case .invalidTerminalSize:
+            return String(localized: "Terminal columns and rows must be greater than zero.")
         }
     }
 }
@@ -202,14 +209,32 @@ final class SSHDirectTransport: MobileTransport {
         }
     }
 
-    /// A PTY session channel running `command` directly (no login shell).
-    /// sshd's exec PATH is bare, so callers prepend the well-known prefixes.
-    func openTerminal(command: String, columns: Int, rows: Int) async throws -> SSHPTYChannel {
-        try await connection.openPTY(
-            command: command,
-            columns: columns,
-            rows: rows,
+    /// Opens Herdr's structured terminal observer/controller over one SSH PTY.
+    /// The remote command disables terminal echo and post-processing, so the
+    /// channel carries only Herdr's NDJSON protocol rather than a rendered TUI.
+    func openTerminalSession(
+        target: TerminalAttachTarget,
+        mode: TerminalSessionMode,
+        size: TerminalSize
+    ) async throws -> any TerminalSession {
+        guard size.isValid else {
+            throw MobileTransportError.invalidTerminalSize
+        }
+
+        let channel = try await connection.openPTY(
+            command: MobileAttach.structuredCommand(
+                target: target,
+                mode: mode,
+                size: size
+            ),
+            columns: size.columns,
+            rows: size.rows,
             timeout: .seconds(15)
+        )
+        return SSHStructuredTerminalSession(
+            channel: channel,
+            mode: mode,
+            initialSize: size
         )
     }
 
@@ -224,22 +249,43 @@ enum MobileAttach {
     static let pathExport = #"export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/bin""#
 
     /// APC marker printed just before exec. sshd runs the command through the
-    /// user's shell, whose rc chatter would otherwise leak into the terminal;
-    /// the attach session drops everything before this marker (Heeler's
-    /// AttachBootstrapHandshake trick).
-    static let bootstrapMarker = Data([0x1B, 0x5F]) + Data("herdrm-attach".utf8) + Data([0x1B, 0x5C])
+    /// user's shell, whose rc chatter would otherwise leak into the terminal.
+    static let bootstrapMarker =
+        Data([0x1B, 0x5F]) + Data("herdrm-attach".utf8) + Data([0x1B, 0x5C])
     private static let markerPrintf = #"printf '\033_herdrm-attach\033\\'"#
 
-    /// The remote command for attaching to an agent pane or a bare terminal.
-    static func command(target: TerminalAttachTarget) -> String {
-        let attach: String
+    /// Runs Herdr's machine-readable terminal session surface. The SSH channel
+    /// currently requests a PTY because HerdrSSH has no streaming exec channel;
+    /// stty makes that PTY a transparent byte pipe by disabling echo, canonical
+    /// input, and output newline conversion before Herdr starts.
+    static func structuredCommand(
+        target: TerminalAttachTarget,
+        mode: TerminalSessionMode,
+        size: TerminalSize
+    ) -> String {
+        let targetValue: String
         switch target {
         case .agent(let paneID):
-            attach = "herdr agent attach \(ShellQuoting.quoted(paneID)) --takeover"
+            targetValue = paneID
         case .terminal(let terminalID):
-            attach = "herdr terminal attach \(ShellQuoting.quoted(terminalID)) --takeover"
+            targetValue = terminalID
         }
-        let script = "\(pathExport); \(markerPrintf); exec \(attach)"
+
+        let action: String
+        switch mode.access {
+        case .observe:
+            action = "observe"
+        case .control:
+            action = "control"
+        }
+        let takeoverFlag = mode.takeover ? " --takeover" : ""
+        let sessionCommand = "herdr terminal session \(action) "
+            + ShellQuoting.quoted(targetValue)
+            + takeoverFlag
+            + " --cols \(size.columns) --rows \(size.rows)"
+        let script = "\(pathExport); "
+            + "stty -echo -icanon -opost min 1 time 0; "
+            + "\(markerPrintf); exec \(sessionCommand)"
         return "/bin/sh -c \(ShellQuoting.quoted(script))"
     }
 }
