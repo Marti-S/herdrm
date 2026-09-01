@@ -17,7 +17,7 @@ Rotating the token disconnects existing clients and invalidates their saved pair
 
 ## Network exposure
 
-The bridge is enabled by default and listens only on `127.0.0.1:45983`. The token is random, stored in the macOS Keychain, and exported for pairing in a mode-`0600` file:
+The bridge is enabled by default and listens only on `127.0.0.1:45983`. The token is random, stored in the macOS Keychain, and exported for initial pairing in a mode-`0600` file:
 
 ```text
 ~/Library/Application Support/HerdrM/mobile-pairing.json
@@ -29,7 +29,7 @@ For Tailscale, expose that loopback TCP port with a raw TCP forward, or enable *
 defaults write dev.bybee.herdrm fleetBridge.bindAllInterfaces -bool true
 ```
 
-Use the Mac's Tailscale IP or MagicDNS name from the iOS client. The bridge token is still required even when tailnet ACLs restrict the port.
+Use the Mac's Tailscale IP or MagicDNS name from the iOS client. Tailnet policy should restrict the bridge port to the intended user/devices. **Listen beyond loopback** exposes the TCP listener on non-Tailscale interfaces too, so it should only be used on a trusted network path.
 
 The listener can also be disabled or moved through the pairing window. Equivalent defaults commands are:
 
@@ -64,12 +64,23 @@ The paperclip in an Agent terminal opens the iOS Files picker. HerdrM stages the
 
 ## Protocol
 
-Every TCP connection is newline-delimited JSON and starts with `bridge.hello`. After authentication, one connection owns exactly one operation:
+Bridge protocol 2 uses newline-delimited JSON. Every TCP connection performs mutual challenge-response authentication before selecting exactly one operation:
+
+1. iOS sends `bridge.hello` with its stable client ID, display name, and a fresh 256-bit client nonce. It does **not** send the pairing token.
+2. The Mac sends `bridge.challenge` with its stable server ID, a fresh 256-bit server nonce, and a direction-specific HMAC-SHA256 proof over both identities and both nonces.
+3. iOS verifies the Mac proof against the Keychain token and expected server ID, then sends `bridge.authenticate` with a distinct client proof.
+4. The Mac verifies the client proof and sends `bridge.welcome`.
+
+The client and server proof contexts are different, preventing reflection. Fresh nonces make captured handshakes unusable on later connections. The pairing secret crosses devices only through the initial QR/JSON pairing channel and is never transmitted during normal bridge connections.
+
+After authentication, a connection owns one operation:
 
 - `fleet.snapshot`: one complete fleet snapshot, then close.
 - `fleet.subscribe`: complete snapshots whenever the Mac model changes.
 - `herdr.request`: one allowlisted Herdr operation for a selected device.
 - `terminal.open`: one observed or controlled terminal stream.
+
+Challenge-response authenticates the endpoints; Tailscale remains the transport confidentiality and integrity layer. Do not expose the raw bridge port to an untrusted network.
 
 Terminal control remains explicit. Observer streams cannot send raw input or resize commands, and takeover is only requested when the client sets it in `TerminalSessionMode`.
 

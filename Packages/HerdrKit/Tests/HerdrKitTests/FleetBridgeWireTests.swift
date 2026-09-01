@@ -2,11 +2,41 @@ import XCTest
 @testable import HerdrKit
 
 final class FleetBridgeWireTests: XCTestCase {
-    func testHelloRoundTrip() throws {
-        let hello = FleetBridgeHello(token: "secret", clientID: UUID(), clientName: "Phone")
-        let encoded = try FleetBridgeWire.encodeClient(.hello(hello))
-        XCTAssertEqual(try FleetBridgeWire.decodeClient(encoded), .hello(hello))
-        XCTAssertEqual(encoded.last, 0x0A)
+    func testChallengeResponseHandshakeRoundTripsWithoutBearerToken() throws {
+        let clientID = UUID()
+        let serverID = UUID()
+        let clientNonce = Data(repeating: 0x11, count: FleetBridgeAuthenticator.nonceBytes)
+        let serverNonce = Data(repeating: 0x22, count: FleetBridgeAuthenticator.nonceBytes)
+        let hello = FleetBridgeHello(
+            clientID: clientID,
+            clientName: "Phone",
+            clientNonce: clientNonce
+        )
+        let encodedHello = try FleetBridgeWire.encodeClient(.hello(hello))
+        XCTAssertEqual(try FleetBridgeWire.decodeClient(encodedHello), .hello(hello))
+        XCTAssertEqual(encodedHello.last, 0x0A)
+        XCTAssertFalse(String(decoding: encodedHello, as: UTF8.self).contains("token"))
+
+        let challenge = FleetBridgeChallenge(
+            serverID: serverID,
+            serverName: "Mac",
+            serverNonce: serverNonce,
+            serverProof: Data(repeating: 0x33, count: FleetBridgeAuthenticator.proofBytes)
+        )
+        XCTAssertEqual(
+            try FleetBridgeWire.decodeServer(FleetBridgeWire.encodeServer(.challenge(challenge))),
+            .challenge(challenge)
+        )
+
+        let authentication = FleetBridgeAuthentication(
+            clientProof: Data(repeating: 0x44, count: FleetBridgeAuthenticator.proofBytes)
+        )
+        XCTAssertEqual(
+            try FleetBridgeWire.decodeClient(
+                FleetBridgeWire.encodeClient(.authenticate(authentication))
+            ),
+            .authenticate(authentication)
+        )
     }
 
     func testRPCRoundTripPreservesDynamicJSON() throws {

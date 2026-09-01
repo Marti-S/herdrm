@@ -36,8 +36,10 @@ enum FleetBridgeClientError: LocalizedError {
   case connectionClosed
   case timedOut
   case missingToken
+  case invalidPairingToken
   case protocolMismatch(Int)
   case serverIdentityChanged(expected: UUID, received: UUID)
+  case serverAuthenticationFailed
   case unexpectedRecord(String)
   case server(code: String, message: String)
 
@@ -53,6 +55,8 @@ enum FleetBridgeClientError: LocalizedError {
       return String(localized: "The Mac bridge did not respond in time.")
     case .missingToken:
       return String(localized: "No pairing token is saved for this Mac.")
+    case .invalidPairingToken:
+      return String(localized: "The saved pairing token is invalid. Remove and pair this Mac again.")
     case .protocolMismatch(let version):
       return String(
         localized:
@@ -63,6 +67,8 @@ enum FleetBridgeClientError: LocalizedError {
         localized:
           "The Mac identity changed from \(expected.uuidString) to \(received.uuidString). Remove and pair it again."
       )
+    case .serverAuthenticationFailed:
+      return String(localized: "The Mac could not prove its pairing identity. Remove and pair it again.")
     case .unexpectedRecord(let type):
       return String(localized: "The Mac bridge sent an unexpected \(type) record.")
     case .server(_, let message):
@@ -72,7 +78,8 @@ enum FleetBridgeClientError: LocalizedError {
 
   var isPermanent: Bool {
     switch self {
-    case .invalidEndpoint, .missingToken, .protocolMismatch, .serverIdentityChanged:
+    case .invalidEndpoint, .missingToken, .invalidPairingToken, .protocolMismatch,
+         .serverIdentityChanged, .serverAuthenticationFailed:
       return true
     case .server(let code, _):
       return ["authentication_failed", "protocol_mismatch"].contains(code)
@@ -83,7 +90,7 @@ enum FleetBridgeClientError: LocalizedError {
 }
 
 /// One authenticated TCP connection. The bridge protocol assigns exactly one
-/// operation to each connection after the hello/welcome exchange.
+/// operation to each connection after the challenge-response exchange.
 private actor FleetBridgeChannel {
   private let connection: NWConnection
   private let queue: DispatchQueue
@@ -358,26 +365,98 @@ struct FleetBridgeClient: Sendable {
     let channel = try FleetBridgeChannel(host: bridge.host, port: bridge.port)
     do {
       try await channel.start()
+      let clientNonce = try FleetBridgeAuthenticator.randomNonce()
       try await channel.send(
         .hello(
           FleetBridgeHello(
-            token: token,
             clientID: clientID,
-            clientName: clientName
+            clientName: clientName,
+            clientNonce: clientNonce
           )))
-      guard let record = try await channel.receive() else {
+
+      guard let challengeRecord = try await channel.receive() else {
         throw FleetBridgeClientError.connectionClosed
       }
-      switch record {
+      let challenge: FleetBridgeChallenge
+      switch challengeRecord {
+      case .challenge(let value):
+        challenge = value
+      case .error(let error):
+        throw Self.serverError(error)
+      default:
+        throw FleetBridgeClientError.unexpectedRecord("handshake challenge")
+      }
+
+      guard challenge.protocolVersion == FleetBridgeProtocol.version else {
+        throw FleetBridgeClientError.protocolMismatch(challenge.protocolVersion)
+      }
+      if let expected = bridge.expectedServerID,
+        challenge.serverID != expected
+      {
+        throw FleetBridgeClientError.serverIdentityChanged(
+          expected: expected,
+          received: challenge.serverID
+        )
+      }
+
+      let expectedServerProof: Data
+      do {
+        expectedServerProof = try FleetBridgeAuthenticator.serverProof(
+          token: token,
+          clientID: clientID,
+          clientName: clientName,
+          serverID: challenge.serverID,
+          clientNonce: clientNonce,
+          serverNonce: challenge.serverNonce
+        )
+      } catch let error as FleetBridgeAuthenticationError {
+        switch error {
+        case .invalidToken:
+          throw FleetBridgeClientError.invalidPairingToken
+        case .invalidNonceLength, .randomFailure:
+          throw FleetBridgeClientError.serverAuthenticationFailed
+        }
+      }
+      guard FleetBridgeAuthenticator.verify(
+        challenge.serverProof,
+        equals: expectedServerProof
+      ) else {
+        throw FleetBridgeClientError.serverAuthenticationFailed
+      }
+
+      let clientProof: Data
+      do {
+        clientProof = try FleetBridgeAuthenticator.clientProof(
+          token: token,
+          clientID: clientID,
+          clientName: clientName,
+          serverID: challenge.serverID,
+          clientNonce: clientNonce,
+          serverNonce: challenge.serverNonce
+        )
+      } catch let error as FleetBridgeAuthenticationError {
+        switch error {
+        case .invalidToken:
+          throw FleetBridgeClientError.invalidPairingToken
+        case .invalidNonceLength, .randomFailure:
+          throw FleetBridgeClientError.serverAuthenticationFailed
+        }
+      }
+      try await channel.send(
+        .authenticate(FleetBridgeAuthentication(clientProof: clientProof))
+      )
+
+      guard let welcomeRecord = try await channel.receive() else {
+        throw FleetBridgeClientError.connectionClosed
+      }
+      switch welcomeRecord {
       case .welcome(let welcome):
         guard welcome.protocolVersion == FleetBridgeProtocol.version else {
           throw FleetBridgeClientError.protocolMismatch(welcome.protocolVersion)
         }
-        if let expected = bridge.expectedServerID,
-          welcome.serverID != expected
-        {
+        guard welcome.serverID == challenge.serverID else {
           throw FleetBridgeClientError.serverIdentityChanged(
-            expected: expected,
+            expected: challenge.serverID,
             received: welcome.serverID
           )
         }
@@ -385,7 +464,7 @@ struct FleetBridgeClient: Sendable {
       case .error(let error):
         throw Self.serverError(error)
       default:
-        throw FleetBridgeClientError.unexpectedRecord("handshake")
+        throw FleetBridgeClientError.unexpectedRecord("handshake welcome")
       }
     } catch {
       await channel.close()
