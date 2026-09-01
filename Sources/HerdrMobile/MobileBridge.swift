@@ -265,11 +265,19 @@ final class MobileBridgeSession {
   func refresh() async {
     do {
       let next = try await makeClient().snapshot()
-      snapshot = next
+      let previousState = state
+      let snapshotChanged = snapshot != next
+      if snapshotChanged {
+        snapshot = next
+      }
       state = .connected(version: "Bridge \(FleetBridgeProtocol.version)")
-      onChange?()
+      if snapshotChanged || state != previousState {
+        onChange?()
+      }
     } catch {
-      state = .failed(Self.presentation(error))
+      let nextState = MobileConnectionState.failed(Self.presentation(error))
+      guard state != nextState else { return }
+      state = nextState
       onChange?()
     }
   }
@@ -290,19 +298,38 @@ final class MobileBridgeSession {
     }
 
     while !Task.isCancelled, generation == expectedGeneration {
-      state = .connecting
-      onChange?()
+      if state != .connecting {
+        state = .connecting
+        onChange?()
+      }
       do {
+        var receivedSnapshotOnConnection = false
         let stream = try makeClient().snapshots(after: snapshot?.revision)
         for try await next in stream {
           guard
             !Task.isCancelled,
             generation == expectedGeneration
           else { return }
-          snapshot = next
+
+          let previousState = state
+          let snapshotChanged: Bool
+          if receivedSnapshotOnConnection {
+            snapshotChanged = next.revision > (snapshot?.revision ?? 0)
+          } else {
+            // A restarted bridge begins a new revision sequence. Accept its
+            // first snapshot even when the number moves backwards, while still
+            // suppressing an identical reconnect snapshot.
+            snapshotChanged = snapshot != next
+            receivedSnapshotOnConnection = true
+          }
+          if snapshotChanged {
+            snapshot = next
+          }
           backoff = 1
           state = .connected(version: "Bridge \(FleetBridgeProtocol.version)")
-          onChange?()
+          if snapshotChanged || state != previousState {
+            onChange?()
+          }
         }
         guard
           !Task.isCancelled,

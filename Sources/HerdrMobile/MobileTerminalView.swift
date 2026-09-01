@@ -30,7 +30,26 @@ final class MobileAttachSession: ObservableObject {
     let target: TerminalAttachTarget
     let paneID: String
 
+    private lazy var inputQueue: TerminalInputQueue = {
+        let transport = transport
+        return TerminalInputQueue(
+            generation: lifecycleGeneration,
+            sendTerminal: { [weak self] data in
+                guard let terminalSession = self?.terminalSession else { return }
+                try await terminalSession.send(data)
+            },
+            resizeTerminal: { [weak self] size in
+                guard let terminalSession = self?.terminalSession else { return }
+                try await terminalSession.resize(size)
+            },
+            sendSemantic: { method, params in
+                _ = try await transport.request(method: method, params: params)
+            }
+        )
+    }()
+
     private var terminalSession: (any TerminalSession)?
+    private var outputBatcher: TerminalOutputBatcher?
     private var startTask: Task<Void, Never>?
     private var readTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
@@ -68,7 +87,13 @@ final class MobileAttachSession: ObservableObject {
         mode = requestedMode
         status = .connecting
         lifecycleGeneration &+= 1
+        inputQueue.updateGeneration(lifecycleGeneration)
         let generation = lifecycleGeneration
+        let outputBatcher = TerminalOutputBatcher { [weak self] data in
+            guard let self, self.lifecycleGeneration == generation else { return }
+            self.feed(data)
+        }
+        self.outputBatcher = outputBatcher
 
         startTask = Task { [weak self] in
             guard let self else { return }
@@ -89,9 +114,15 @@ final class MobileAttachSession: ObservableObject {
                 }
                 self.terminalSession = terminalSession
                 self.status = .running
-                self.pump(terminalSession, generation: generation)
+                self.pump(
+                    terminalSession,
+                    outputBatcher: outputBatcher,
+                    generation: generation
+                )
             } catch {
+                await outputBatcher.cancel()
                 guard !Task.isCancelled, self.lifecycleGeneration == generation else { return }
+                self.outputBatcher = nil
                 self.status = .ended(Self.presentation(error))
             }
         }
@@ -113,29 +144,32 @@ final class MobileAttachSession: ObservableObject {
 
     private func pump(
         _ terminalSession: any TerminalSession,
+        outputBatcher: TerminalOutputBatcher,
         generation: UInt64
     ) {
-        readTask = Task { [weak self] in
+        let complete: @MainActor @Sendable (String) -> Void = { [weak self] endingReason in
+            guard let self, self.lifecycleGeneration == generation else { return }
+            self.outputBatcher = nil
+            if case .running = self.status {
+                self.status = .ended(endingReason)
+            }
+        }
+        readTask = Task.detached(priority: .userInitiated) {
             var endingReason = String(localized: "Session ended")
             do {
                 while !Task.isCancelled {
                     guard let frame = try await terminalSession.read() else { break }
                     guard !frame.bytes.isEmpty else { continue }
-                    self?.feed(frame.bytes)
+                    await outputBatcher.append(frame.bytes)
                 }
             } catch {
                 endingReason = Self.presentation(error)
             }
 
+            await outputBatcher.finish()
             await terminalSession.close()
-            guard
-                let self,
-                !Task.isCancelled,
-                self.lifecycleGeneration == generation
-            else { return }
-            if case .running = self.status {
-                self.status = .ended(endingReason)
-            }
+            guard !Task.isCancelled else { return }
+            await complete(endingReason)
         }
     }
 
@@ -144,41 +178,37 @@ final class MobileAttachSession: ObservableObject {
     }
 
     func send(_ bytes: ArraySlice<UInt8>) {
-        guard let terminalSession, mode.allowsInput else { return }
-        let data = Data(bytes)
-        Task { try? await terminalSession.send(data) }
+        guard terminalSession != nil, mode.allowsInput else { return }
+        inputQueue.enqueueTerminal(Data(bytes), generation: lifecycleGeneration)
     }
 
     /// Sends named keys through herdr's RPC — proper terminal encoding without
     /// this client knowing the pane's keyboard protocol state. These semantic
     /// controls remain available while the terminal itself is read-only.
-    func sendKeys(_ keys: [String]) {
-        Task {
-            _ = try? await transport.request(
-                method: "pane.send_input",
-                params: .object([
-                    "pane_id": .string(paneID),
-                    "keys": .array(keys.map { .string($0) }),
-                ])
-            )
-        }
+    func sendKeys(_ keys: [String]) -> TerminalInputQueue.SemanticTicket {
+        inputQueue.submitSemantic(
+            method: "pane.send_input",
+            params: .object([
+                "pane_id": .string(paneID),
+                "keys": .array(keys.map { .string($0) }),
+            ])
+        )
     }
 
     /// Sends a prompt to the agent; herdr delivers and submits it. This remains
     /// available to an observer because it is a semantic agent operation, not
     /// raw ownership of the terminal byte stream.
-    func prompt(_ text: String) {
-        guard let agentPaneID else { return }
-        Task {
-            _ = try? await transport.request(
-                method: "agent.prompt",
-                params: .object([
-                    "target": .string(agentPaneID),
-                    "text": .string(text),
-                ])
-            )
-        }
+    func prompt(_ text: String) throws -> TerminalInputQueue.SemanticTicket {
+        guard let agentPaneID else { throw MobileTerminalInputError.agentUnavailable }
+        return inputQueue.submitSemantic(
+            method: "agent.prompt",
+            params: .object([
+                "target": .string(agentPaneID),
+                "text": .string(text),
+            ])
+        )
     }
+
 
     func stageAttachment(_ attachment: MobileAttachmentPayload) async throws -> String {
         try await transport.stageAttachment(attachment)
@@ -190,9 +220,9 @@ final class MobileAttachSession: ObservableObject {
         guard size != lastSize else { return }
         lastSize = size
 
-        guard let terminalSession else { return }
+        guard terminalSession != nil else { return }
         if mode.allowsResize {
-            Task { try? await terminalSession.resize(size) }
+            inputQueue.enqueueResize(size, generation: lifecycleGeneration)
         } else {
             // Observe mode negotiates its grid when the stream opens. Coalesce
             // layout churn before reopening so rotation does not create a
@@ -208,20 +238,33 @@ final class MobileAttachSession: ObservableObject {
 
     func stop() {
         lifecycleGeneration &+= 1
+        inputQueue.updateGeneration(lifecycleGeneration)
         resizeTask?.cancel()
         resizeTask = nil
         startTask?.cancel()
         startTask = nil
         readTask?.cancel()
         readTask = nil
+        if let outputBatcher {
+            Task { await outputBatcher.cancel() }
+        }
+        outputBatcher = nil
         if let terminalSession {
             Task { await terminalSession.close() }
         }
         terminalSession = nil
     }
 
-    private static func presentation(_ error: any Error) -> String {
+    nonisolated private static func presentation(_ error: any Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? "\(error)"
+    }
+}
+
+private enum MobileTerminalInputError: LocalizedError {
+    case agentUnavailable
+
+    var errorDescription: String? {
+        String(localized: "This terminal is not attached to an agent.")
     }
 }
 
@@ -231,7 +274,9 @@ struct MobileTerminalScreen: View {
     @State private var keyboardShown = false
     @State private var showFileImporter = false
     @State private var isStagingAttachment = false
+    @State private var isSendingPrompt = false
     @State private var attachmentError: String?
+    @State private var inputError: String?
     private let title: String
 
     init(transport: MobileTransport, target: TerminalAttachTarget, paneID: String, title: String) {
@@ -273,6 +318,17 @@ struct MobileTerminalScreen: View {
         } message: {
             Text(attachmentError ?? "")
         }
+        .alert(
+            String(localized: "Could Not Send Input"),
+            isPresented: Binding(
+                get: { inputError != nil },
+                set: { if !$0 { inputError = nil } }
+            )
+        ) {
+            Button(String(localized: "OK"), role: .cancel) {}
+        } message: {
+            Text(inputError ?? "")
+        }
         .onDisappear { session.stop() }
     }
 
@@ -295,12 +351,12 @@ struct MobileTerminalScreen: View {
 
     private var keyBar: some View {
         HStack(spacing: 8) {
-            KeyChip("esc") { session.sendKeys(["esc"]) }
-            KeyChip("tab") { session.sendKeys(["tab"]) }
-            KeyChip("↑") { session.sendKeys(["up"]) }
-            KeyChip("↓") { session.sendKeys(["down"]) }
-            KeyChip("⏎") { session.sendKeys(["enter"]) }
-            KeyChip("^C") { session.sendKeys(["ctrl+c"]) }
+            KeyChip("esc") { sendKeys(["esc"]) }
+            KeyChip("tab") { sendKeys(["tab"]) }
+            KeyChip("↑") { sendKeys(["up"]) }
+            KeyChip("↓") { sendKeys(["down"]) }
+            KeyChip("⏎") { sendKeys(["enter"]) }
+            KeyChip("^C") { sendKeys(["ctrl+c"]) }
             Spacer()
             sessionControl
         }
@@ -390,22 +446,70 @@ struct MobileTerminalScreen: View {
             .onSubmit(sendPrompt)
 
             Button(action: sendPrompt) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(
-                        composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? SwiftUI.Color.white.opacity(0.25) : SwiftUI.Color.accentColor
-                    )
+                Group {
+                    if isSendingPrompt {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(
+                                composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? SwiftUI.Color.white.opacity(0.25) : SwiftUI.Color.accentColor
+                            )
+                    }
+                }
+                .frame(width: 28, height: 28)
             }
-            .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(
+                isSendingPrompt
+                    || composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
         }
     }
 
     private func sendPrompt() {
-        let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        session.prompt(text)
-        composerText = ""
+        let originalText = composerText
+        let text = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isSendingPrompt else { return }
+        isSendingPrompt = true
+
+        let ticket: TerminalInputQueue.SemanticTicket
+        do {
+            ticket = try session.prompt(text)
+        } catch {
+            isSendingPrompt = false
+            inputError = presentableInputError(error)
+            return
+        }
+
+        Task { @MainActor in
+            defer { isSendingPrompt = false }
+            do {
+                try await ticket.value()
+                if composerText.hasPrefix(originalText) {
+                    composerText.removeFirst(originalText.count)
+                }
+            } catch {
+                inputError = presentableInputError(error)
+            }
+        }
+    }
+
+    private func sendKeys(_ keys: [String]) {
+        let ticket = session.sendKeys(keys)
+        Task { @MainActor in
+            do {
+                try await ticket.value()
+            } catch {
+                inputError = presentableInputError(error)
+            }
+        }
+    }
+
+    private func presentableInputError(_ error: any Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     private func handleAttachmentSelection(_ result: Result<[URL], Error>) {

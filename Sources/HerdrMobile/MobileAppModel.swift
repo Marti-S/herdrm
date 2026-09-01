@@ -1,5 +1,6 @@
 import Foundation
 import HerdrKit
+import Observation
 import SwiftUI
 
 @MainActor
@@ -21,6 +22,8 @@ final class MobileAppModel {
   private let bridgeStore = MobileBridgeStore()
   private var directSessions: [UUID: MobileDeviceSession] = [:]
   private var bridgeSession: MobileBridgeSession?
+  @ObservationIgnored private var fleetIndexRevision = -1
+  @ObservationIgnored private var cachedFleetIndex = MobileFleetIndex.empty
 
   init() {
     bridge = bridgeStore.load()
@@ -33,47 +36,22 @@ final class MobileAppModel {
     bridge != nil || !directDevices.isEmpty
   }
 
-  var deviceEntries: [MobileDeviceEntry] {
+  private var fleetIndex: MobileFleetIndex {
     _ = revision
-    var result: [MobileDeviceEntry] = []
-
-    if let bridgeSession,
-      let fleet = bridgeSession.snapshot
-    {
-      let bridgeIsLive = bridgeSession.state.isConnected
-      for device in fleet.devices {
-        result.append(
-          MobileDeviceEntry(
-            id: device.id,
-            source: .bridge,
-            name: device.device.name,
-            subtitle: device.device.subtitle,
-            state: bridgeIsLive ? MobileConnectionState(device.connection) : bridgeSession.state,
-            snapshot: device.snapshot,
-            availableAgentKinds: device.availableAgentKinds
-          ))
-      }
+    if fleetIndexRevision != revision {
+      cachedFleetIndex = MobileFleetIndex(devices: buildDeviceEntries())
+      fleetIndexRevision = revision
     }
+    return cachedFleetIndex
+  }
 
-    for device in directDevices {
-      let session = directSession(for: device.id)
-      result.append(
-        MobileDeviceEntry(
-          id: device.id,
-          source: .direct,
-          name: device.name,
-          subtitle: device.subtitle,
-          state: session?.state ?? .idle,
-          snapshot: session?.snapshot,
-          availableAgentKinds: []
-        ))
-    }
-    return result
+  var deviceEntries: [MobileDeviceEntry] {
+    fleetIndex.devices
   }
 
   var selectedDevice: MobileDeviceEntry? {
     guard let selectedDeviceID else { return nil }
-    return deviceEntries.first { $0.id == selectedDeviceID }
+    return fleetIndex.devicesByID[selectedDeviceID]
   }
 
   var selectedConnectionState: MobileConnectionState {
@@ -214,6 +192,7 @@ final class MobileAppModel {
     bridge = next
     bridgeStore.save(next)
     configureBridgeSession()
+    revision += 1
     selectedDeviceID = nil
     selectedSpaceRef = nil
     selectedPaneRef = nil
@@ -256,6 +235,7 @@ final class MobileAppModel {
     }
     directDevices.append(device)
     directStore.save(directDevices)
+    revision += 1
     selectDevice(device.id)
   }
 
@@ -283,104 +263,56 @@ final class MobileAppModel {
   // MARK: - Derived fleet lists
 
   var spaces: [MobileSpaceEntry] {
-    _ = revision
-    return scopedDevices.flatMap { device in
-      (device.snapshot?.workspaces ?? []).map {
-        MobileSpaceEntry(
-          ref: FleetSpaceRef(deviceID: device.id, workspaceID: $0.workspaceID),
-          workspace: $0,
-          device: device
-        )
-      }
+    if let selectedDeviceID {
+      return fleetIndex.spacesByDeviceID[selectedDeviceID] ?? []
     }
+    return fleetIndex.spaces
   }
 
   var agents: [MobileAgentEntry] {
-    _ = revision
-    var entries = scopedDevices.flatMap { device in
-      (device.snapshot?.agents ?? []).map {
-        MobileAgentEntry(
-          ref: FleetPaneRef(deviceID: device.id, paneID: $0.paneID),
-          agent: $0,
-          device: device
-        )
-      }
-    }
     if let selectedSpaceRef {
-      entries = entries.filter {
-        $0.ref.deviceID == selectedSpaceRef.deviceID
-          && $0.agent.workspaceID == selectedSpaceRef.workspaceID
-      }
+      return fleetIndex.agentsBySpaceRef[selectedSpaceRef] ?? []
     }
-
-    let deviceRank = Dictionary(
-      uniqueKeysWithValues: scopedDevices.enumerated().map { ($1.id, $0) }
-    )
-    return entries.sorted { lhs, rhs in
-      if lhs.agent.status.sortBucket != rhs.agent.status.sortBucket {
-        return lhs.agent.status.sortBucket < rhs.agent.status.sortBucket
-      }
-      let leftDevice = deviceRank[lhs.ref.deviceID] ?? Int.max
-      let rightDevice = deviceRank[rhs.ref.deviceID] ?? Int.max
-      if leftDevice != rightDevice { return leftDevice < rightDevice }
-      let leftWorkspace = workspaceRank(
-        deviceID: lhs.ref.deviceID,
-        workspaceID: lhs.agent.workspaceID
-      )
-      let rightWorkspace = workspaceRank(
-        deviceID: rhs.ref.deviceID,
-        workspaceID: rhs.agent.workspaceID
-      )
-      if leftWorkspace != rightWorkspace { return leftWorkspace < rightWorkspace }
-      return tabRank(deviceID: lhs.ref.deviceID, tabID: lhs.agent.tabID)
-        < tabRank(deviceID: rhs.ref.deviceID, tabID: rhs.agent.tabID)
+    if let selectedDeviceID {
+      return fleetIndex.agentsByDeviceID[selectedDeviceID] ?? []
     }
+    return fleetIndex.agents
   }
 
   var terminalPanes: [MobileTerminalEntry] {
-    _ = revision
-    var entries = scopedDevices.flatMap { device in
-      (device.snapshot?.ordinaryTerminalPanes ?? []).map {
-        MobileTerminalEntry(
-          ref: FleetPaneRef(deviceID: device.id, paneID: $0.paneID),
-          pane: $0,
-          device: device
-        )
-      }
-    }
     if let selectedSpaceRef {
-      entries = entries.filter {
-        $0.ref.deviceID == selectedSpaceRef.deviceID
-          && $0.pane.workspaceID == selectedSpaceRef.workspaceID
-      }
+      return fleetIndex.terminalsBySpaceRef[selectedSpaceRef] ?? []
     }
-    return entries
+    if let selectedDeviceID {
+      return fleetIndex.terminalsByDeviceID[selectedDeviceID] ?? []
+    }
+    return fleetIndex.terminals
   }
 
   var selectedAgent: MobileAgentEntry? {
     guard let selectedPaneRef else { return nil }
-    return agentsAcrossFleet.first { $0.ref == selectedPaneRef }
+    return fleetIndex.agentsByRef[selectedPaneRef]
   }
 
   var selectedTerminalPane: MobileTerminalEntry? {
     guard let selectedPaneRef else { return nil }
-    return terminalsAcrossFleet.first { $0.ref == selectedPaneRef }
+    return fleetIndex.terminalsByRef[selectedPaneRef]
   }
 
   func tabLabel(for entry: MobileAgentEntry) -> String? {
-    snapshot(for: entry.ref.deviceID)?.tabs?
-      .first { $0.tabID == entry.agent.tabID }?.customLabel
+    fleetIndex.tabLabel(
+      deviceID: entry.ref.deviceID,
+      tabID: entry.agent.tabID
+    )
   }
 
   func spaceName(deviceID: UUID, workspaceID: String) -> String {
-    snapshot(for: deviceID)?.workspaces
-      .first { $0.workspaceID == workspaceID }?.label ?? workspaceID
+    fleetIndex.spaceName(deviceID: deviceID, workspaceID: workspaceID)
   }
 
   func terminalLabel(for entry: MobileTerminalEntry) -> String {
     if let tabID = entry.pane.tabID,
-      let label = snapshot(for: entry.ref.deviceID)?.tabs?
-        .first(where: { $0.tabID == tabID })?.customLabel
+      let label = fleetIndex.tabLabel(deviceID: entry.ref.deviceID, tabID: tabID)
     {
       return label
     }
@@ -389,45 +321,46 @@ final class MobileAppModel {
   }
 
   var showsDeviceBadges: Bool {
-    selectedDeviceID == nil && deviceEntries.count > 1
-  }
-
-  private var scopedDevices: [MobileDeviceEntry] {
-    if let selectedDeviceID {
-      return deviceEntries.filter { $0.id == selectedDeviceID }
-    }
-    return deviceEntries
-  }
-
-  private var agentsAcrossFleet: [MobileAgentEntry] {
-    deviceEntries.flatMap { device in
-      (device.snapshot?.agents ?? []).map {
-        MobileAgentEntry(
-          ref: FleetPaneRef(deviceID: device.id, paneID: $0.paneID),
-          agent: $0,
-          device: device
-        )
-      }
-    }
-  }
-
-  private var terminalsAcrossFleet: [MobileTerminalEntry] {
-    deviceEntries.flatMap { device in
-      (device.snapshot?.ordinaryTerminalPanes ?? []).map {
-        MobileTerminalEntry(
-          ref: FleetPaneRef(deviceID: device.id, paneID: $0.paneID),
-          pane: $0,
-          device: device
-        )
-      }
-    }
+    selectedDeviceID == nil && fleetIndex.devices.count > 1
   }
 
   private func snapshot(for deviceID: UUID) -> SessionSnapshot? {
-    if let snapshot = bridgeSession?.snapshot?.device(deviceID)?.snapshot {
-      return snapshot
+    fleetIndex.snapshotsByDeviceID[deviceID]
+  }
+
+  private func buildDeviceEntries() -> [MobileDeviceEntry] {
+    var result: [MobileDeviceEntry] = []
+
+    if let bridgeSession,
+      let fleet = bridgeSession.snapshot
+    {
+      let bridgeIsLive = bridgeSession.state.isConnected
+      for device in fleet.devices {
+        result.append(MobileDeviceEntry(
+          id: device.id,
+          source: .bridge,
+          name: device.device.name,
+          subtitle: device.device.subtitle,
+          state: bridgeIsLive ? MobileConnectionState(device.connection) : bridgeSession.state,
+          snapshot: device.snapshot,
+          availableAgentKinds: device.availableAgentKinds
+        ))
+      }
     }
-    return directSession(for: deviceID)?.snapshot
+
+    for device in directDevices {
+      let session = directSession(for: device.id)
+      result.append(MobileDeviceEntry(
+        id: device.id,
+        source: .direct,
+        name: device.name,
+        subtitle: device.subtitle,
+        state: session?.state ?? .idle,
+        snapshot: session?.snapshot,
+        availableAgentKinds: []
+      ))
+    }
+    return result
   }
 
   private func directSession(for deviceID: UUID) -> MobileDeviceSession? {
@@ -453,16 +386,6 @@ final class MobileAppModel {
       self?.reconcileSelection()
     }
     bridgeSession = session
-  }
-
-  private func workspaceRank(deviceID: UUID, workspaceID: String) -> Int {
-    snapshot(for: deviceID)?.workspaces
-      .firstIndex { $0.workspaceID == workspaceID } ?? Int.max
-  }
-
-  private func tabRank(deviceID: UUID, tabID: String) -> Int {
-    snapshot(for: deviceID)?.tabs?
-      .firstIndex { $0.tabID == tabID } ?? Int.max
   }
 
   private func reconcileSelection() {

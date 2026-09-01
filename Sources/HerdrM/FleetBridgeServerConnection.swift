@@ -68,12 +68,21 @@ final class FleetBridgeServerConnection {
         server.removeConnection(self)
     }
 
-    func sendSubscribedSnapshot(_ snapshot: FleetSnapshot) {
+    func sendSubscribedSnapshot(encodedSnapshot: Data) {
         guard case .subscribed(let requestID) = stage else { return }
-        send(.snapshot(FleetBridgeSnapshotRecord(
-            requestID: requestID,
-            snapshot: snapshot
-        )))
+        do {
+            sendEncoded(
+                try FleetBridgeWire.encodeSnapshot(
+                    requestID: requestID,
+                    encodedSnapshot: encodedSnapshot
+                )
+            )
+        } catch {
+            fleetBridgeLog.error(
+                "could not encode subscribed snapshot: \(error.localizedDescription)"
+            )
+            close()
+        }
     }
 
     private var isClosed: Bool {
@@ -207,18 +216,18 @@ final class FleetBridgeServerConnection {
             switch record {
             case .snapshot(let request):
                 stage = .busy
-                send(
-                    .snapshot(FleetBridgeSnapshotRecord(
+                sendEncoded(
+                    try FleetBridgeWire.encodeSnapshot(
                         requestID: request.id,
-                        snapshot: try server.snapshot()
-                    )),
+                        encodedSnapshot: try server.encodedSnapshot()
+                    ),
                     closeAfter: true
                 )
 
             case .subscribe(let request):
                 stage = .subscribed(requestID: request.id)
                 server.registerSubscription(self)
-                sendSubscribedSnapshot(try server.snapshot())
+                sendSubscribedSnapshot(encodedSnapshot: try server.encodedSnapshot())
 
             case .rpc(let request):
                 stage = .busy
@@ -326,6 +335,14 @@ final class FleetBridgeServerConnection {
             close()
             return
         }
+        sendEncoded(data, closeAfter: closeAfter)
+    }
+
+    private func sendEncoded(
+        _ data: Data,
+        closeAfter: Bool = false
+    ) {
+        guard !isClosed else { return }
         connection.send(content: data, completion: .contentProcessed { [weak self] error in
             guard let self else { return }
             Task { @MainActor in

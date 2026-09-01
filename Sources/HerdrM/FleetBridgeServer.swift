@@ -44,6 +44,11 @@ enum FleetBridgeHostError: LocalizedError {
 final class FleetBridgeServer: ObservableObject {
     static let shared = FleetBridgeServer()
 
+    private struct FleetCache {
+        let snapshot: FleetSnapshot
+        let encodedSnapshot: Data
+    }
+
     private let networkQueue = DispatchQueue(label: "dev.bybee.herdrm.fleet-bridge.network")
     weak var model: AppModel?
     private var listener: NWListener?
@@ -58,6 +63,13 @@ final class FleetBridgeServer: ObservableObject {
     private var modelCancellable: AnyCancellable?
     private var publishTask: Task<Void, Never>?
     private var revision: UInt64 = 1
+    private var lastBroadcastRevision: UInt64 = 1
+    private var dirtyDeviceIDs: Set<UUID> = []
+    private var rebuildEntireFleet = false
+    private var cachedDevicesByID: [UUID: FleetDeviceSnapshot] = [:]
+    private var cachedDeviceOrder: [UUID] = []
+    private var fleetCache: FleetCache?
+    private var suppressedFleetUpdates: UInt64 = 0
     private var token = ""
     private var configuration = FleetBridgeHostConfiguration.load()
 
@@ -76,8 +88,19 @@ final class FleetBridgeServer: ObservableObject {
         }
 
         modelCancellable?.cancel()
-        modelCancellable = model.objectWillChange.sink { [weak self] _ in
-            Task { @MainActor in self?.schedulePublish() }
+        modelCancellable = model.fleetStateDidChange.sink { [weak self] change in
+            Task { @MainActor in self?.schedulePublish(change) }
+        }
+        do {
+            let cache = try refreshFleetCacheIfNeeded(
+                force: true,
+                incrementRevision: false
+            )
+            lastBroadcastRevision = cache.snapshot.revision
+        } catch {
+            fleetBridgeLog.error(
+                "could not initialize fleet snapshot cache: \(error.localizedDescription)"
+            )
         }
 
         if configuration.enabled {
@@ -106,6 +129,11 @@ final class FleetBridgeServer: ObservableObject {
 
         modelCancellable?.cancel()
         modelCancellable = nil
+        dirtyDeviceIDs.removeAll()
+        rebuildEntireFleet = false
+        cachedDevicesByID.removeAll()
+        cachedDeviceOrder.removeAll()
+        fleetCache = nil
 
         cancelListener()
         for connection in Array(connections.values) {
@@ -124,13 +152,11 @@ final class FleetBridgeServer: ObservableObject {
     }
 
     func snapshot() throws -> FleetSnapshot {
-        guard let model else {
-            throw FleetBridgeHostError.invalidRequest("HerdrM is not ready.")
-        }
-        return FleetSnapshot(
-            revision: revision,
-            devices: model.devices.map { deviceSnapshot(device: $0, model: model) }
-        )
+        try currentFleetCache().snapshot
+    }
+
+    func encodedSnapshot() throws -> Data {
+        try currentFleetCache().encodedSnapshot
     }
 
     func makeTerminalProcess(
@@ -344,17 +370,110 @@ final class FleetBridgeServer: ObservableObject {
         connection.start()
     }
 
-    private func schedulePublish() {
+    private func schedulePublish(_ change: FleetStateChange) {
+        switch change {
+        case .device(let deviceID):
+            dirtyDeviceIDs.insert(deviceID)
+        case .topology:
+            rebuildEntireFleet = true
+        }
+
         publishTask?.cancel()
         publishTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(100))
             guard let self, !Task.isCancelled else { return }
-            self.revision &+= 1
-            guard let snapshot = try? self.snapshot() else { return }
-            for connection in self.subscriptions.values {
-                connection.sendSubscribedSnapshot(snapshot)
+            self.publishTask = nil
+            self.publishPendingFleetChanges()
+        }
+    }
+
+    private func publishPendingFleetChanges() {
+        do {
+            let cache = try currentFleetCache()
+            guard cache.snapshot.revision > lastBroadcastRevision else { return }
+            lastBroadcastRevision = cache.snapshot.revision
+            for connection in subscriptions.values {
+                connection.sendSubscribedSnapshot(
+                    encodedSnapshot: cache.encodedSnapshot
+                )
+            }
+            fleetBridgeLog.debug(
+                "published fleet revision \(cache.snapshot.revision) (\(cache.encodedSnapshot.count) bytes) to \(self.subscriptions.count) subscribers"
+            )
+        } catch {
+            fleetBridgeLog.error(
+                "could not publish fleet snapshot: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func currentFleetCache() throws -> FleetCache {
+        if fleetCache == nil || rebuildEntireFleet || !dirtyDeviceIDs.isEmpty {
+            return try refreshFleetCacheIfNeeded()
+        }
+        guard let fleetCache else {
+            throw FleetBridgeHostError.invalidRequest("HerdrM is not ready.")
+        }
+        return fleetCache
+    }
+
+    @discardableResult
+    private func refreshFleetCacheIfNeeded(
+        force: Bool = false,
+        incrementRevision: Bool = true
+    ) throws -> FleetCache {
+        guard let model else {
+            throw FleetBridgeHostError.invalidRequest("HerdrM is not ready.")
+        }
+
+        let deviceOrder = model.devices.map(\.id)
+        let rebuildAll = force
+            || fleetCache == nil
+            || rebuildEntireFleet
+            || cachedDeviceOrder != deviceOrder
+        var nextDevicesByID = cachedDevicesByID
+        if rebuildAll {
+            nextDevicesByID.removeAll(keepingCapacity: true)
+            for device in model.devices {
+                nextDevicesByID[device.id] = deviceSnapshot(device: device, model: model)
+            }
+        } else {
+            for deviceID in dirtyDeviceIDs {
+                guard let device = model.device(deviceID) else {
+                    nextDevicesByID.removeValue(forKey: deviceID)
+                    continue
+                }
+                nextDevicesByID[deviceID] = deviceSnapshot(device: device, model: model)
             }
         }
+
+        let devices = deviceOrder.compactMap { nextDevicesByID[$0] }
+        dirtyDeviceIDs.removeAll()
+        rebuildEntireFleet = false
+        cachedDevicesByID = nextDevicesByID
+        cachedDeviceOrder = deviceOrder
+
+        if !force,
+           let fleetCache,
+           fleetCache.snapshot.devices == devices {
+            suppressedFleetUpdates &+= 1
+            fleetBridgeLog.debug(
+                "suppressed unchanged fleet update (total \(self.suppressedFleetUpdates))"
+            )
+            return fleetCache
+        }
+
+        if incrementRevision, fleetCache != nil {
+            revision &+= 1
+        }
+        let snapshot = FleetSnapshot(revision: revision, devices: devices)
+        let encodedSnapshot = try JSONEncoder().encode(snapshot)
+        let nextCache = FleetCache(
+            snapshot: snapshot,
+            encodedSnapshot: encodedSnapshot
+        )
+        fleetCache = nextCache
+        return nextCache
     }
 
     private func deviceSnapshot(device: Device, model: AppModel) -> FleetDeviceSnapshot {
