@@ -30,19 +30,23 @@ public struct FleetBridgeIPv4Interface: Equatable, Sendable {
     }
 }
 
-/// The exact listener endpoint and the address placed in pairing JSON.
+/// The listener binding and the address placed in pairing JSON.
 public struct FleetBridgeNetworkIdentity: Equatable, Sendable {
     /// nil means Network.framework should listen on every interface.
     public let bindHost: String?
+    /// The selected interface that owns `bindHost`, when interface scoping is required.
+    public let interfaceName: String?
     public let pairingHost: String
     public let scope: FleetBridgeNetworkScope
 
     public init(
         bindHost: String?,
+        interfaceName: String? = nil,
         pairingHost: String,
         scope: FleetBridgeNetworkScope
     ) {
         self.bindHost = bindHost
+        self.interfaceName = interfaceName
         self.pairingHost = pairingHost
         self.scope = scope
     }
@@ -80,6 +84,7 @@ public enum FleetBridgeNetworkSelector {
         if let tailscale {
             return FleetBridgeNetworkIdentity(
                 bindHost: tailscale.address,
+                interfaceName: tailscale.name,
                 pairingHost: tailscale.address,
                 scope: .tailscale
             )

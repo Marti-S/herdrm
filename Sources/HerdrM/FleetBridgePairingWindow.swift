@@ -33,7 +33,7 @@ final class FleetBridgePairingWindowController: NSObject, NSWindowDelegate {
 }
 
 @MainActor
-private struct FleetBridgePairingView: View {
+struct FleetBridgePairingView: View {
     let model: AppModel
 
     @ObservedObject private var bridgeServer = FleetBridgeServer.shared
