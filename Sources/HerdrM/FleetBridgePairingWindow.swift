@@ -21,8 +21,8 @@ final class FleetBridgePairingWindowController: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: controller)
         window.title = String(localized: "Mobile Pairing")
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 640, height: 560))
-        window.minSize = NSSize(width: 560, height: 500)
+        window.setContentSize(NSSize(width: 640, height: 620))
+        window.minSize = NSSize(width: 560, height: 560)
         window.isReleasedWhenClosed = false
         window.center()
         window.delegate = self
@@ -43,6 +43,8 @@ private struct FleetBridgePairingView: View {
     @State private var errorMessage: String?
     @State private var copied = false
     @State private var showRotateConfirmation = false
+    @State private var launchAtLogin = FleetBridgeBackgroundLaunch.isRequested
+    @State private var backgroundLaunchStatus = FleetBridgeBackgroundLaunch.status
 
     private var port: UInt16 {
         UInt16(exactly: storedPort) ?? FleetBridgeProtocol.defaultPort
@@ -99,7 +101,7 @@ private struct FleetBridgePairingView: View {
             }
         }
         .padding(22)
-        .frame(minWidth: 560, minHeight: 500)
+        .frame(minWidth: 560, minHeight: 560)
         .onAppear(perform: reload)
         .confirmationDialog(
             String(localized: "Rotate the pairing token?"),
@@ -139,7 +141,7 @@ private struct FleetBridgePairingView: View {
                 )
                 .frame(width: 210, height: 210)
             }
-            Text(String(localized: "The QR code contains the same pairing JSON. Copy and paste is supported in the current iOS build."))
+            Text(String(localized: "Scan this code from Add Connection → Mac Bridge on iPhone or iPad, or paste the same pairing JSON."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -150,6 +152,37 @@ private struct FleetBridgePairingView: View {
     private var configuration: some View {
         Form {
             Toggle(String(localized: "Enable mobile bridge"), isOn: $enabled)
+
+            Toggle(isOn: Binding(
+                get: { launchAtLogin },
+                set: updateLaunchAtLogin
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(String(localized: "Keep bridge available in background"))
+                    Text(String(localized: "Launches HerdrM at login without opening a window. Closing the last window leaves a menu-bar bridge running."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .disabled(backgroundLaunchStatus == .unavailable)
+
+            if backgroundLaunchStatus == .requiresApproval {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(String(localized: "macOS requires approval in Login Items before background launch can run."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Button(String(localized: "Open Login Items Settings")) {
+                            FleetBridgeBackgroundLaunch.openSystemSettings()
+                        }
+                        Button(String(localized: "Check Again"), action: refreshBackgroundLaunchState)
+                    }
+                }
+            } else if backgroundLaunchStatus == .unavailable {
+                Text(String(localized: "Background launch is unavailable for this build location or signature."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             Toggle(isOn: $bindAllInterfaces) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -198,6 +231,25 @@ private struct FleetBridgePairingView: View {
         }
     }
 
+    private func updateLaunchAtLogin(_ requested: Bool) {
+        errorMessage = nil
+        do {
+            try FleetBridgeBackgroundLaunch.setEnabled(requested)
+        } catch {
+            refreshBackgroundLaunchState()
+            if backgroundLaunchStatus != .requiresApproval {
+                errorMessage = error.localizedDescription
+            }
+            return
+        }
+        refreshBackgroundLaunchState()
+    }
+
+    private func refreshBackgroundLaunchState() {
+        backgroundLaunchStatus = FleetBridgeBackgroundLaunch.status
+        launchAtLogin = FleetBridgeBackgroundLaunch.isRequested
+    }
+
     private func restartBridge() {
         errorMessage = nil
         FleetBridgeServer.shared.stop()
@@ -207,6 +259,7 @@ private struct FleetBridgePairingView: View {
 
     private func reload() {
         copied = false
+        refreshBackgroundLaunchState()
         do {
             if !FileManager.default.fileExists(
                 atPath: FleetBridgeCredentialStore.pairingInfoURL.path

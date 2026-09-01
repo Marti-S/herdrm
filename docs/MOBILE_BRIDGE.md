@@ -9,11 +9,20 @@ Choose **herdrm → Mobile Pairing…** on the Mac to administer mobile access. 
 - displays a QR representation and selectable copy of the complete pairing JSON;
 - reveals the protected pairing file in Finder;
 - enables or disables the bridge;
+- optionally launches HerdrM at login and keeps the bridge in menu-bar background mode;
 - changes the listening port and loopback policy;
 - applies settings by restarting the in-process bridge;
 - rotates the Keychain-backed token after destructive confirmation.
 
 Rotating the token disconnects existing clients and invalidates their saved pairing until they import the new data.
+
+## Background availability
+
+Enable **Keep bridge available in background** in the Mobile Pairing window to register HerdrM as a per-user login item. A login-item launch starts the Mac device sessions and bridge, suppresses the normal application window, and exposes a small menu-bar item for opening or quitting HerdrM.
+
+Closing the last HerdrM window never terminates the process or disconnects mobile clients. When background availability is enabled, the app switches to the same menu-bar presentation after the last window closes. Opening HerdrM again restores the normal Dock application and window. Explicit **Quit HerdrM** still closes terminal children, SSH tunnels, and bridge connections cleanly.
+
+The bridge stays in the main HerdrM process rather than a second credential-bearing daemon. This preserves a single owner for `AppModel`, SSH sessions, Keychain credentials, terminal processes, and fleet revisions. macOS may require approval under **System Settings → General → Login Items** before the login item becomes active.
 
 ## Network exposure
 
