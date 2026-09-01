@@ -24,6 +24,23 @@ final class MobileAppModel {
   private var bridgeSession: MobileBridgeSession?
   @ObservationIgnored private var fleetIndexRevision = -1
   @ObservationIgnored private var cachedFleetIndex = MobileFleetIndex.empty
+  @ObservationIgnored private var conversationStores: [FleetPaneRef: ConversationReaderStore] = [:]
+
+  func conversationStore(
+    for ref: FleetPaneRef,
+    transport: any MobileTransport
+  ) -> ConversationReaderStore {
+    if let existing = conversationStores[ref] { return existing }
+    let store = ConversationReaderStore(
+      provider: HerdrPaneTranscriptProvider(
+        transport: transport,
+        paneID: ref.paneID
+      )
+    )
+    conversationStores[ref] = store
+    return store
+  }
+
 
   init() {
     bridge = bridgeStore.load()

@@ -11,10 +11,10 @@ extension MobileTransport {
     /// attached application's viewport.
     func readPaneTranscript(
         paneID: String,
-        lines: Int = 1_000,
+        lines: Int = 250,
         source: TerminalReadSource = .recentUnwrapped
     ) async throws -> TerminalReadResult {
-        let boundedLines = max(1, min(lines, 1_000))
+        let boundedLines = max(1, min(lines, 250))
         let envelope: PaneReadEnvelope = try await request(
             method: "pane.read",
             params: .object([
@@ -42,19 +42,19 @@ struct HerdrPaneTranscriptProvider: AgentTranscriptProvider {
     init(
         transport: any MobileTransport,
         paneID: String,
-        lineLimit: Int = 1_000,
+        lineLimit: Int = 250,
         pollInterval: Duration = .milliseconds(900)
     ) {
         self.transport = transport
         self.paneID = paneID
-        self.lineLimit = max(1, min(lineLimit, 1_000))
+        self.lineLimit = max(1, min(lineLimit, 250))
         self.pollInterval = pollInterval
     }
 
     func snapshot() async throws -> TranscriptSnapshot {
         let read = try await transport.readPaneTranscript(
             paneID: paneID,
-            lines: lineLimit
+            lines: min(lineLimit, 100)
         )
         return Self.makeSnapshot(read, paneID: paneID)
     }
@@ -70,14 +70,16 @@ struct HerdrPaneTranscriptProvider: AgentTranscriptProvider {
         return AsyncThrowingStream { continuation in
             let task = Task.detached(priority: .utility) {
                 var lastSequence = sequence
+                var lastText: String?
                 do {
                     while !Task.isCancelled {
                         let read = try await transport.readPaneTranscript(
                             paneID: paneID,
                             lines: lineLimit
                         )
-                        if lastSequence != read.revision {
+                        if lastSequence != read.revision || lastText != read.text {
                             lastSequence = read.revision
+                            lastText = read.text
                             continuation.yield(
                                 .snapshot(Self.makeSnapshot(read, paneID: paneID))
                             )
@@ -95,13 +97,15 @@ struct HerdrPaneTranscriptProvider: AgentTranscriptProvider {
         }
     }
 
+
     private static func makeSnapshot(
         _ read: TerminalReadResult,
         paneID: String
     ) -> TranscriptSnapshot {
         let providerID = "herdr-pane:\(paneID)"
+        let readableText = readableTerminalText(read.text)
         let items: [ConversationItem]
-        if read.text.isEmpty {
+        if readableText.isEmpty {
             items = []
         } else {
             items = [
@@ -109,7 +113,7 @@ struct HerdrPaneTranscriptProvider: AgentTranscriptProvider {
                     id: "\(providerID):terminal",
                     sequence: read.revision,
                     role: .terminal,
-                    blocks: [.terminalText(read.text)],
+                    blocks: [.terminalText(readableText)],
                     state: .complete
                 )
             ]
@@ -122,6 +126,46 @@ struct HerdrPaneTranscriptProvider: AgentTranscriptProvider {
             isTruncated: read.truncated
         )
     }
+
+    /// Flattens terminal-only framing without inferring message roles. The raw
+    /// terminal remains available from the screen's Terminal mode.
+    private static func readableTerminalText(_ text: String) -> String {
+        let decoration = CharacterSet(charactersIn: "─━═│┃┄┅┈┉╭╮╰╯├┤┬┴┼_")
+        let edgeDecoration = CharacterSet(charactersIn: "│┃╭╮╰╯├┤┬┴┼")
+        var output: [String] = []
+        var previousWasBlank = true
+
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            var line = String(rawLine)
+            while line.last?.isWhitespace == true { line.removeLast() }
+            let visible = line.unicodeScalars.filter {
+                !CharacterSet.whitespacesAndNewlines.contains($0)
+            }
+            let decorationCount = visible.reduce(into: 0) { count, scalar in
+                if decoration.contains(scalar) { count += 1 }
+            }
+            if visible.count >= 3, decorationCount * 5 >= visible.count * 4 {
+                line = ""
+            } else {
+                let withoutBorder = line.trimmingCharacters(in: edgeDecoration)
+                if withoutBorder != line {
+                    line = withoutBorder.trimmingCharacters(in: .whitespaces)
+                }
+            }
+
+            if line.isEmpty {
+                guard !previousWasBlank else { continue }
+                previousWasBlank = true
+            } else {
+                previousWasBlank = false
+            }
+            output.append(line)
+        }
+
+        while output.last?.isEmpty == true { output.removeLast() }
+        return output.joined(separator: "\n")
+    }
+
 }
 
 @MainActor
@@ -138,6 +182,7 @@ final class ConversationReaderStore: ObservableObject {
     @Published private(set) var hasNewOutput = false
     @Published private(set) var updateErrorMessage: String?
     @Published private(set) var isPinnedToLatest = true
+    @Published private(set) var contentVersion: UInt64 = 0
 
     private let provider: any AgentTranscriptProvider
     private var updateTask: Task<Void, Never>?
@@ -212,6 +257,7 @@ final class ConversationReaderStore: ObservableObject {
         isPinnedToLatest = true
         if let pendingSnapshot {
             snapshot = pendingSnapshot
+            contentVersion &+= 1
             self.pendingSnapshot = nil
         }
         hasNewOutput = false
@@ -249,6 +295,7 @@ final class ConversationReaderStore: ObservableObject {
     private func install(_ next: TranscriptSnapshot, force: Bool) {
         if force || isPinnedToLatest || snapshot == nil {
             snapshot = next
+            contentVersion &+= 1
             pendingSnapshot = nil
             hasNewOutput = false
         } else {
@@ -263,6 +310,7 @@ final class ConversationReaderStore: ObservableObject {
         (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 }
+
 
 struct ConversationReaderView: View {
     @ObservedObject var store: ConversationReaderStore
@@ -289,7 +337,7 @@ struct ConversationReaderView: View {
                 proxy.scrollTo(bottomID, anchor: .bottom)
             }
             .onDisappear { store.stop() }
-            .onChange(of: store.revision) { _, _ in
+            .onChange(of: store.contentVersion) { _, _ in
                 guard store.isPinnedToLatest, !userDrivenScroll else { return }
                 Task { @MainActor in
                     await Task.yield()
@@ -299,6 +347,7 @@ struct ConversationReaderView: View {
             .animation(.easeOut(duration: 0.18), value: store.hasNewOutput)
         }
     }
+
 
     private var transcriptScrollView: some View {
         ScrollView {
@@ -359,7 +408,7 @@ struct ConversationReaderView: View {
 
         if store.isTruncated {
             Label(
-                String(localized: "Showing the latest 1,000 terminal rows"),
+                String(localized: "Showing the latest terminal history"),
                 systemImage: "ellipsis"
             )
             .font(.caption)
@@ -515,7 +564,7 @@ private struct TranscriptBlockView: View {
 
         case .terminalText(let text):
             Text(text)
-                .font(.system(size: 14, weight: .regular, design: .monospaced))
+                .font(.body)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

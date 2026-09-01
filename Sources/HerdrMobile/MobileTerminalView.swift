@@ -50,7 +50,6 @@ final class MobileAttachSession: ObservableObject {
 
     private var terminalSession: (any TerminalSession)?
     private var outputBatcher: TerminalOutputBatcher?
-    private var terminalFeedSender: TerminalFeedSender?
     private var startTask: Task<Void, Never>?
     private var readTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
@@ -76,14 +75,12 @@ final class MobileAttachSession: ObservableObject {
 
     func attachTerminalView(_ view: TerminalView) {
         terminalView = view
-        terminalFeedSender = view.feedSender
         terminalDidScroll(to: view.scrollPosition)
     }
 
     func detachTerminalView(_ view: TerminalView) {
         guard terminalView === view else { return }
         terminalView = nil
-        terminalFeedSender = nil
     }
 
     func start(
@@ -191,9 +188,8 @@ final class MobileAttachSession: ObservableObject {
     }
 
     private func feed(_ data: Data, generation: UInt64) {
-        guard lifecycleGeneration == generation, let terminalFeedSender else { return }
-        let bytes = [UInt8](data)
-        terminalFeedSender.feed(byteArray: bytes[...])
+        guard lifecycleGeneration == generation else { return }
+        terminalView?.feed(byteArray: ArraySlice([UInt8](data)))
         firstFrameDidArrive(generation: generation)
     }
 
@@ -368,7 +364,13 @@ struct MobileTerminalScreen: View {
     @State private var terminalControlsHeight: CGFloat = 0
     private let title: String
 
-    init(transport: MobileTransport, target: TerminalAttachTarget, paneID: String, title: String) {
+    init(
+        transport: MobileTransport,
+        target: TerminalAttachTarget,
+        paneID: String,
+        conversationStore: ConversationReaderStore? = nil,
+        title: String
+    ) {
         let session = MobileAttachSession(
             transport: transport,
             target: target,
@@ -376,13 +378,14 @@ struct MobileTerminalScreen: View {
         )
         _session = StateObject(wrappedValue: session)
         _conversationStore = StateObject(
-            wrappedValue: ConversationReaderStore(
+            wrappedValue: conversationStore ?? ConversationReaderStore(
                 provider: HerdrPaneTranscriptProvider(
                     transport: transport,
                     paneID: paneID
                 )
             )
         )
+
         _displayMode = State(
             initialValue: session.agentPaneID == nil ? .terminal : .conversation
         )
