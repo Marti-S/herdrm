@@ -1,0 +1,101 @@
+name: Apple platform builds
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-builds-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  herdrkit-tests:
+    name: HerdrKit tests
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select --switch /Applications/Xcode.app
+
+      - name: Print toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Run HerdrKit tests
+        run: swift test --package-path Packages/HerdrKit --parallel
+
+  xcode-builds:
+    name: ${{ matrix.name }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS app
+            scheme: HerdrM
+            destination: generic/platform=macOS
+            sdk: macosx
+            archs: ""
+          - name: iOS device
+            scheme: HerdrMobile
+            destination: generic/platform=iOS
+            sdk: iphoneos
+            archs: arm64
+          - name: iOS simulator (arm64)
+            scheme: HerdrMobile
+            destination: generic/platform=iOS Simulator
+            sdk: iphonesimulator
+            archs: arm64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select --switch /Applications/Xcode.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild \
+            -project HerdrM.xcodeproj \
+            -scheme "${{ matrix.scheme }}" \
+            -resolvePackageDependencies
+
+      - name: Build ${{ matrix.name }}
+        env:
+          SCHEME: ${{ matrix.scheme }}
+          DESTINATION: ${{ matrix.destination }}
+          SDK: ${{ matrix.sdk }}
+          ARCHS_OVERRIDE: ${{ matrix.archs }}
+        run: |
+          args=(
+            -project HerdrM.xcodeproj
+            -scheme "$SCHEME"
+            -configuration Debug
+            -destination "$DESTINATION"
+            -sdk "$SDK"
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-$SCHEME-$SDK"
+            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGN_IDENTITY=
+            DEVELOPMENT_TEAM=
+          )
+          if [[ -n "$ARCHS_OVERRIDE" ]]; then
+            args+=(ARCHS="$ARCHS_OVERRIDE" ONLY_ACTIVE_ARCH=YES EXCLUDED_ARCHS=)
+          fi
+          xcodebuild "${args[@]}" build
