@@ -34,6 +34,7 @@ struct FleetBridgePairingInfo: Codable, Equatable {
     let port: UInt16
     let token: String
     let loopbackOnly: Bool
+    let networkScope: FleetBridgeNetworkScope
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol"
@@ -43,6 +44,7 @@ struct FleetBridgePairingInfo: Codable, Equatable {
         case port
         case token
         case loopbackOnly = "loopback_only"
+        case networkScope = "network_scope"
     }
 }
 
@@ -90,16 +92,18 @@ enum FleetBridgeCredentialStore {
 
     static func writePairingInfo(
         configuration: FleetBridgeHostConfiguration,
-        serverName: String
+        serverName: String,
+        networkIdentity: FleetBridgeNetworkIdentity
     ) throws {
         let info = FleetBridgePairingInfo(
             protocolVersion: FleetBridgeProtocol.version,
             serverID: serverID(),
             serverName: serverName,
-            hostHint: ProcessInfo.processInfo.hostName,
+            hostHint: networkIdentity.pairingHost,
             port: configuration.port,
             token: try token(),
-            loopbackOnly: !configuration.bindAllInterfaces
+            loopbackOnly: networkIdentity.loopbackOnly,
+            networkScope: networkIdentity.scope
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -115,17 +119,6 @@ enum FleetBridgeCredentialStore {
             [.posixPermissions: 0o600],
             ofItemAtPath: url.path
         )
-    }
-
-    static func constantTimeMatches(_ candidate: String, _ expected: String) -> Bool {
-        let lhs = Array(candidate.utf8)
-        let rhs = Array(expected.utf8)
-        guard lhs.count == rhs.count else { return false }
-        var difference: UInt8 = 0
-        for index in lhs.indices {
-            difference |= lhs[index] ^ rhs[index]
-        }
-        return difference == 0
     }
 
     private static func loadToken() throws -> String? {

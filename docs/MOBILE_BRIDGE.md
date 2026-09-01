@@ -10,7 +10,8 @@ Choose **herdrm → Mobile Pairing…** on the Mac to administer mobile access. 
 - reveals the protected pairing file in Finder;
 - enables or disables the bridge;
 - optionally launches HerdrM at login and keeps the bridge in menu-bar background mode;
-- changes the listening port and loopback policy;
+- shows the active listener address and network scope;
+- changes the listening port and optional all-interface policy;
 - applies settings by restarting the in-process bridge;
 - rotates the Keychain-backed token after destructive confirmation.
 
@@ -22,38 +23,49 @@ Enable **Keep bridge available in background** in the Mobile Pairing window to r
 
 Closing the last HerdrM window never terminates the process or disconnects mobile clients. When background availability is enabled, the app switches to the same menu-bar presentation after the last window closes. Opening HerdrM again restores the normal Dock application and window. Explicit **Quit HerdrM** still closes terminal children, SSH tunnels, and bridge connections cleanly.
 
-The bridge stays in the main HerdrM process rather than a second credential-bearing daemon. This preserves a single owner for `AppModel`, SSH sessions, Keychain credentials, terminal processes, and fleet revisions. macOS may require approval under **System Settings → General → Login Items** before the login item becomes active.
+The bridge stays in the main HerdrM process rather than a second credential-bearing daemon. This preserves a single owner for `AppModel`, SSH sessions, Keychain credentials, terminal processes, authentication state, and fleet revisions. macOS may require approval under **System Settings → General → Login Items** before the login item becomes active.
 
 ## Network exposure
 
-The bridge is enabled by default and listens only on `127.0.0.1:45983`. The token is random, stored in the macOS Keychain, and exported for initial pairing in a mode-`0600` file:
+The bridge is enabled by default on TCP port `45983`. Its listener policy is:
+
+1. When a Tailscale tunnel interface has an active IPv4 address in `100.64.0.0/10`, bind **only** that exact tailnet address.
+2. When Tailscale is unavailable, bind only `127.0.0.1`.
+3. Bind every interface only when **Listen on all interfaces** is explicitly enabled.
+
+This permits direct iPhone/iPad access through the Mac's tailnet address without a separate TCP forward and without opening the bridge on Wi-Fi or Ethernet. HerdrM re-evaluates active interfaces when the network path changes and periodically as a fallback. If the Tailscale address appears, disappears, or changes, it moves the listening socket, updates the status in the pairing window, and rewrites the pairing payload and QR code. Already accepted fleet and terminal connections are not explicitly cancelled when the listener moves.
+
+The pairing token is random, stored in the macOS Keychain, and exported for initial pairing in a mode-`0600` file:
 
 ```text
 ~/Library/Application Support/HerdrM/mobile-pairing.json
 ```
 
-For Tailscale, expose that loopback TCP port with a raw TCP forward, or enable **Listen beyond loopback** in the Mobile Pairing window and restart the bridge. The equivalent command is:
+The pairing payload includes:
 
-```sh
-defaults write dev.bybee.herdrm fleetBridge.bindAllInterfaces -bool true
-```
+- `host_hint`: the selected Tailscale IP, loopback address, or fallback hostname;
+- `network_scope`: `tailscale`, `loopback`, or `all-interfaces`;
+- `loopback_only`: retained for compatibility with existing mobile pairing UI.
 
-Use the Mac's Tailscale IP or MagicDNS name from the iOS client. Tailnet policy should restrict the bridge port to the intended user/devices. **Listen beyond loopback** exposes the TCP listener on non-Tailscale interfaces too, so it should only be used on a trusted network path.
+Tailnet policy should restrict TCP port `45983` to the intended users or devices. **Listen on all interfaces** also exposes the bridge on local networks and should remain off unless that exposure is deliberate.
 
-The listener can also be disabled or moved through the pairing window. Equivalent defaults commands are:
+The listener can be disabled, moved, or explicitly opened to every interface through the pairing window. Equivalent defaults commands are:
 
 ```sh
 defaults write dev.bybee.herdrm fleetBridge.enabled -bool false
 defaults write dev.bybee.herdrm fleetBridge.port -int 45983
+defaults write dev.bybee.herdrm fleetBridge.bindAllInterfaces -bool true
 ```
 
 ## Pairing iPhone or iPad
 
-1. Open **herdrm → Mobile Pairing…** on the Mac.
-2. In HerdrM for iOS choose **Add Connection → Mac Bridge**.
-3. Scan the QR code, or paste the pairing JSON copied from the Mac.
-4. Replace the suggested host with the Mac's Tailscale IP or MagicDNS name when necessary.
-5. Confirm the port and add the bridge.
+1. Start Tailscale on the Mac and iPhone/iPad.
+2. Open **herdrm → Mobile Pairing…** on the Mac and confirm it reports **Tailscale only**.
+3. In HerdrM for iOS choose **Add Connection → Mac Bridge**.
+4. Scan the QR code, or paste the pairing JSON copied from the Mac.
+5. Confirm the automatically supplied tailnet address and port, then add the bridge.
+
+If the Mac reports loopback, start Tailscale and leave the pairing window open; its status and QR code update when the tunnel address becomes available.
 
 The endpoint metadata is stored in iOS user defaults. The pairing token is stored separately in the device-only Keychain. Remote SSH passwords, keys, host configuration, and reconnect state remain on the Mac.
 
@@ -70,6 +82,8 @@ The paperclip in an Agent terminal opens the iOS Files picker. HerdrM stages the
 - Files for an SSH-backed device are first received by the Mac and then transferred with the Mac app's existing authenticated SFTP service. The temporary Mac copy is removed after staging.
 - Direct SSH fallback uploads to `~/.cache/herdrm/mobile-uploads` on the target with mode `0600`, a partial filename, and an atomic final rename.
 - Remote SSH credentials remain on the Mac in bridge mode and never enter the attachment payload.
+
+This is bounded attachment staging, not full mobile file-browser parity.
 
 ## Protocol
 

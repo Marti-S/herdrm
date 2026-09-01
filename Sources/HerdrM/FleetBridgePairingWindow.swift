@@ -21,8 +21,8 @@ final class FleetBridgePairingWindowController: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: controller)
         window.title = String(localized: "Mobile Pairing")
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 640, height: 620))
-        window.minSize = NSSize(width: 560, height: 560)
+        window.setContentSize(NSSize(width: 640, height: 640))
+        window.minSize = NSSize(width: 560, height: 580)
         window.isReleasedWhenClosed = false
         window.center()
         window.delegate = self
@@ -32,9 +32,11 @@ final class FleetBridgePairingWindowController: NSObject, NSWindowDelegate {
     }
 }
 
+@MainActor
 private struct FleetBridgePairingView: View {
     let model: AppModel
 
+    @ObservedObject private var bridgeServer = FleetBridgeServer.shared
     @AppStorage(FleetBridgeHostConfiguration.enabledKey) private var enabled = true
     @AppStorage(FleetBridgeHostConfiguration.bindAllInterfacesKey) private var bindAllInterfaces = false
     @AppStorage(FleetBridgeHostConfiguration.portKey) private var storedPort = Int(FleetBridgeProtocol.defaultPort)
@@ -101,8 +103,11 @@ private struct FleetBridgePairingView: View {
             }
         }
         .padding(22)
-        .frame(minWidth: 560, minHeight: 560)
+        .frame(minWidth: 560, minHeight: 580)
         .onAppear(perform: reload)
+        .onChange(of: bridgeServer.currentNetworkIdentity) { _, _ in
+            reload()
+        }
         .confirmationDialog(
             String(localized: "Rotate the pairing token?"),
             isPresented: $showRotateConfirmation,
@@ -186,8 +191,8 @@ private struct FleetBridgePairingView: View {
 
             Toggle(isOn: $bindAllInterfaces) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(String(localized: "Listen beyond loopback"))
-                    Text(String(localized: "Required for direct access through the Mac's Tailscale IP. Leave off when using a raw Tailscale TCP forward."))
+                    Text(String(localized: "Listen on all interfaces"))
+                    Text(String(localized: "Also exposes the bridge on Wi-Fi and Ethernet. Leave off to use an exact Tailscale address with loopback fallback."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -207,14 +212,40 @@ private struct FleetBridgePairingView: View {
                 }
             }
 
-            Text(bindAllInterfaces
-                ? String(localized: "Listening on port \(port) on available interfaces after restart.")
-                : String(localized: "Listening on 127.0.0.1:\(port) after restart."))
+            Label(networkStatusText, systemImage: networkStatusIcon)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(networkStatusColor)
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity)
+    }
+
+    private var networkStatusText: String {
+        guard enabled else { return String(localized: "The mobile bridge is disabled.") }
+        let identity = bridgeServer.currentNetworkIdentity
+        switch identity.scope {
+        case .tailscale:
+            return String(localized: "Tailscale only: \(identity.pairingHost):\(port)")
+        case .loopback:
+            return String(localized: "Tailscale is unavailable; listening on 127.0.0.1:\(port) only.")
+        case .allInterfaces:
+            return String(localized: "Listening on all interfaces at port \(port), including the local network.")
+        }
+    }
+
+    private var networkStatusIcon: String {
+        switch bridgeServer.currentNetworkIdentity.scope {
+        case .tailscale: return "checkmark.shield"
+        case .loopback: return "desktopcomputer"
+        case .allInterfaces: return "exclamationmark.triangle"
+        }
+    }
+
+    private var networkStatusColor: Color {
+        switch bridgeServer.currentNetworkIdentity.scope {
+        case .tailscale, .loopback: return .secondary
+        case .allInterfaces: return .orange
+        }
     }
 
     private func applyConfiguration() {
@@ -252,8 +283,8 @@ private struct FleetBridgePairingView: View {
 
     private func restartBridge() {
         errorMessage = nil
-        FleetBridgeServer.shared.stop()
-        FleetBridgeServer.shared.start(model: model)
+        bridgeServer.stop()
+        bridgeServer.start(model: model)
         reload()
     }
 
@@ -267,7 +298,8 @@ private struct FleetBridgePairingView: View {
                 try FleetBridgeCredentialStore.writePairingInfo(
                     configuration: .load(),
                     serverName: Host.current().localizedName
-                        ?? ProcessInfo.processInfo.hostName
+                        ?? ProcessInfo.processInfo.hostName,
+                    networkIdentity: bridgeServer.currentNetworkIdentity
                 )
             }
             let data = try Data(contentsOf: FleetBridgeCredentialStore.pairingInfoURL)

@@ -41,6 +41,7 @@ struct MobileBridgePairingInfo: Codable, Equatable {
   let port: UInt16
   let token: String
   let loopbackOnly: Bool
+  let networkScope: FleetBridgeNetworkScope?
 
   enum CodingKeys: String, CodingKey {
     case protocolVersion = "protocol"
@@ -50,6 +51,11 @@ struct MobileBridgePairingInfo: Codable, Equatable {
     case port
     case token
     case loopbackOnly = "loopback_only"
+    case networkScope = "network_scope"
+  }
+
+  var resolvedNetworkScope: FleetBridgeNetworkScope {
+    networkScope ?? (loopbackOnly ? .loopback : .allInterfaces)
   }
 
   static func decode(_ text: String) throws -> MobileBridgePairingInfo {
