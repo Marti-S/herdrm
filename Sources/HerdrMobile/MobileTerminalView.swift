@@ -7,13 +7,11 @@ import UniformTypeIdentifiers
 /// One live transport-neutral terminal session, pumped into a SwiftTerm view.
 ///
 /// The session outlives view updates and ends when its transport reports
-/// orderly closure, ownership loss, or a network failure. Direct SSH uses
-/// Herdr's structured observe/control stream; bridge mode can later provide the
-/// same frames without changing this presentation layer.
+/// orderly closure, ownership loss, or a network failure. Direct SSH and the
+/// Mac bridge expose the same ordered terminal-frame surface.
 ///
-/// Mobile terminals are display-first (Heeler's ADR 0013 insight): the live
-/// pane renders, but typing goes through the composer (`agent.prompt`) and a
-/// key bar (`pane.send_input` keys), which herdr encodes properly server-side.
+/// Mobile terminals are display-first: the live pane renders, but typing can
+/// go through the composer (`agent.prompt`) and key bar (`pane.send_input`).
 /// Raw keyboard input requires an explicit control lease.
 @MainActor
 final class MobileAttachSession: ObservableObject {
@@ -25,6 +23,8 @@ final class MobileAttachSession: ObservableObject {
 
     @Published var status: Status = .connecting
     @Published private(set) var mode: TerminalSessionMode = .observe
+    @Published private(set) var terminalScrollPosition: Double = 1
+    @Published private(set) var isAtLatestOutput = true
 
     let transport: MobileTransport
     let target: TerminalAttachTarget
@@ -55,6 +55,7 @@ final class MobileAttachSession: ObservableObject {
     private var resizeTask: Task<Void, Never>?
     private var lifecycleGeneration: UInt64 = 0
     private var lastSize = TerminalSize(columns: 80, rows: 24)
+    private var pendingScrollRestore: Double?
     weak var terminalView: TerminalView?
 
     init(transport: MobileTransport, target: TerminalAttachTarget, paneID: String) {
@@ -70,6 +71,16 @@ final class MobileAttachSession: ObservableObject {
 
     var isControlling: Bool {
         mode.access == .control && status == .running
+    }
+
+    func attachTerminalView(_ view: TerminalView) {
+        terminalView = view
+        terminalDidScroll(to: view.scrollPosition)
+    }
+
+    func detachTerminalView(_ view: TerminalView) {
+        guard terminalView === view else { return }
+        terminalView = nil
     }
 
     func start(
@@ -91,7 +102,7 @@ final class MobileAttachSession: ObservableObject {
         let generation = lifecycleGeneration
         let outputBatcher = TerminalOutputBatcher { [weak self] data in
             guard let self, self.lifecycleGeneration == generation else { return }
-            self.feed(data)
+            self.feed(data, generation: generation)
         }
         self.outputBatcher = outputBatcher
 
@@ -136,9 +147,16 @@ final class MobileAttachSession: ObservableObject {
         restart(mode: .control(takeover: takeover))
     }
 
-    private func restart(mode: TerminalSessionMode) {
+    private func restart(
+        mode: TerminalSessionMode,
+        preserveScrollPosition: Bool = false
+    ) {
         let size = lastSize
+        let restorePosition = preserveScrollPosition && !isAtLatestOutput
+            ? terminalScrollPosition
+            : nil
         stop()
+        pendingScrollRestore = restorePosition
         start(columns: size.columns, rows: size.rows, mode: mode)
     }
 
@@ -147,14 +165,7 @@ final class MobileAttachSession: ObservableObject {
         outputBatcher: TerminalOutputBatcher,
         generation: UInt64
     ) {
-        let complete: @MainActor @Sendable (String) -> Void = { [weak self] endingReason in
-            guard let self, self.lifecycleGeneration == generation else { return }
-            self.outputBatcher = nil
-            if case .running = self.status {
-                self.status = .ended(endingReason)
-            }
-        }
-        readTask = Task.detached(priority: .userInitiated) {
+        readTask = Task.detached(priority: .userInitiated) { [weak self] in
             var endingReason = String(localized: "Session ended")
             do {
                 while !Task.isCancelled {
@@ -169,12 +180,44 @@ final class MobileAttachSession: ObservableObject {
             await outputBatcher.finish()
             await terminalSession.close()
             guard !Task.isCancelled else { return }
-            await complete(endingReason)
+            await self?.terminalPumpEnded(
+                generation: generation,
+                reason: endingReason
+            )
         }
     }
 
-    private func feed(_ data: Data) {
+    private func feed(_ data: Data, generation: UInt64) {
+        guard lifecycleGeneration == generation else { return }
         terminalView?.feed(byteArray: ArraySlice([UInt8](data)))
+        firstFrameDidArrive(generation: generation)
+    }
+
+    private func firstFrameDidArrive(generation: UInt64) {
+        guard lifecycleGeneration == generation,
+              let position = pendingScrollRestore
+        else { return }
+        pendingScrollRestore = nil
+
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self,
+                  self.lifecycleGeneration == generation,
+                  let terminalView = self.terminalView
+            else { return }
+            terminalView.scroll(toPosition: position)
+            self.terminalDidScroll(to: position)
+        }
+    }
+
+    private func terminalPumpEnded(generation: UInt64, reason: String) {
+        guard lifecycleGeneration == generation else { return }
+        terminalSession = nil
+        outputBatcher = nil
+        readTask = nil
+        if case .running = status {
+            status = .ended(reason)
+        }
     }
 
     func send(_ bytes: ArraySlice<UInt8>) {
@@ -182,9 +225,8 @@ final class MobileAttachSession: ObservableObject {
         inputQueue.enqueueTerminal(Data(bytes), generation: lifecycleGeneration)
     }
 
-    /// Sends named keys through herdr's RPC — proper terminal encoding without
-    /// this client knowing the pane's keyboard protocol state. These semantic
-    /// controls remain available while the terminal itself is read-only.
+    /// Sends named keys through Herdr's RPC so the server can encode them for
+    /// the terminal's current keyboard protocol state.
     func sendKeys(_ keys: [String]) -> TerminalInputQueue.SemanticTicket {
         inputQueue.submitSemantic(
             method: "pane.send_input",
@@ -195,9 +237,8 @@ final class MobileAttachSession: ObservableObject {
         )
     }
 
-    /// Sends a prompt to the agent; herdr delivers and submits it. This remains
-    /// available to an observer because it is a semantic agent operation, not
-    /// raw ownership of the terminal byte stream.
+    /// Sends a semantic agent prompt. This remains available to observers
+    /// because it is separate from the raw terminal input lease.
     func prompt(_ text: String) throws -> TerminalInputQueue.SemanticTicket {
         guard let agentPaneID else { throw MobileTerminalInputError.agentUnavailable }
         return inputQueue.submitSemantic(
@@ -217,28 +258,64 @@ final class MobileAttachSession: ObservableObject {
     func resize(columns: Int, rows: Int) {
         guard columns > 0, rows > 0 else { return }
         let size = TerminalSize(columns: columns, rows: rows)
-        guard size != lastSize else { return }
+        let previousSize = lastSize
+        guard size != previousSize else { return }
         lastSize = size
 
         guard terminalSession != nil else { return }
         if mode.allowsResize {
             inputQueue.enqueueResize(size, generation: lifecycleGeneration)
-        } else {
-            // Observe mode negotiates its grid when the stream opens. Coalesce
-            // layout churn before reopening so rotation does not create a
-            // connection storm.
-            resizeTask?.cancel()
-            resizeTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(250))
-                guard let self, !Task.isCancelled else { return }
-                self.restart(mode: .observe)
-            }
+            return
+        }
+
+        // Observer frames own their remote grid. Keyboard presentation and a
+        // growing composer change only the local row count, so reconnecting for
+        // those changes discards momentum and can reset local scrollback.
+        // Reopen only when width changes (normally rotation or split resizing),
+        // and preserve the reader's normalized scroll position across it.
+        guard size.columns != previousSize.columns else { return }
+        resizeTask?.cancel()
+        resizeTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard let self, !Task.isCancelled else { return }
+            self.restart(mode: .observe, preserveScrollPosition: true)
+        }
+    }
+
+    func terminalDidScroll(to position: Double) {
+        terminalScrollPosition = position
+        guard let terminalView else {
+            isAtLatestOutput = true
+            return
+        }
+
+        let maximumOffset = max(
+            0,
+            terminalView.contentSize.height
+                - terminalView.bounds.height
+                + terminalView.adjustedContentInset.bottom
+        )
+        let threshold = max(
+            8,
+            min(44, terminalView.bounds.height * 0.08)
+        )
+        isAtLatestOutput = maximumOffset <= threshold
+            || terminalView.contentOffset.y >= maximumOffset - threshold
+    }
+
+    func scrollToLatest() {
+        guard let terminalView else { return }
+        terminalView.scroll(toPosition: 1)
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            self?.terminalDidScroll(to: 1)
         }
     }
 
     func stop() {
         lifecycleGeneration &+= 1
         inputQueue.updateGeneration(lifecycleGeneration)
+        pendingScrollRestore = nil
         resizeTask?.cancel()
         resizeTask = nil
         startTask?.cancel()
@@ -256,7 +333,7 @@ final class MobileAttachSession: ObservableObject {
     }
 
     nonisolated private static func presentation(_ error: any Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? "\(error)"
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 }
 
@@ -268,8 +345,15 @@ private enum MobileTerminalInputError: LocalizedError {
     }
 }
 
+private enum MobileAgentDisplayMode: String, Equatable {
+    case conversation
+    case terminal
+}
+
 struct MobileTerminalScreen: View {
     @StateObject private var session: MobileAttachSession
+    @StateObject private var conversationStore: ConversationReaderStore
+    @State private var displayMode: MobileAgentDisplayMode
     @State private var composerText = ""
     @State private var keyboardShown = false
     @State private var showFileImporter = false
@@ -277,11 +361,33 @@ struct MobileTerminalScreen: View {
     @State private var isSendingPrompt = false
     @State private var attachmentError: String?
     @State private var inputError: String?
+    @State private var terminalControlsHeight: CGFloat = 0
     private let title: String
 
-    init(transport: MobileTransport, target: TerminalAttachTarget, paneID: String, title: String) {
-        _session = StateObject(
-            wrappedValue: MobileAttachSession(transport: transport, target: target, paneID: paneID)
+    init(
+        transport: MobileTransport,
+        target: TerminalAttachTarget,
+        paneID: String,
+        conversationStore: ConversationReaderStore? = nil,
+        title: String
+    ) {
+        let session = MobileAttachSession(
+            transport: transport,
+            target: target,
+            paneID: paneID
+        )
+        _session = StateObject(wrappedValue: session)
+        _conversationStore = StateObject(
+            wrappedValue: conversationStore ?? ConversationReaderStore(
+                provider: HerdrPaneTranscriptProvider(
+                    transport: transport,
+                    paneID: paneID
+                )
+            )
+        )
+
+        _displayMode = State(
+            initialValue: session.agentPaneID == nil ? .terminal : .conversation
         )
         self.title = title
     }
@@ -289,11 +395,10 @@ struct MobileTerminalScreen: View {
     var body: some View {
         ZStack {
             terminalBackground.ignoresSafeArea()
-            VStack(spacing: 0) {
-                MobileTerminalHost(session: session, keyboardShown: $keyboardShown)
-                controls
-            }
-            if case .ended(let reason) = session.status {
+            primarySurface
+            if displayMode == .terminal,
+               case .ended(let reason) = session.status
+            {
                 endedOverlay(reason)
             }
         }
@@ -301,6 +406,7 @@ struct MobileTerminalScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbarBackground(terminalBackground, for: .navigationBar)
+        .toolbar { displayModeToolbar }
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: [.data],
@@ -329,7 +435,119 @@ struct MobileTerminalScreen: View {
         } message: {
             Text(inputError ?? "")
         }
-        .onDisappear { session.stop() }
+        .onChange(of: displayMode) { _, newValue in
+            keyboardShown = false
+            switch newValue {
+            case .conversation:
+                session.stop()
+            case .terminal:
+                conversationStore.stop()
+            }
+        }
+        .onDisappear {
+            conversationStore.stop()
+            session.stop()
+        }
+    }
+
+    @ViewBuilder
+    private var primarySurface: some View {
+        if displayMode == .conversation, session.agentPaneID != nil {
+            VStack(spacing: 0) {
+                ConversationReaderView(store: conversationStore)
+                    .environment(\.colorScheme, .dark)
+                controls
+            }
+        } else {
+            terminalSurface
+        }
+    }
+
+    private var terminalSurface: some View {
+        ZStack(alignment: .bottomTrailing) {
+            MobileTerminalHost(
+                session: session,
+                keyboardShown: $keyboardShown,
+                bottomContentInset: terminalControlsHeight
+            )
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+
+            if !session.isAtLatestOutput {
+                terminalLatestButton
+                    .padding(.trailing, 14)
+                    .padding(.bottom, terminalControlsHeight + 14)
+                    .transition(.scale.combined(with: .opacity))
+            }
+
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                controls
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: MobileTerminalControlsHeightKey.self,
+                                value: geometry.size.height
+                            )
+                        }
+                    )
+            }
+        }
+        .onPreferenceChange(MobileTerminalControlsHeightKey.self) { height in
+            terminalControlsHeight = height
+        }
+        .animation(.easeOut(duration: 0.16), value: session.isAtLatestOutput)
+    }
+
+    @ToolbarContentBuilder
+    private var displayModeToolbar: some ToolbarContent {
+        if session.agentPaneID != nil {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        displayMode = .conversation
+                    } label: {
+                        Label(
+                            String(localized: "Conversation"),
+                            systemImage: displayMode == .conversation
+                                ? "checkmark.bubble.fill"
+                                : "bubble.left.and.text.bubble.right"
+                        )
+                    }
+                    Button {
+                        displayMode = .terminal
+                    } label: {
+                        Label(
+                            String(localized: "Terminal"),
+                            systemImage: displayMode == .terminal
+                                ? "checkmark.square.fill"
+                                : "terminal"
+                        )
+                    }
+                } label: {
+                    Image(
+                        systemName: displayMode == .conversation
+                            ? "bubble.left.and.text.bubble.right"
+                            : "terminal"
+                    )
+                }
+                .accessibilityLabel(String(localized: "Choose conversation or terminal view"))
+            }
+        }
+    }
+
+    private var terminalLatestButton: some View {
+        Button { session.scrollToLatest() } label: {
+            Image(systemName: "arrow.down")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay {
+                    Circle().stroke(.white.opacity(0.12), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(String(localized: "Scroll to latest output"))
     }
 
     private var terminalBackground: SwiftUI.Color {
@@ -338,7 +556,9 @@ struct MobileTerminalScreen: View {
 
     private var controls: some View {
         VStack(spacing: 8) {
-            keyBar
+            if displayMode == .terminal {
+                keyBar
+            }
             if session.agentPaneID != nil {
                 composer
             }
@@ -474,6 +694,7 @@ struct MobileTerminalScreen: View {
         let text = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSendingPrompt else { return }
         isSendingPrompt = true
+        conversationStore.resumeFollowing()
 
         let ticket: TerminalInputQueue.SemanticTicket
         do {
@@ -569,25 +790,70 @@ struct MobileTerminalScreen: View {
 private struct MobileTerminalHost: UIViewRepresentable {
     let session: MobileAttachSession
     @Binding var keyboardShown: Bool
+    let bottomContentInset: CGFloat
 
     func makeUIView(context: Context) -> TerminalView {
-        let view = TerminalView(frame: .zero)
+        var options = TerminalOptions.default
+        options.scrollback = 10_000
+
+        let view = TerminalView(
+            frame: .zero,
+            font: UIFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            options: options
+        )
         view.terminalDelegate = context.coordinator
-        view.backgroundColor = UIColor(red: 0x10 / 255, green: 0x10 / 255, blue: 0x12 / 255, alpha: 1)
+        view.backgroundColor = UIColor(
+            red: 0x10 / 255,
+            green: 0x10 / 255,
+            blue: 0x12 / 255,
+            alpha: 1
+        )
         view.nativeBackgroundColor = view.backgroundColor ?? .black
-        view.nativeForegroundColor = UIColor(red: 0xD6 / 255, green: 0xD6 / 255, blue: 0xD6 / 255, alpha: 1)
-        session.terminalView = view
+        view.nativeForegroundColor = UIColor(
+            red: 0xD6 / 255,
+            green: 0xD6 / 255,
+            blue: 0xD6 / 255,
+            alpha: 1
+        )
+        view.allowMouseReporting = false
+        view.alwaysBounceVertical = true
+        view.showsVerticalScrollIndicator = true
+        view.showsHorizontalScrollIndicator = false
+        view.indicatorStyle = .white
+        view.isDirectionalLockEnabled = true
+        view.keyboardDismissMode = .interactive
+        view.scrollsToTop = true
+        try? view.setUseMetal(true)
+
+        session.attachTerminalView(view)
         let terminal = view.getTerminal()
         session.start(columns: terminal.cols, rows: terminal.rows)
         return view
     }
 
     func updateUIView(_ uiView: TerminalView, context: Context) {
+        let inset = max(0, bottomContentInset)
+        if abs(uiView.contentInset.bottom - inset) > 0.5 {
+            let shouldRemainAtLatest = session.isAtLatestOutput
+            uiView.contentInset.bottom = inset
+            uiView.verticalScrollIndicatorInsets.bottom = inset
+            if shouldRemainAtLatest {
+                Task { @MainActor in
+                    await Task.yield()
+                    session.scrollToLatest()
+                }
+            }
+        }
+
         if keyboardShown, !uiView.isFirstResponder {
             uiView.becomeFirstResponder()
         } else if !keyboardShown, uiView.isFirstResponder {
             uiView.resignFirstResponder()
         }
+    }
+
+    static func dismantleUIView(_ uiView: TerminalView, coordinator: Coordinator) {
+        coordinator.session.detachTerminalView(uiView)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(session: session) }
@@ -606,7 +872,9 @@ private struct MobileTerminalHost: UIViewRepresentable {
             let bytes = Array(data)
             Task { @MainActor in self.session.send(bytes[...]) }
         }
-        nonisolated func scrolled(source: TerminalView, position: Double) {}
+        nonisolated func scrolled(source: TerminalView, position: Double) {
+            Task { @MainActor in self.session.terminalDidScroll(to: position) }
+        }
         nonisolated func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
             guard let url = URL(string: link), url.scheme == "http" || url.scheme == "https" else { return }
             Task { @MainActor in UIApplication.shared.open(url) }
@@ -619,6 +887,14 @@ private struct MobileTerminalHost: UIViewRepresentable {
         }
         nonisolated func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
         nonisolated func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+    }
+}
+
+private struct MobileTerminalControlsHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 

@@ -603,6 +603,40 @@ public actor HerdrService {
         return (text, revision)
     }
 
+    /// Reads a bounded pane transcript using Herdr's typed `pane.read` response.
+    public func readPane(
+        paneID: String,
+        source: TerminalReadSource,
+        format: TerminalReadFormat,
+        lines: Int,
+        stripANSI: Bool
+    ) async throws -> TerminalReadResult {
+        let result = try await client().request(
+            method: "pane.read",
+            params: .object([
+                "pane_id": .string(paneID),
+                "source": .string(source.rawValue),
+                "lines": .number(Double(lines)),
+                "format": .string(format.rawValue),
+                "strip_ansi": .bool(stripANSI),
+            ]),
+            timeoutSeconds: 30
+        )
+
+        guard let read = result["read"] else {
+            throw HerdrError.malformedResponse("pane.read returned no read payload")
+        }
+        do {
+            return try JSONDecoder().decode(
+                TerminalReadResult.self,
+                from: JSONEncoder().encode(read)
+            )
+        } catch {
+            throw HerdrError.malformedResponse("pane.read: \(error)")
+        }
+    }
+
+
     /// Sends literal text (herdr wraps it in bracketed paste when the app enables it —
     /// right for pastes, wrong for keystrokes; use sendKeys for those).
     public func sendInput(paneID: String, text: String) async throws {

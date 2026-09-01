@@ -93,6 +93,11 @@ struct MobileRootView: View {
                 transport: transport,
                 target: .agent(paneID: entry.agent.paneID),
                 paneID: entry.agent.paneID,
+                conversationStore: model.conversationStore(
+                    for: entry.ref,
+                    transport: transport
+                ),
+
                 title: entry.agent.title(tabLabel: model.tabLabel(for: entry))
             )
             .id(entry.ref)

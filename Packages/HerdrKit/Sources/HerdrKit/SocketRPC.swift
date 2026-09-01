@@ -12,13 +12,17 @@ public struct SocketRPC: Sendable {
 
     // MARK: - Requests
 
-    public func request(method: String, params: JSONValue? = .object([:])) async throws -> JSONValue {
+    public func request(
+        method: String,
+        params: JSONValue? = .object([:]),
+        timeoutSeconds: Int32 = 15
+    ) async throws -> JSONValue {
         let path = socketPath
         return try await Task.detached(priority: .userInitiated) {
             let fd = try Self.connect(path: path)
             defer { close(fd) }
             try Self.writeLine(fd: fd, data: Self.encodeRequest(id: UUID().uuidString, method: method, params: params))
-            let line = try Self.readLine(fd: fd, timeoutSeconds: 15)
+            let line = try Self.readLine(fd: fd, timeoutSeconds: timeoutSeconds)
             return try Self.decodeResponse(line)
         }.value
     }

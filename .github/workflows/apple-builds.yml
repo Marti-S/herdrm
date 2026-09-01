@@ -60,8 +60,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select --switch /Applications/Xcode.app
+      - name: Select Xcode with Swift 6.2
+        run: sudo xcode-select --switch /Applications/Xcode_26.3.app
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -74,6 +74,7 @@ jobs:
           xcodebuild \
             -project HerdrM.xcodeproj \
             -scheme "${{ matrix.scheme }}" \
+            -skipPackagePluginValidation \
             -resolvePackageDependencies
 
       - name: Build ${{ matrix.name }}
@@ -90,6 +91,7 @@ jobs:
             -destination "$DESTINATION"
             -sdk "$SDK"
             -derivedDataPath "$RUNNER_TEMP/DerivedData-$SCHEME-$SDK"
+            -skipPackagePluginValidation
             CODE_SIGNING_ALLOWED=NO
             CODE_SIGNING_REQUIRED=NO
             CODE_SIGN_IDENTITY=

@@ -64,6 +64,28 @@ extension FleetBridgeServer {
             }
             return .object([:])
 
+        case "pane.read":
+            let paneID = try requiredString(params, "pane_id")
+            guard optionalString(params, "source") == TerminalReadSource.recentUnwrapped.rawValue,
+                  optionalString(params, "format") == TerminalReadFormat.text.rawValue,
+                  case .number(let requestedLines)? = params["lines"],
+                  let lines = Int(exactly: requestedLines),
+                  (1...1_000).contains(lines),
+                  case .bool(true)? = params["strip_ansi"]
+            else {
+                throw FleetBridgeHostError.invalidRequest(
+                    "pane.read requires recent_unwrapped text, 1...1000 lines, and strip_ansi true."
+                )
+            }
+            let read = try await service.readPane(
+                paneID: paneID,
+                source: .recentUnwrapped,
+                format: .text,
+                lines: lines,
+                stripANSI: true
+            )
+            return .object(["read": try jsonValue(read)])
+
         case "workspace.create":
             let created = try await service.createWorkspace(
                 label: optionalString(params, "label"),
