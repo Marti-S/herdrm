@@ -488,8 +488,8 @@ struct MobileTerminalScreen: View {
             defer { isSendingPrompt = false }
             do {
                 try await ticket.value()
-                if composerText == originalText {
-                    composerText = ""
+                if composerText.hasPrefix(originalText) {
+                    composerText.removeFirst(originalText.count)
                 }
             } catch {
                 inputError = presentableInputError(error)
