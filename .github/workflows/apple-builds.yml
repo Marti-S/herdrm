@@ -74,6 +74,7 @@ jobs:
           xcodebuild \
             -project HerdrM.xcodeproj \
             -scheme "${{ matrix.scheme }}" \
+            -skipPackagePluginValidation \
             -resolvePackageDependencies
 
       - name: Build ${{ matrix.name }}
@@ -90,6 +91,7 @@ jobs:
             -destination "$DESTINATION"
             -sdk "$SDK"
             -derivedDataPath "$RUNNER_TEMP/DerivedData-$SCHEME-$SDK"
+            -skipPackagePluginValidation
             CODE_SIGNING_ALLOWED=NO
             CODE_SIGNING_REQUIRED=NO
             CODE_SIGN_IDENTITY=
