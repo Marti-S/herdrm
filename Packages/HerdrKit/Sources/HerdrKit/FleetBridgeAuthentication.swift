@@ -83,8 +83,8 @@ public enum FleetBridgeAuthenticator {
     public static func verify(_ candidate: Data, equals expected: Data) -> Bool {
         guard candidate.count == expected.count else { return false }
         var difference: UInt8 = 0
-        for index in candidate.indices {
-            difference |= candidate[index] ^ expected[index]
+        for (candidateByte, expectedByte) in zip(candidate, expected) {
+            difference |= candidateByte ^ expectedByte
         }
         return difference == 0
     }
