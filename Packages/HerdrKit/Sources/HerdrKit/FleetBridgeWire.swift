@@ -397,6 +397,31 @@ public enum FleetBridgeWire {
         }
     }
 
+    /// Wraps a cached JSON-encoded fleet snapshot in the subscriber-specific
+    /// response envelope. The snapshot payload can therefore be constructed and
+    /// encoded once per revision, independent of the number of subscribers.
+    public static func encodeSnapshot(
+        requestID: UUID,
+        encodedSnapshot: Data
+    ) throws -> Data {
+        guard !encodedSnapshot.isEmpty else {
+            throw FleetBridgeWireError.invalidRecord("The cached fleet snapshot is empty.")
+        }
+
+        let requestIDData = try JSONEncoder().encode(requestID)
+        var data = Data(#"{"type":"fleet.snapshot","payload":{"request_id":"#.utf8)
+        data.append(requestIDData)
+        data.append(Data(#","snapshot":"#.utf8))
+        data.append(encodedSnapshot)
+        data.append(Data("}}\n".utf8))
+        guard data.count <= FleetBridgeProtocol.maximumRecordBytes else {
+            throw FleetBridgeWireError.recordTooLarge(
+                limit: FleetBridgeProtocol.maximumRecordBytes
+            )
+        }
+        return data
+    }
+
     public static func decodeServer(_ data: Data) throws -> FleetBridgeServerRecord {
         let envelope = try decodeEnvelope(data)
         switch envelope.type {

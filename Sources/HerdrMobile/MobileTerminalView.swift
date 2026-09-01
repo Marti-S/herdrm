@@ -30,10 +30,20 @@ final class MobileAttachSession: ObservableObject {
     let target: TerminalAttachTarget
     let paneID: String
 
+    private enum InputOperation {
+        case terminal(Data, generation: UInt64)
+        case resize(TerminalSize, generation: UInt64)
+        case rpc(method: String, params: JSONValue, generation: UInt64)
+    }
+
     private var terminalSession: (any TerminalSession)?
+    private var outputBatcher: MobileTerminalOutputBatcher?
     private var startTask: Task<Void, Never>?
     private var readTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
+    private var inputTask: Task<Void, Never>?
+    private var inputOperations: [InputOperation] = []
+    private var inputTaskGeneration: UInt64 = 0
     private var lifecycleGeneration: UInt64 = 0
     private var lastSize = TerminalSize(columns: 80, rows: 24)
     weak var terminalView: TerminalView?
@@ -69,6 +79,11 @@ final class MobileAttachSession: ObservableObject {
         status = .connecting
         lifecycleGeneration &+= 1
         let generation = lifecycleGeneration
+        let outputBatcher = MobileTerminalOutputBatcher { [weak self] data in
+            guard let self, self.lifecycleGeneration == generation else { return }
+            self.feed(data)
+        }
+        self.outputBatcher = outputBatcher
 
         startTask = Task { [weak self] in
             guard let self else { return }
@@ -89,9 +104,15 @@ final class MobileAttachSession: ObservableObject {
                 }
                 self.terminalSession = terminalSession
                 self.status = .running
-                self.pump(terminalSession, generation: generation)
+                self.pump(
+                    terminalSession,
+                    outputBatcher: outputBatcher,
+                    generation: generation
+                )
             } catch {
+                await outputBatcher.cancel()
                 guard !Task.isCancelled, self.lifecycleGeneration == generation else { return }
+                self.outputBatcher = nil
                 self.status = .ended(Self.presentation(error))
             }
         }
@@ -113,29 +134,32 @@ final class MobileAttachSession: ObservableObject {
 
     private func pump(
         _ terminalSession: any TerminalSession,
+        outputBatcher: MobileTerminalOutputBatcher,
         generation: UInt64
     ) {
-        readTask = Task { [weak self] in
+        let complete: @MainActor @Sendable (String) -> Void = { [weak self] endingReason in
+            guard let self, self.lifecycleGeneration == generation else { return }
+            self.outputBatcher = nil
+            if case .running = self.status {
+                self.status = .ended(endingReason)
+            }
+        }
+        readTask = Task.detached(priority: .userInitiated) {
             var endingReason = String(localized: "Session ended")
             do {
                 while !Task.isCancelled {
                     guard let frame = try await terminalSession.read() else { break }
                     guard !frame.bytes.isEmpty else { continue }
-                    self?.feed(frame.bytes)
+                    await outputBatcher.append(frame.bytes)
                 }
             } catch {
                 endingReason = Self.presentation(error)
             }
 
+            await outputBatcher.finish()
             await terminalSession.close()
-            guard
-                let self,
-                !Task.isCancelled,
-                self.lifecycleGeneration == generation
-            else { return }
-            if case .running = self.status {
-                self.status = .ended(endingReason)
-            }
+            guard !Task.isCancelled else { return }
+            await complete(endingReason)
         }
     }
 
@@ -144,24 +168,22 @@ final class MobileAttachSession: ObservableObject {
     }
 
     func send(_ bytes: ArraySlice<UInt8>) {
-        guard let terminalSession, mode.allowsInput else { return }
-        let data = Data(bytes)
-        Task { try? await terminalSession.send(data) }
+        guard terminalSession != nil, mode.allowsInput else { return }
+        enqueueInput(.terminal(Data(bytes), generation: lifecycleGeneration))
     }
 
     /// Sends named keys through herdr's RPC — proper terminal encoding without
     /// this client knowing the pane's keyboard protocol state. These semantic
     /// controls remain available while the terminal itself is read-only.
     func sendKeys(_ keys: [String]) {
-        Task {
-            _ = try? await transport.request(
-                method: "pane.send_input",
-                params: .object([
-                    "pane_id": .string(paneID),
-                    "keys": .array(keys.map { .string($0) }),
-                ])
-            )
-        }
+        enqueueInput(.rpc(
+            method: "pane.send_input",
+            params: .object([
+                "pane_id": .string(paneID),
+                "keys": .array(keys.map { .string($0) }),
+            ]),
+            generation: lifecycleGeneration
+        ))
     }
 
     /// Sends a prompt to the agent; herdr delivers and submits it. This remains
@@ -169,14 +191,70 @@ final class MobileAttachSession: ObservableObject {
     /// raw ownership of the terminal byte stream.
     func prompt(_ text: String) {
         guard let agentPaneID else { return }
-        Task {
-            _ = try? await transport.request(
-                method: "agent.prompt",
-                params: .object([
-                    "target": .string(agentPaneID),
-                    "text": .string(text),
-                ])
+        enqueueInput(.rpc(
+            method: "agent.prompt",
+            params: .object([
+                "target": .string(agentPaneID),
+                "text": .string(text),
+            ]),
+            generation: lifecycleGeneration
+        ))
+    }
+
+    private func enqueueInput(_ operation: InputOperation) {
+        if case .terminal(let incoming, let generation) = operation,
+           case .terminal(let existing, let existingGeneration)? = inputOperations.last,
+           generation == existingGeneration {
+            var combined = existing
+            combined.append(incoming)
+            inputOperations[inputOperations.count - 1] = .terminal(
+                combined,
+                generation: generation
             )
+        } else {
+            inputOperations.append(operation)
+        }
+        startInputPumpIfNeeded()
+    }
+
+    private func startInputPumpIfNeeded() {
+        guard inputTask == nil else { return }
+        inputTaskGeneration &+= 1
+        let taskGeneration = inputTaskGeneration
+        inputTask = Task { [weak self] in
+            guard let self else { return }
+            await self.drainInput(taskGeneration: taskGeneration)
+        }
+    }
+
+    private func drainInput(taskGeneration: UInt64) async {
+        while !Task.isCancelled, !inputOperations.isEmpty {
+            let operation = inputOperations.removeFirst()
+            switch operation {
+            case .terminal(let data, let generation):
+                guard generation == lifecycleGeneration,
+                      let terminalSession,
+                      mode.allowsInput
+                else { continue }
+                try? await terminalSession.send(data)
+
+            case .resize(let size, let generation):
+                guard generation == lifecycleGeneration,
+                      let terminalSession,
+                      mode.allowsResize
+                else { continue }
+                try? await terminalSession.resize(size)
+
+            case .rpc(let method, let params, let generation):
+                guard generation == lifecycleGeneration else { continue }
+                _ = try? await transport.request(method: method, params: params)
+            }
+        }
+        if inputTaskGeneration == taskGeneration {
+            inputTask = nil
+            if !inputOperations.isEmpty {
+                startInputPumpIfNeeded()
+            }
         }
     }
 
@@ -190,9 +268,9 @@ final class MobileAttachSession: ObservableObject {
         guard size != lastSize else { return }
         lastSize = size
 
-        guard let terminalSession else { return }
+        guard terminalSession != nil else { return }
         if mode.allowsResize {
-            Task { try? await terminalSession.resize(size) }
+            enqueueInput(.resize(size, generation: lifecycleGeneration))
         } else {
             // Observe mode negotiates its grid when the stream opens. Coalesce
             // layout churn before reopening so rotation does not create a
@@ -214,13 +292,21 @@ final class MobileAttachSession: ObservableObject {
         startTask = nil
         readTask?.cancel()
         readTask = nil
+        inputTaskGeneration &+= 1
+        inputTask?.cancel()
+        inputTask = nil
+        inputOperations.removeAll(keepingCapacity: true)
+        if let outputBatcher {
+            Task { await outputBatcher.cancel() }
+        }
+        outputBatcher = nil
         if let terminalSession {
             Task { await terminalSession.close() }
         }
         terminalSession = nil
     }
 
-    private static func presentation(_ error: any Error) -> String {
+    nonisolated private static func presentation(_ error: any Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? "\(error)"
     }
 }

@@ -72,7 +72,9 @@ final class MobileDeviceSession {
   var snapshot: SessionSnapshot?
   private(set) var transport: MobileTransport?
   private var eventTask: Task<Void, Never>?
-  private var refreshPending = false
+  private var refreshTask: Task<Void, Never>?
+  private var refreshTaskGeneration: UInt64 = 0
+  private var refreshDirty = false
   private var generation: UInt64 = 0
 
   var onChange: (() -> Void)?
@@ -126,7 +128,7 @@ final class MobileDeviceSession {
       transport = opened
       candidate = nil
       state = .connected(version: pong.version)
-      await refresh(generation: expectedGeneration)
+      await requestRefresh(generation: expectedGeneration, debounce: false)
       guard generation == expectedGeneration else { return }
       startEventPump(transport: opened, generation: expectedGeneration)
     } catch {
@@ -142,6 +144,10 @@ final class MobileDeviceSession {
     let expectedGeneration = generation
     eventTask?.cancel()
     eventTask = nil
+    refreshTaskGeneration &+= 1
+    refreshTask?.cancel()
+    refreshTask = nil
+    refreshDirty = false
     let stale = transport
     transport = nil
     await stale?.close()
@@ -151,17 +157,65 @@ final class MobileDeviceSession {
   }
 
   func refresh() async {
-    await refresh(generation: nil)
+    await requestRefresh(generation: generation, debounce: false)
   }
 
-  private func refresh(generation expectedGeneration: UInt64?) async {
+  private func requestRefresh(
+    generation expectedGeneration: UInt64,
+    debounce: Bool
+  ) async {
+    guard generation == expectedGeneration else { return }
+    refreshDirty = true
+    let task = refreshTask
+      ?? startRefreshTask(generation: expectedGeneration, debounce: debounce)
+    await task.value
+  }
+
+  private func startRefreshTask(
+    generation expectedGeneration: UInt64,
+    debounce: Bool
+  ) -> Task<Void, Never> {
+    refreshTaskGeneration &+= 1
+    let taskGeneration = refreshTaskGeneration
+    let task = Task { [weak self] in
+      if debounce {
+        try? await Task.sleep(for: .milliseconds(300))
+      }
+      guard let self, !Task.isCancelled else { return }
+      await self.runRefreshLoop(
+        generation: expectedGeneration,
+        taskGeneration: taskGeneration
+      )
+    }
+    refreshTask = task
+    return task
+  }
+
+  private func runRefreshLoop(
+    generation expectedGeneration: UInt64,
+    taskGeneration: UInt64
+  ) async {
+    while !Task.isCancelled,
+      generation == expectedGeneration,
+      refreshDirty
+    {
+      refreshDirty = false
+      await performRefresh(generation: expectedGeneration)
+    }
+    if refreshTaskGeneration == taskGeneration {
+      refreshTask = nil
+    }
+  }
+
+  private func performRefresh(generation expectedGeneration: UInt64) async {
     guard let transport else { return }
     struct Envelope: Codable { let snapshot: SessionSnapshot }
     do {
       let next = try await transport.request(
         method: "session.snapshot", as: Envelope.self
       ).snapshot
-      if let expectedGeneration, generation != expectedGeneration { return }
+      guard generation == expectedGeneration else { return }
+      guard snapshot != next else { return }
       snapshot = next
       onChange?()
     } catch {
@@ -197,13 +251,11 @@ final class MobileDeviceSession {
     }
   }
 
-  private func scheduleRefresh(generation expectedGeneration: UInt64) async {
-    guard generation == expectedGeneration, !refreshPending else { return }
-    refreshPending = true
-    try? await Task.sleep(for: .milliseconds(300))
-    refreshPending = false
+  private func scheduleRefresh(generation expectedGeneration: UInt64) {
     guard generation == expectedGeneration else { return }
-    await refresh(generation: expectedGeneration)
+    refreshDirty = true
+    guard refreshTask == nil else { return }
+    _ = startRefreshTask(generation: expectedGeneration, debounce: true)
   }
 
   private static func presentation(_ error: any Error) -> String {

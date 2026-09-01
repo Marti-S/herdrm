@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import HerdrKit
 import SwiftTerm
@@ -8,6 +9,11 @@ enum ConnectionState: Equatable {
     case connecting
     case connected(version: String)
     case failed(String)
+}
+
+enum FleetStateChange: Sendable {
+    case device(UUID)
+    case topology
 }
 
 /// Agent kinds offered by the picker. Local manifests are filtered through the
@@ -221,11 +227,17 @@ final class AppModel: ObservableObject {
     }
     @Published var closeRequest: CloseRequest?
 
+    let fleetStateDidChange = PassthroughSubject<FleetStateChange, Never>()
+
     private let store = DeviceStore()
     private var services: [UUID: HerdrService] = [:]
     private var sessionTasks: [UUID: Task<Void, Never>] = [:]
     private var refreshDebounces: [UUID: Task<Void, Never>] = [:]
+    private var refreshWorkers: [UUID: Task<Void, Never>] = [:]
+    private var refreshWorkerGenerations: [UUID: UInt64] = [:]
+    private var dirtyRefreshes: Set<UUID> = []
     private var previousStatuses: [UUID: [String: AgentStatus]] = [:]
+    private var hasStarted = false
 
     init() {
         let loaded = DeviceStore().load()
@@ -774,7 +786,27 @@ final class AppModel: ObservableObject {
 
     // MARK: - Lifecycle
 
+    private func publishFleetChange(_ change: FleetStateChange) {
+        fleetStateDidChange.send(change)
+    }
+
+    private func setConnection(_ connection: ConnectionState, for deviceID: UUID) {
+        guard var state = sessions[deviceID], state.connection != connection else { return }
+        state.connection = connection
+        sessions[deviceID] = state
+        publishFleetChange(.device(deviceID))
+    }
+
+    private func setAgentCatalog(_ catalog: AgentCatalogState, for deviceID: UUID) {
+        guard var state = sessions[deviceID], state.agentCatalog != catalog else { return }
+        state.agentCatalog = catalog
+        sessions[deviceID] = state
+        publishFleetChange(.device(deviceID))
+    }
+
     func start() {
+        guard !hasStarted else { return }
+        hasStarted = true
         NotificationManager.shared.setup(model: self)
         // Finder-launched apps have launchd's PATH. Capture the login +
         // interactive shell environment on a background thread once; New Agent
@@ -798,17 +830,17 @@ final class AppModel: ObservableObject {
     /// Runs one device's session: connect, snapshot, event stream, and reconnect
     /// with exponential backoff (1s → 30s) whenever the connection drops.
     private func startSession(_ device: Device) {
-        sessionTasks[device.id]?.cancel()
+        guard sessionTasks[device.id] == nil else { return }
         if sessions[device.id] == nil { sessions[device.id] = DeviceSessionState() }
         let service = service(for: device)
         sessionTasks[device.id] = Task { [weak self] in
             var backoff: Double = 1
             while !Task.isCancelled {
                 guard let self else { return }
-                self.sessions[device.id]?.connection = .connecting
+                self.setConnection(.connecting, for: device.id)
                 do {
                     let pong = try await service.connect()
-                    self.sessions[device.id]?.connection = .connected(version: pong.version)
+                    self.setConnection(.connected(version: pong.version), for: device.id)
                     backoff = 1
                     // retried on every successful connect until it sticks (a fresh
                     // device's first probes can fail before its host key is known)
@@ -822,7 +854,7 @@ final class AppModel: ObservableObject {
                         self.scheduleRefresh(device.id)
                     }
                 } catch {
-                    self.sessions[device.id]?.connection = .failed(error.localizedDescription)
+                    self.setConnection(.failed(error.localizedDescription), for: device.id)
                     if let target = device.sshTarget, Self.isSSHAuthenticationFailure(error) {
                         self.sshAuthenticationRequest = SSHAuthenticationRequest(
                             deviceID: device.id,
@@ -843,7 +875,7 @@ final class AppModel: ObservableObject {
     /// catalog; `agent.start` validates in the target pane instead. Manifests
     /// also feed the attachment-capability registry (paste path vs upload).
     private func loadAgentCatalog(deviceID: UUID, using service: HerdrService) async {
-        sessions[deviceID]?.agentCatalog = .loading
+        setAgentCatalog(.loading, for: deviceID)
         do {
             let manifests = try await service.agentManifests()
             sessions[deviceID]?.attachmentCapabilities =
@@ -866,9 +898,12 @@ final class AppModel: ObservableObject {
                         found.append(atomic)
                     }
                 }
-                sessions[deviceID]?.agentCatalog = .loaded(
-                    kinds: found.map(\.kind),
-                    paths: Dictionary(uniqueKeysWithValues: found.map { ($0.kind, $0.path) })
+                setAgentCatalog(
+                    .loaded(
+                        kinds: found.map(\.kind),
+                        paths: Dictionary(uniqueKeysWithValues: found.map { ($0.kind, $0.path) })
+                    ),
+                    for: deviceID
                 )
             } else {
                 var kinds = advertised
@@ -877,10 +912,10 @@ final class AppModel: ObservableObject {
                     kinds.insert("atomic", at: piIndex + 1)
                     paths["atomic"] = "atomic"
                 }
-                sessions[deviceID]?.agentCatalog = .loaded(kinds: kinds, paths: paths)
+                setAgentCatalog(.loaded(kinds: kinds, paths: paths), for: deviceID)
             }
         } catch {
-            sessions[deviceID]?.agentCatalog = .failed(error.localizedDescription)
+            setAgentCatalog(.failed(error.localizedDescription), for: deviceID)
         }
     }
 
@@ -897,6 +932,13 @@ final class AppModel: ObservableObject {
         services.removeAll()
         sessionTasks.values.forEach { $0.cancel() }
         sessionTasks.removeAll()
+        refreshDebounces.values.forEach { $0.cancel() }
+        refreshDebounces.removeAll()
+        refreshWorkers.values.forEach { $0.cancel() }
+        refreshWorkers.removeAll()
+        refreshWorkerGenerations.removeAll()
+        dirtyRefreshes.removeAll()
+        hasStarted = false
         for service in live.values {
             await service.disconnect()
         }
@@ -907,10 +949,15 @@ final class AppModel: ObservableObject {
         sessionTasks[id] = nil
         refreshDebounces[id]?.cancel()
         refreshDebounces[id] = nil
+        refreshWorkerGenerations[id] = (refreshWorkerGenerations[id] ?? 0) &+ 1
+        refreshWorkers[id]?.cancel()
+        refreshWorkers[id] = nil
+        dirtyRefreshes.remove(id)
         previousStatuses[id] = nil
         let service = services[id]
         services[id] = nil
         sessions[id] = nil
+        publishFleetChange(.device(id))
         Task { await service?.disconnect() }
     }
 
@@ -918,6 +965,7 @@ final class AppModel: ObservableObject {
         let device = Device(name: name, kind: .ssh(target: sshTarget))
         devices.append(device)
         store.save(devices)
+        publishFleetChange(.topology)
         startSession(device)
         probeOSIfNeeded(device)
         setDeviceFilter(device.id)
@@ -942,8 +990,10 @@ final class AppModel: ObservableObject {
     /// Leaves the device disconnected but recoverable; the reconnect loop stopped at the prompt.
     func cancelSSHAuthentication(for request: SSHAuthenticationRequest) {
         sshAuthenticationRequest = nil
-        sessions[request.deviceID]?.connection =
-            .failed(String(localized: "Authentication cancelled — choose Reconnect to try again"))
+        setConnection(
+            .failed(String(localized: "Authentication cancelled — choose Reconnect to try again")),
+            for: request.deviceID
+        )
     }
 
     var hasReconnectableDevice: Bool {
@@ -977,6 +1027,7 @@ final class AppModel: ObservableObject {
             probeOSIfNeeded(devices[index])
         }
         store.save(devices)
+        publishFleetChange(.topology)
     }
 
     func removeDevice(_ device: Device) {
@@ -987,6 +1038,7 @@ final class AppModel: ObservableObject {
         stopSession(device.id)
         devices.removeAll { $0.id == device.id }
         store.save(devices)
+        publishFleetChange(.topology)
         if deviceFilter == device.id { deviceFilter = nil }
         if selectedSpace?.deviceID == device.id { selectedSpace = nil }
         if selectedPane?.deviceID == device.id {
@@ -997,33 +1049,97 @@ final class AppModel: ObservableObject {
     // MARK: - Refresh
 
     func refresh(_ deviceID: UUID) async {
+        guard device(deviceID) != nil,
+              services[deviceID] != nil,
+              sessions[deviceID] != nil
+        else { return }
+        dirtyRefreshes.insert(deviceID)
+        refreshDebounces[deviceID]?.cancel()
+        refreshDebounces[deviceID] = nil
+        let worker = refreshWorkers[deviceID] ?? startRefreshWorker(deviceID)
+        await worker.value
+    }
+
+    private func startRefreshWorker(_ deviceID: UUID) -> Task<Void, Never> {
+        let workerGeneration = (refreshWorkerGenerations[deviceID] ?? 0) &+ 1
+        refreshWorkerGenerations[deviceID] = workerGeneration
+        let worker = Task { [weak self] in
+            guard let self else { return }
+            await self.runRefreshLoop(
+                deviceID,
+                workerGeneration: workerGeneration
+            )
+        }
+        refreshWorkers[deviceID] = worker
+        return worker
+    }
+
+    private func runRefreshLoop(
+        _ deviceID: UUID,
+        workerGeneration: UInt64
+    ) async {
+        while !Task.isCancelled {
+            guard dirtyRefreshes.remove(deviceID) != nil else { break }
+            await performRefresh(
+                deviceID,
+                workerGeneration: workerGeneration
+            )
+        }
+        if refreshWorkerGenerations[deviceID] == workerGeneration {
+            refreshWorkers[deviceID] = nil
+        }
+    }
+
+    private func performRefresh(
+        _ deviceID: UUID,
+        workerGeneration: UInt64
+    ) async {
         guard let device = device(deviceID), let service = services[deviceID] else { return }
         do {
             let snapshot = try await service.snapshot()
-            unreadAgents = AgentUnread.applying(
-                previous: previousStatuses[deviceID] ?? [:],
-                agents: snapshot.agents,
-                unread: unreadAgents,
-                deviceID: device.id
-            )
-            notifyTransitions(
-                device: device,
-                from: previousStatuses[deviceID] ?? [:],
-                to: snapshot.agents,
-                workspaces: snapshot.workspaces,
-                tabs: snapshot.tabs ?? []
-            )
-            previousStatuses[deviceID] = Dictionary(
-                uniqueKeysWithValues: snapshot.agents.map { ($0.paneID, $0.status) }
-            )
-            sessions[deviceID]?.agents = snapshot.agents
-            sessions[deviceID]?.workspaces = snapshot.workspaces
-            sessions[deviceID]?.workspaces = snapshot.workspaces
-            sessions[deviceID]?.tabs = Self.orderedTabs(
+            guard !Task.isCancelled,
+                  refreshWorkerGenerations[deviceID] == workerGeneration,
+                  services[deviceID] === service,
+                  sessions[deviceID] != nil
+            else { return }
+            let tabs = Self.orderedTabs(
                 snapshot.tabs ?? [],
                 workspaces: snapshot.workspaces
             )
-            sessions[deviceID]?.panes = snapshot.ordinaryTerminalPanes
+            let panes = snapshot.ordinaryTerminalPanes
+            let current = sessions[deviceID] ?? DeviceSessionState()
+            let exportedStateChanged = current.agents != snapshot.agents
+                || current.workspaces != snapshot.workspaces
+                || current.tabs != tabs
+                || current.panes != panes
+
+            if exportedStateChanged {
+                unreadAgents = AgentUnread.applying(
+                    previous: previousStatuses[deviceID] ?? [:],
+                    agents: snapshot.agents,
+                    unread: unreadAgents,
+                    deviceID: device.id
+                )
+                notifyTransitions(
+                    device: device,
+                    from: previousStatuses[deviceID] ?? [:],
+                    to: snapshot.agents,
+                    workspaces: snapshot.workspaces,
+                    tabs: tabs
+                )
+                previousStatuses[deviceID] = Dictionary(
+                    uniqueKeysWithValues: snapshot.agents.map { ($0.paneID, $0.status) }
+                )
+
+                var next = current
+                next.agents = snapshot.agents
+                next.workspaces = snapshot.workspaces
+                next.tabs = tabs
+                next.panes = panes
+                sessions[deviceID] = next
+                publishFleetChange(.device(deviceID))
+            }
+
             pruneSplitSessions(
                 deviceID: deviceID,
                 validWorkspaceIDs: Set(snapshot.workspaces.map(\.workspaceID))
@@ -1055,16 +1171,30 @@ final class AppModel: ObservableObject {
                 }
             }
         } catch {
-            sessions[deviceID]?.connection = .failed(error.localizedDescription)
+            guard !Task.isCancelled,
+                  refreshWorkerGenerations[deviceID] == workerGeneration,
+                  services[deviceID] === service,
+                  sessions[deviceID] != nil
+            else { return }
+            setConnection(.failed(error.localizedDescription), for: deviceID)
         }
     }
 
     private func scheduleRefresh(_ deviceID: UUID) {
+        guard device(deviceID) != nil,
+              services[deviceID] != nil,
+              sessions[deviceID] != nil
+        else { return }
+        dirtyRefreshes.insert(deviceID)
+        guard refreshWorkers[deviceID] == nil else { return }
         refreshDebounces[deviceID]?.cancel()
-        refreshDebounces[deviceID] = Task {
+        refreshDebounces[deviceID] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 200_000_000)
-            guard !Task.isCancelled else { return }
-            await self.refresh(deviceID)
+            guard let self, !Task.isCancelled else { return }
+            self.refreshDebounces[deviceID] = nil
+            guard self.refreshWorkers[deviceID] == nil else { return }
+            let worker = self.startRefreshWorker(deviceID)
+            await worker.value
         }
     }
 
@@ -1104,6 +1234,7 @@ final class AppModel: ObservableObject {
             if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
                 self.devices[index].osID = os
                 self.store.save(self.devices)
+                self.publishFleetChange(.device(device.id))
             }
         }
     }
@@ -1241,6 +1372,7 @@ final class AppModel: ObservableObject {
                 id: \.workspaceID,
                 plan: plan
             )
+            publishFleetChange(.device(source.device.id))
         }
 
         Task {
@@ -1288,6 +1420,7 @@ final class AppModel: ObservableObject {
                 workspaceID: source.agent.workspaceID,
                 with: reordered
             )
+            publishFleetChange(.device(source.device.id))
         }
 
         Task {

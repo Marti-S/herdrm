@@ -76,6 +76,52 @@ final class FleetBridgeWireTests: XCTestCase {
         )
     }
 
+    func testCachedSnapshotEncodingReusesEncodedPayload() throws {
+        let snapshot = FleetSnapshot(revision: 73, devices: [])
+        let encodedSnapshot = try JSONEncoder().encode(snapshot)
+        let firstRequestID = UUID()
+        let secondRequestID = UUID()
+
+        XCTAssertEqual(
+            try FleetBridgeWire.decodeServer(
+                FleetBridgeWire.encodeSnapshot(
+                    requestID: firstRequestID,
+                    encodedSnapshot: encodedSnapshot
+                )
+            ),
+            .snapshot(FleetBridgeSnapshotRecord(
+                requestID: firstRequestID,
+                snapshot: snapshot
+            ))
+        )
+        XCTAssertEqual(
+            try FleetBridgeWire.decodeServer(
+                FleetBridgeWire.encodeSnapshot(
+                    requestID: secondRequestID,
+                    encodedSnapshot: encodedSnapshot
+                )
+            ),
+            .snapshot(FleetBridgeSnapshotRecord(
+                requestID: secondRequestID,
+                snapshot: snapshot
+            ))
+        )
+    }
+
+    func testCachedSnapshotEncodingRejectsEmptyPayload() throws {
+        XCTAssertThrowsError(
+            try FleetBridgeWire.encodeSnapshot(
+                requestID: UUID(),
+                encodedSnapshot: Data()
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? FleetBridgeWireError,
+                .invalidRecord("The cached fleet snapshot is empty.")
+            )
+        }
+    }
+
     func testRemoteDescriptorContainsNoEndpointMetadata() throws {
         let descriptor = FleetDeviceDescriptor(
             id: UUID(), name: "Build Mac", kind: .remote, osID: "macos"
