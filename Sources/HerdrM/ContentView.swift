@@ -128,9 +128,7 @@ struct DetailView: View {
     private var detailContent: some View {
         ZStack {
             terminal
-                .clipped()
-                .opacity(model.isFileManagerActive ? 0 : 1)
-                .allowsHitTesting(!model.isFileManagerActive)
+                .mountedTerminal(isActive: !model.isFileManagerActive)
             if hasOpenedFileManager {
                 DeviceFilesView(model: model)
                     .opacity(model.isFileManagerActive ? 1 : 0)
@@ -263,6 +261,7 @@ struct DetailView: View {
     private var terminal: some View {
         ZStack {
             attachedTerminal
+                .mountedTerminal(isActive: model.selectedShellID == nil)
             // Standalone shells stay in the hierarchy while deselected: unlike a
             // herdr pane, an app-owned shell has no server side to reattach to,
             // so tearing the view down would kill whatever is running in it.
@@ -282,8 +281,7 @@ struct DetailView: View {
                     .id("shell-\(session.id)")
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .opacity(model.selectedShellID == session.id ? 1 : 0)
-                    .allowsHitTesting(model.selectedShellID == session.id)
+                    .mountedTerminal(isActive: model.selectedShellID == session.id)
             }
         }
         .background(Theme.terminalBackground)
@@ -435,8 +433,7 @@ struct DetailView: View {
                     .id("space-shell-\(session.id.uuidString)")
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .opacity(active ? 1 : 0)
-                    .allowsHitTesting(active)
+                    .mountedTerminal(isActive: active)
             }
         }
     }
@@ -1397,5 +1394,32 @@ struct EditDeviceSheet: View {
             name = device.name
             target = device.sshTarget ?? ""
         }
+    }
+}
+
+/// Keeps terminal processes mounted while removing inactive views from layout.
+/// A zero-sized SwiftTerm view no longer receives every window resize, avoiding
+/// redundant buffer reshapes, PTY size notifications, and redraws for hidden sessions.
+private struct MountedTerminalModifier: ViewModifier {
+    let isActive: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .frame(
+                minWidth: 0,
+                maxWidth: isActive ? .infinity : 0,
+                minHeight: 0,
+                maxHeight: isActive ? .infinity : 0
+            )
+            .opacity(isActive ? 1 : 0)
+            .allowsHitTesting(isActive)
+            .accessibilityHidden(!isActive)
+            .clipped()
+    }
+}
+
+private extension View {
+    func mountedTerminal(isActive: Bool) -> some View {
+        modifier(MountedTerminalModifier(isActive: isActive))
     }
 }
