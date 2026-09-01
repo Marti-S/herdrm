@@ -232,6 +232,7 @@ final class AppModel: ObservableObject {
     private let store = DeviceStore()
     private var services: [UUID: HerdrService] = [:]
     private var sessionTasks: [UUID: Task<Void, Never>] = [:]
+    private var sessionTaskGenerations: [UUID: UInt64] = [:]
     private var refreshDebounces: [UUID: Task<Void, Never>] = [:]
     private var refreshWorkers: [UUID: Task<Void, Never>] = [:]
     private var refreshWorkerGenerations: [UUID: UInt64] = [:]
@@ -827,19 +828,58 @@ final class AppModel: ObservableObject {
         return service
     }
 
+    private func isCurrentSessionTask(
+        deviceID: UUID,
+        generation: UInt64,
+        service: HerdrService
+    ) -> Bool {
+        !Task.isCancelled
+            && sessionTaskGenerations[deviceID] == generation
+            && services[deviceID] === service
+            && sessions[deviceID] != nil
+            && device(deviceID) != nil
+    }
+
+    private func isCurrentService(_ service: HerdrService, deviceID: UUID) -> Bool {
+        !Task.isCancelled
+            && services[deviceID] === service
+            && sessions[deviceID] != nil
+            && device(deviceID) != nil
+    }
+
     /// Runs one device's session: connect, snapshot, event stream, and reconnect
     /// with exponential backoff (1s → 30s) whenever the connection drops.
     private func startSession(_ device: Device) {
         guard sessionTasks[device.id] == nil else { return }
         if sessions[device.id] == nil { sessions[device.id] = DeviceSessionState() }
         let service = service(for: device)
-        sessionTasks[device.id] = Task { [weak self] in
+        let taskGeneration = (sessionTaskGenerations[device.id] ?? 0) &+ 1
+        sessionTaskGenerations[device.id] = taskGeneration
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.sessionTaskGenerations[device.id] == taskGeneration {
+                    self.sessionTasks[device.id] = nil
+                }
+            }
+
             var backoff: Double = 1
-            while !Task.isCancelled {
-                guard let self else { return }
+            while self.isCurrentSessionTask(
+                deviceID: device.id,
+                generation: taskGeneration,
+                service: service
+            ) {
                 self.setConnection(.connecting, for: device.id)
                 do {
                     let pong = try await service.connect()
+                    guard self.isCurrentSessionTask(
+                        deviceID: device.id,
+                        generation: taskGeneration,
+                        service: service
+                    ) else {
+                        await service.disconnect()
+                        return
+                    }
                     self.setConnection(.connected(version: pong.version), for: device.id)
                     backoff = 1
                     // retried on every successful connect until it sticks (a fresh
@@ -848,12 +888,32 @@ final class AppModel: ObservableObject {
                         self.probeOSIfNeeded(current)
                     }
                     await self.refresh(device.id)
+                    guard self.isCurrentSessionTask(
+                        deviceID: device.id,
+                        generation: taskGeneration,
+                        service: service
+                    ) else { return }
                     await self.loadAgentCatalog(deviceID: device.id, using: service)
+                    guard self.isCurrentSessionTask(
+                        deviceID: device.id,
+                        generation: taskGeneration,
+                        service: service
+                    ) else { return }
                     let stream = try await service.events()
                     for try await _ in stream {
+                        guard self.isCurrentSessionTask(
+                            deviceID: device.id,
+                            generation: taskGeneration,
+                            service: service
+                        ) else { return }
                         self.scheduleRefresh(device.id)
                     }
                 } catch {
+                    guard self.isCurrentSessionTask(
+                        deviceID: device.id,
+                        generation: taskGeneration,
+                        service: service
+                    ) else { return }
                     self.setConnection(.failed(error.localizedDescription), for: device.id)
                     if let target = device.sshTarget, Self.isSSHAuthenticationFailure(error) {
                         self.sshAuthenticationRequest = SSHAuthenticationRequest(
@@ -863,11 +923,16 @@ final class AppModel: ObservableObject {
                         return
                     }
                 }
-                guard !Task.isCancelled else { return }
+                guard self.isCurrentSessionTask(
+                    deviceID: device.id,
+                    generation: taskGeneration,
+                    service: service
+                ) else { return }
                 try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
                 backoff = min(backoff * 2, 30)
             }
         }
+        sessionTasks[device.id] = task
     }
 
     /// Locally, keeps only advertised CLIs whose binaries are on the login-shell
@@ -875,11 +940,17 @@ final class AppModel: ObservableObject {
     /// catalog; `agent.start` validates in the target pane instead. Manifests
     /// also feed the attachment-capability registry (paste path vs upload).
     private func loadAgentCatalog(deviceID: UUID, using service: HerdrService) async {
+        guard isCurrentService(service, deviceID: deviceID) else { return }
         setAgentCatalog(.loading, for: deviceID)
         do {
             let manifests = try await service.agentManifests()
-            sessions[deviceID]?.attachmentCapabilities =
+            guard isCurrentService(service, deviceID: deviceID),
+                  var state = sessions[deviceID]
+            else { return }
+            state.attachmentCapabilities =
                 AgentAttachmentCapabilityRegistry(manifests: manifests)
+            sessions[deviceID] = state
+
             let advertised = manifests.map(\.agent)
             if device(deviceID)?.isLocal == true {
                 let overrides = AgentBinaryOverrides.load()
@@ -887,15 +958,19 @@ final class AppModel: ObservableObject {
                     from: advertised,
                     overrides: overrides
                 )
-                if advertised.contains("pi"),
-                   let atomic = await service.installedAgents(
-                       from: ["atomic"],
-                       overrides: overrides
-                   ).first {
-                    if let piIndex = found.firstIndex(where: { $0.kind == "pi" }) {
-                        found.insert(atomic, at: piIndex + 1)
-                    } else {
-                        found.append(atomic)
+                guard isCurrentService(service, deviceID: deviceID) else { return }
+                if advertised.contains("pi") {
+                    let atomic = await service.installedAgents(
+                        from: ["atomic"],
+                        overrides: overrides
+                    ).first
+                    guard isCurrentService(service, deviceID: deviceID) else { return }
+                    if let atomic {
+                        if let piIndex = found.firstIndex(where: { $0.kind == "pi" }) {
+                            found.insert(atomic, at: piIndex + 1)
+                        } else {
+                            found.append(atomic)
+                        }
                     }
                 }
                 setAgentCatalog(
@@ -915,6 +990,7 @@ final class AppModel: ObservableObject {
                 setAgentCatalog(.loaded(kinds: kinds, paths: paths), for: deviceID)
             }
         } catch {
+            guard isCurrentService(service, deviceID: deviceID) else { return }
             setAgentCatalog(.failed(error.localizedDescription), for: deviceID)
         }
     }
@@ -932,6 +1008,7 @@ final class AppModel: ObservableObject {
         services.removeAll()
         sessionTasks.values.forEach { $0.cancel() }
         sessionTasks.removeAll()
+        sessionTaskGenerations.removeAll()
         refreshDebounces.values.forEach { $0.cancel() }
         refreshDebounces.removeAll()
         refreshWorkers.values.forEach { $0.cancel() }
@@ -945,6 +1022,7 @@ final class AppModel: ObservableObject {
     }
 
     private func stopSession(_ id: UUID) {
+        sessionTaskGenerations[id] = (sessionTaskGenerations[id] ?? 0) &+ 1
         sessionTasks[id]?.cancel()
         sessionTasks[id] = nil
         refreshDebounces[id]?.cancel()
