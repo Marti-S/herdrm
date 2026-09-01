@@ -9,14 +9,23 @@ public final class TerminalInputQueue {
     public typealias Resizer = @MainActor @Sendable (TerminalSize) async throws -> Void
     public typealias SemanticSender = @MainActor @Sendable (String, JSONValue) async throws -> Void
 
+    public struct SemanticTicket {
+        private let completion: SemanticCompletion
+
+        fileprivate init(completion: SemanticCompletion) {
+            self.completion = completion
+        }
+
+        @MainActor
+        public func value() async throws {
+            try await completion.value()
+        }
+    }
+
     private enum Operation {
         case terminal(Data, generation: UInt64)
         case resize(TerminalSize, generation: UInt64)
-        case semantic(
-            method: String,
-            params: JSONValue,
-            continuation: CheckedContinuation<Void, any Error>
-        )
+        case semantic(method: String, params: JSONValue, completion: SemanticCompletion)
     }
 
     private let sendTerminal: TerminalSender
@@ -63,15 +72,20 @@ public final class TerminalInputQueue {
         startDrainIfNeeded()
     }
 
+    public func submitSemantic(method: String, params: JSONValue) -> SemanticTicket {
+        let completion = SemanticCompletion()
+        operations.append(.semantic(
+            method: method,
+            params: params,
+            completion: completion
+        ))
+        startDrainIfNeeded()
+        return SemanticTicket(completion: completion)
+    }
+
     public func enqueueSemantic(method: String, params: JSONValue) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            operations.append(.semantic(
-                method: method,
-                params: params,
-                continuation: continuation
-            ))
-            startDrainIfNeeded()
-        }
+        let ticket = submitSemantic(method: method, params: params)
+        try await ticket.value()
     }
 
     var pendingOperationCount: Int { operations.count }
@@ -95,18 +109,53 @@ public final class TerminalInputQueue {
                 guard operationGeneration == generation else { continue }
                 try? await resizeTerminal(size)
 
-            case .semantic(let method, let params, let continuation):
+            case .semantic(let method, let params, let completion):
                 do {
                     try await sendSemantic(method, params)
-                    continuation.resume()
+                    completion.resolve(.success(()))
                 } catch {
-                    continuation.resume(throwing: error)
+                    completion.resolve(.failure(error))
                 }
             }
         }
         drainTask = nil
         if !operations.isEmpty {
             startDrainIfNeeded()
+        }
+    }
+}
+
+@MainActor
+fileprivate final class SemanticCompletion {
+    private enum State {
+        case pending([CheckedContinuation<Void, any Error>])
+        case resolved(Result<Void, any Error>)
+    }
+
+    private var state: State = .pending([])
+
+    func value() async throws {
+        switch state {
+        case .resolved(let result):
+            try result.get()
+        case .pending:
+            try await withCheckedThrowingContinuation { continuation in
+                switch state {
+                case .resolved(let result):
+                    continuation.resume(with: result)
+                case .pending(var continuations):
+                    continuations.append(continuation)
+                    state = .pending(continuations)
+                }
+            }
+        }
+    }
+
+    func resolve(_ result: Result<Void, any Error>) {
+        guard case .pending(let continuations) = state else { return }
+        state = .resolved(result)
+        for continuation in continuations {
+            continuation.resume(with: result)
         }
     }
 }

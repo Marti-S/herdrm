@@ -134,6 +134,60 @@ final class TerminalInputQueueTests: XCTestCase {
     }
 
     @MainActor
+    func testSubmitSemanticPreservesSynchronousSubmissionOrder() async throws {
+        let firstStarted = expectation(description: "first semantic started")
+        let gate = InputGate()
+        let recorder = InputRecorder()
+        let queue = makeQueue(recorder: recorder) { method, _ in
+            if method == "first" {
+                firstStarted.fulfill()
+                await gate.waitOnFirstCall()
+            }
+            recorder.record("semantic:\(method)")
+        }
+
+        let first = queue.submitSemantic(method: "first", params: .object([:]))
+        let second = queue.submitSemantic(method: "second", params: .object([:]))
+        let third = queue.submitSemantic(method: "third", params: .object([:]))
+
+        await fulfillment(of: [firstStarted])
+        await gate.release()
+        try await first.value()
+        try await second.value()
+        try await third.value()
+
+        XCTAssertEqual(recorder.events, [
+            "semantic:first",
+            "semantic:second",
+            "semantic:third",
+        ])
+    }
+
+    @MainActor
+    func testCompletedSemanticTicketCanBeAwaitedRepeatedly() async throws {
+        let recorder = InputRecorder()
+        let queue = makeQueue(recorder: recorder) { method, _ in
+            recorder.record("semantic:\(method)")
+            if method == "fail" { throw InputTestError.rejected }
+        }
+
+        let succeeded = queue.submitSemantic(method: "success", params: .object([:]))
+        let failed = queue.submitSemantic(method: "fail", params: .object([:]))
+        await waitUntil { recorder.events.count == 2 }
+
+        try await succeeded.value()
+        try await succeeded.value()
+        for _ in 0..<2 {
+            do {
+                try await failed.value()
+                XCTFail("Expected completed failure ticket to throw")
+            } catch {
+                XCTAssertEqual(error as? InputTestError, .rejected)
+            }
+        }
+    }
+
+    @MainActor
     private func makeQueue(
         recorder: InputRecorder,
         semantic: @escaping TerminalInputQueue.SemanticSender

@@ -185,8 +185,8 @@ final class MobileAttachSession: ObservableObject {
     /// Sends named keys through herdr's RPC — proper terminal encoding without
     /// this client knowing the pane's keyboard protocol state. These semantic
     /// controls remain available while the terminal itself is read-only.
-    func sendKeys(_ keys: [String]) async throws {
-        try await inputQueue.enqueueSemantic(
+    func sendKeys(_ keys: [String]) -> TerminalInputQueue.SemanticTicket {
+        inputQueue.submitSemantic(
             method: "pane.send_input",
             params: .object([
                 "pane_id": .string(paneID),
@@ -198,9 +198,9 @@ final class MobileAttachSession: ObservableObject {
     /// Sends a prompt to the agent; herdr delivers and submits it. This remains
     /// available to an observer because it is a semantic agent operation, not
     /// raw ownership of the terminal byte stream.
-    func prompt(_ text: String) async throws {
-        guard let agentPaneID else { return }
-        try await inputQueue.enqueueSemantic(
+    func prompt(_ text: String) throws -> TerminalInputQueue.SemanticTicket {
+        guard let agentPaneID else { throw MobileTerminalInputError.agentUnavailable }
+        return inputQueue.submitSemantic(
             method: "agent.prompt",
             params: .object([
                 "target": .string(agentPaneID),
@@ -257,6 +257,14 @@ final class MobileAttachSession: ObservableObject {
 
     nonisolated private static func presentation(_ error: any Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? "\(error)"
+    }
+}
+
+private enum MobileTerminalInputError: LocalizedError {
+    case agentUnavailable
+
+    var errorDescription: String? {
+        String(localized: "This terminal is not attached to an agent.")
     }
 }
 
@@ -466,10 +474,20 @@ struct MobileTerminalScreen: View {
         let text = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSendingPrompt else { return }
         isSendingPrompt = true
+
+        let ticket: TerminalInputQueue.SemanticTicket
+        do {
+            ticket = try session.prompt(text)
+        } catch {
+            isSendingPrompt = false
+            inputError = presentableInputError(error)
+            return
+        }
+
         Task { @MainActor in
             defer { isSendingPrompt = false }
             do {
-                try await session.prompt(text)
+                try await ticket.value()
                 if composerText == originalText {
                     composerText = ""
                 }
@@ -480,9 +498,10 @@ struct MobileTerminalScreen: View {
     }
 
     private func sendKeys(_ keys: [String]) {
+        let ticket = session.sendKeys(keys)
         Task { @MainActor in
             do {
-                try await session.sendKeys(keys)
+                try await ticket.value()
             } catch {
                 inputError = presentableInputError(error)
             }
