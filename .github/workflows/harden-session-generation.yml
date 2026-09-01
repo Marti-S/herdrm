@@ -1,0 +1,259 @@
+name: Harden session generation
+
+on:
+  push:
+    branches: [optimize-sync-pipeline]
+    paths: [".github/workflows/harden-session-generation.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: optimize-sync-pipeline
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply session generation guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("Sources/HerdrM/AppModel.swift")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(label: str, old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              "session generation storage",
+              """    private var sessionTasks: [UUID: Task<Void, Never>] = [:]
+              private var refreshDebounces: [UUID: Task<Void, Never>] = [:]
+          """,
+              """    private var sessionTasks: [UUID: Task<Void, Never>] = [:]
+              private var sessionTaskGenerations: [UUID: UInt64] = [:]
+              private var refreshDebounces: [UUID: Task<Void, Never>] = [:]
+          """,
+          )
+
+          start = text.index("    /// Runs one device's session:")
+          end = text.index("\n    /// Locally, keeps only advertised CLIs", start)
+          text = text[:start] + """    private func isCurrentSessionTask(
+                  deviceID: UUID,
+                  generation: UInt64,
+                  service: HerdrService
+              ) -> Bool {
+                  !Task.isCancelled
+                      && sessionTaskGenerations[deviceID] == generation
+                      && services[deviceID] === service
+                      && sessions[deviceID] != nil
+                      && device(deviceID) != nil
+              }
+
+              private func isCurrentService(_ service: HerdrService, deviceID: UUID) -> Bool {
+                  !Task.isCancelled
+                      && services[deviceID] === service
+                      && sessions[deviceID] != nil
+                      && device(deviceID) != nil
+              }
+
+              /// Runs one device's session: connect, snapshot, event stream, and reconnect
+              /// with exponential backoff (1s → 30s) whenever the connection drops.
+              private func startSession(_ device: Device) {
+                  guard sessionTasks[device.id] == nil else { return }
+                  if sessions[device.id] == nil { sessions[device.id] = DeviceSessionState() }
+                  let service = service(for: device)
+                  let taskGeneration = (sessionTaskGenerations[device.id] ?? 0) &+ 1
+                  sessionTaskGenerations[device.id] = taskGeneration
+                  let task = Task { [weak self] in
+                      guard let self else { return }
+                      defer {
+                          if self.sessionTaskGenerations[device.id] == taskGeneration {
+                              self.sessionTasks[device.id] = nil
+                          }
+                      }
+
+                      var backoff: Double = 1
+                      while self.isCurrentSessionTask(
+                          deviceID: device.id,
+                          generation: taskGeneration,
+                          service: service
+                      ) {
+                          self.setConnection(.connecting, for: device.id)
+                          do {
+                              let pong = try await service.connect()
+                              guard self.isCurrentSessionTask(
+                                  deviceID: device.id,
+                                  generation: taskGeneration,
+                                  service: service
+                              ) else {
+                                  await service.disconnect()
+                                  return
+                              }
+                              self.setConnection(.connected(version: pong.version), for: device.id)
+                              backoff = 1
+                              // retried on every successful connect until it sticks (a fresh
+                              // device's first probes can fail before its host key is known)
+                              if let current = self.device(device.id) {
+                                  self.probeOSIfNeeded(current)
+                              }
+                              await self.refresh(device.id)
+                              guard self.isCurrentSessionTask(
+                                  deviceID: device.id,
+                                  generation: taskGeneration,
+                                  service: service
+                              ) else { return }
+                              await self.loadAgentCatalog(deviceID: device.id, using: service)
+                              guard self.isCurrentSessionTask(
+                                  deviceID: device.id,
+                                  generation: taskGeneration,
+                                  service: service
+                              ) else { return }
+                              let stream = try await service.events()
+                              for try await _ in stream {
+                                  guard self.isCurrentSessionTask(
+                                      deviceID: device.id,
+                                      generation: taskGeneration,
+                                      service: service
+                                  ) else { return }
+                                  self.scheduleRefresh(device.id)
+                              }
+                          } catch {
+                              guard self.isCurrentSessionTask(
+                                  deviceID: device.id,
+                                  generation: taskGeneration,
+                                  service: service
+                              ) else { return }
+                              self.setConnection(.failed(error.localizedDescription), for: device.id)
+                              if let target = device.sshTarget, Self.isSSHAuthenticationFailure(error) {
+                                  self.sshAuthenticationRequest = SSHAuthenticationRequest(
+                                      deviceID: device.id,
+                                      target: target
+                                  )
+                                  return
+                              }
+                          }
+                          guard self.isCurrentSessionTask(
+                              deviceID: device.id,
+                              generation: taskGeneration,
+                              service: service
+                          ) else { return }
+                          try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                          backoff = min(backoff * 2, 30)
+                      }
+                  }
+                  sessionTasks[device.id] = task
+              }
+          """ + text[end:]
+
+          catalog_start = text.index("    /// Locally, keeps only advertised CLIs")
+          catalog_end = text.index("\n    func reloadAgentCatalog", catalog_start)
+          text = text[:catalog_start] + """    /// Locally, keeps only advertised CLIs whose binaries are on the login-shell
+              /// search PATH (or a Settings override). SSH hosts keep their server-owned
+              /// catalog; `agent.start` validates in the target pane instead. Manifests
+              /// also feed the attachment-capability registry (paste path vs upload).
+              private func loadAgentCatalog(deviceID: UUID, using service: HerdrService) async {
+                  guard isCurrentService(service, deviceID: deviceID) else { return }
+                  setAgentCatalog(.loading, for: deviceID)
+                  do {
+                      let manifests = try await service.agentManifests()
+                      guard isCurrentService(service, deviceID: deviceID),
+                            var state = sessions[deviceID]
+                      else { return }
+                      state.attachmentCapabilities =
+                          AgentAttachmentCapabilityRegistry(manifests: manifests)
+                      sessions[deviceID] = state
+
+                      let advertised = manifests.map(\.agent)
+                      if device(deviceID)?.isLocal == true {
+                          let overrides = AgentBinaryOverrides.load()
+                          var found = await service.installedAgents(
+                              from: advertised,
+                              overrides: overrides
+                          )
+                          guard isCurrentService(service, deviceID: deviceID) else { return }
+                          if advertised.contains("pi") {
+                              let atomic = await service.installedAgents(
+                                  from: ["atomic"],
+                                  overrides: overrides
+                              ).first
+                              guard isCurrentService(service, deviceID: deviceID) else { return }
+                              if let atomic {
+                                  if let piIndex = found.firstIndex(where: { $0.kind == "pi" }) {
+                                      found.insert(atomic, at: piIndex + 1)
+                                  } else {
+                                      found.append(atomic)
+                                  }
+                              }
+                          }
+                          setAgentCatalog(
+                              .loaded(
+                                  kinds: found.map(\.kind),
+                                  paths: Dictionary(uniqueKeysWithValues: found.map { ($0.kind, $0.path) })
+                              ),
+                              for: deviceID
+                          )
+                      } else {
+                          var kinds = advertised
+                          var paths: [String: String] = [:]
+                          if let piIndex = kinds.firstIndex(of: "pi"), !kinds.contains("atomic") {
+                              kinds.insert("atomic", at: piIndex + 1)
+                              paths["atomic"] = "atomic"
+                          }
+                          setAgentCatalog(.loaded(kinds: kinds, paths: paths), for: deviceID)
+                      }
+                  } catch {
+                      guard isCurrentService(service, deviceID: deviceID) else { return }
+                      setAgentCatalog(.failed(error.localizedDescription), for: deviceID)
+                  }
+              }
+          """ + text[catalog_end:]
+
+          replace_once(
+              "shutdown session generations",
+              """        sessionTasks.values.forEach { $0.cancel() }
+                  sessionTasks.removeAll()
+                  refreshDebounces.values.forEach { $0.cancel() }
+          """,
+              """        sessionTasks.values.forEach { $0.cancel() }
+                  sessionTasks.removeAll()
+                  sessionTaskGenerations.removeAll()
+                  refreshDebounces.values.forEach { $0.cancel() }
+          """,
+          )
+          replace_once(
+              "stop session generation",
+              """    private func stopSession(_ id: UUID) {
+                  sessionTasks[id]?.cancel()
+          """,
+              """    private func stopSession(_ id: UUID) {
+                  sessionTaskGenerations[id] = (sessionTaskGenerations[id] ?? 0) &+ 1
+                  sessionTasks[id]?.cancel()
+          """,
+          )
+
+          path.write_text(text, encoding="utf-8")
+          Path(".github/workflows/harden-session-generation.yml").unlink()
+          PY
+          git diff --check
+
+      - name: Commit guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Guard device session generations"
+          git push origin HEAD:optimize-sync-pipeline
