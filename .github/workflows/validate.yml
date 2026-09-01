@@ -26,7 +26,7 @@ jobs:
     # HerdrSSH uses Swift tools 6.2. The macOS 26 image ships Xcode 26.x,
     # while macos-15 currently defaults to a Swift 6.1 toolchain.
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +88,7 @@ jobs:
             DEVELOPMENT_TEAM= \
             build 2>&1 | tee macos-build.log
 
-      - name: Build iOS app
+      - name: Build iOS device app
         id: ios
         if: always() && steps.packages.outcome == 'success'
         continue-on-error: true
@@ -108,6 +108,28 @@ jobs:
             DEVELOPMENT_TEAM= \
             build 2>&1 | tee ios-build.log
 
+      - name: Build arm64 iOS Simulator app
+        id: ios_simulator
+        if: always() && steps.packages.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project HerdrM.xcodeproj \
+            -scheme HerdrMobile \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build-ios-simulator \
+            -clonedSourcePackagesDirPath build-packages \
+            -skipPackagePluginValidation \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            build 2>&1 | tee ios-simulator-build.log
+
       - name: Publish validation summary
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
@@ -116,6 +138,7 @@ jobs:
           PACKAGES_OUTCOME: ${{ steps.packages.outcome }}
           MACOS_OUTCOME: ${{ steps.macos.outcome }}
           IOS_OUTCOME: ${{ steps.ios.outcome }}
+          IOS_SIMULATOR_OUTCOME: ${{ steps.ios_simulator.outcome }}
         with:
           script: |
             const fs = require('fs');
@@ -142,7 +165,8 @@ jobs:
               HerdrKit: process.env.KIT_OUTCOME,
               Packages: process.env.PACKAGES_OUTCOME,
               macOS: process.env.MACOS_OUTCOME,
-              iOS: process.env.IOS_OUTCOME,
+              'iOS Device': process.env.IOS_OUTCOME,
+              'iOS Simulator': process.env.IOS_SIMULATOR_OUTCOME,
             };
             const failed = Object.entries(outcomes)
               .filter(([, outcome]) => outcome !== 'success')
@@ -151,10 +175,11 @@ jobs:
               ...diagnostics('herdrkit-test.log', 'HerdrKit'),
               ...diagnostics('package-resolve.log', 'Packages'),
               ...diagnostics('macos-build.log', 'macOS'),
-              ...diagnostics('ios-build.log', 'iOS'),
+              ...diagnostics('ios-build.log', 'iOS Device'),
+              ...diagnostics('ios-simulator-build.log', 'iOS Simulator'),
             ];
             const body = failed.length === 0
-              ? `${marker}\n✅ HerdrKit tests and both Apple targets build successfully.`
+              ? `${marker}\n✅ HerdrKit tests, macOS, iOS device, and arm64 iOS Simulator builds succeeded.`
               : `${marker}\n❌ Validation failed: ${failed.join(', ')}.\n\n` +
                 (lines.length ? `\`\`\`text\n${lines.join('\n')}\n\`\`\`` : 'No filtered compiler diagnostics were found; inspect the workflow log.');
 
@@ -173,5 +198,5 @@ jobs:
             }
 
       - name: Fail validation
-        if: always() && (steps.kit.outcome != 'success' || steps.packages.outcome != 'success' || steps.macos.outcome != 'success' || steps.ios.outcome != 'success')
+        if: always() && (steps.kit.outcome != 'success' || steps.packages.outcome != 'success' || steps.macos.outcome != 'success' || steps.ios.outcome != 'success' || steps.ios_simulator.outcome != 'success')
         run: exit 1
