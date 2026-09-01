@@ -29,10 +29,12 @@ final class FleetBridgeNetworkTests: XCTestCase {
             identity,
             FleetBridgeNetworkIdentity(
                 bindHost: "100.101.2.3",
+                interfaceName: "utun7",
                 pairingHost: "100.101.2.3",
                 scope: .tailscale
             )
         )
+        XCTAssertEqual(identity.interfaceName, "utun7")
     }
 
     func testDefaultSelectionFallsBackToLoopback() {

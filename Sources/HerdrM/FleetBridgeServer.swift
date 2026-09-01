@@ -50,6 +50,7 @@ final class FleetBridgeServer: ObservableObject {
     private var listenerID: ObjectIdentifier?
     private var pathMonitor: NWPathMonitor?
     private var pathMonitorGeneration = UUID()
+    private var availableNetworkInterfaces: [NWInterface] = []
     private var interfaceRefreshTask: Task<Void, Never>?
     private var listenerRetryTask: Task<Void, Never>?
     private var connections: [UUID: FleetBridgeServerConnection] = [:]
@@ -79,13 +80,15 @@ final class FleetBridgeServer: ObservableObject {
             Task { @MainActor in self?.schedulePublish() }
         }
 
+        if configuration.enabled {
+            startNetworkMonitoring()
+        }
         reconcileListener(force: true)
 
         guard configuration.enabled else {
             fleetBridgeLog.notice("mobile bridge disabled by user defaults")
             return
         }
-        startNetworkMonitoring()
     }
 
     func stop() {
@@ -99,6 +102,7 @@ final class FleetBridgeServer: ObservableObject {
         pathMonitorGeneration = UUID()
         pathMonitor?.cancel()
         pathMonitor = nil
+        availableNetworkInterfaces = []
 
         modelCancellable?.cancel()
         modelCancellable = nil
@@ -217,11 +221,32 @@ final class FleetBridgeServer: ObservableObject {
                     "Invalid bridge port \(configuration.port)."
                 )
             }
-            if let bindHost = identity.bindHost {
+            switch identity.scope {
+            case .tailscale:
+                guard let interfaceName = identity.interfaceName,
+                      let requiredInterface = availableNetworkInterfaces.first(where: {
+                          $0.name == interfaceName
+                      })
+                else {
+                    // NWInterface values come from NWPathMonitor asynchronously.
+                    // Do not widen exposure while waiting for the selected tunnel.
+                    scheduleListenerRetry()
+                    return
+                }
+                parameters.requiredInterface = requiredInterface
+                // Constraining the IP family keeps this an IPv4 listener on the
+                // interface that owns the exact address exported for pairing.
+                if let ip = parameters.defaultProtocolStack.internetProtocol
+                    as? NWProtocolIP.Options {
+                    ip.version = .v4
+                }
+            case .loopback:
                 parameters.requiredLocalEndpoint = .hostPort(
-                    host: NWEndpoint.Host(bindHost),
-                    port: port
+                    host: NWEndpoint.Host(identity.bindHost ?? "127.0.0.1"),
+                    port: .any
                 )
+            case .allInterfaces:
+                break
             }
 
             let listener = try NWListener(using: parameters, on: port)
@@ -290,9 +315,10 @@ final class FleetBridgeServer: ObservableObject {
         let generation = pathMonitorGeneration
         let monitor = NWPathMonitor()
         pathMonitor = monitor
-        monitor.pathUpdateHandler = { [weak self] _ in
+        monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
                 guard let self, self.pathMonitorGeneration == generation else { return }
+                self.availableNetworkInterfaces = path.availableInterfaces
                 self.reconcileListener()
             }
         }

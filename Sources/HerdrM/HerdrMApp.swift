@@ -101,6 +101,10 @@ struct HerdrMApp: App {
             }
 
             CommandGroup(after: .appInfo) {
+                Button("Mobile Pairing…") {
+                    FleetBridgePairingWindowController.shared.show(model: appDelegate.model)
+                }
+
                 Button("Check for Updates…") {
                     updaterController.checkForUpdates(nil)
                 }
@@ -252,10 +256,12 @@ struct SettingsView: View {
                 .tabItem { Label("Agents", systemImage: "sparkles") }
             NotificationSettingsView()
                 .tabItem { Label("Notifications", systemImage: "bell") }
+            FleetBridgePairingView(model: model)
+                .tabItem { Label("Mobile", systemImage: "iphone") }
             AboutSettingsView()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 420)
+        .frame(width: 640)
     }
 }
 
