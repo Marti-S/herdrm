@@ -416,7 +416,9 @@ struct DetailView: View {
         ZStack {
             ForEach(model.spaceSplitSessions) { session in
                 let active = model.attachedSpaceRef == session.space
-                ShellTerminalView(
+                SpaceSplitTerminalView(
+                    model: model,
+                    session: session,
                     fontName: terminalFontName,
                     fontSize: terminalFontSize,
                     thinStrokes: terminalThinStrokes,
@@ -424,7 +426,6 @@ struct DetailView: View {
                     lineSpacing: terminalLineSpacing,
                     dark: colorScheme == .dark,
                     mouseReporting: terminalMouseReporting,
-                    onExit: { _ in model.closeSplitSession(for: session.space) },
                     onViewReady: { view in
                         model.registerSplitShellView(view, for: session.space)
                         if active {
@@ -432,9 +433,7 @@ struct DetailView: View {
                         }
                     }
                 )
-                    .id("space-shell-\(session.id.uuidString)")
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .id("space-sidecar-\(session.id.uuidString)")
                     .opacity(active ? 1 : 0)
                     .allowsHitTesting(active)
             }

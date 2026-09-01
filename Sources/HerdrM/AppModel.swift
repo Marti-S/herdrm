@@ -125,12 +125,19 @@ enum AgentBinaryOverrides {
 
 @MainActor
 final class AppModel: ObservableObject {
+    enum SpaceSplitTerminalState: Equatable {
+        case creating
+        case ready(paneID: String, terminalID: String)
+        case failed(String)
+    }
+
     struct SpaceSplitSession: Identifiable {
         let id: UUID
         let space: SpaceRef
         var axis: SplitAxis
         var activeSide: SplitSide
         var ratio: Double
+        var terminal: SpaceSplitTerminalState
     }
 
     @Published var devices: [Device]
@@ -189,10 +196,14 @@ final class AppModel: ObservableObject {
         }
     }
     static let splitRatioKey = "terminal.splitRatio"
-    /// One app-owned sidecar shell per Space that has explicitly opened ⌘D.
+    /// One server-owned Herdr sidecar terminal per Space that has explicitly
+    /// opened ⌘D. The terminal survives Space switches, app restarts, and is
+    /// visible to every paired mobile client.
     @Published private var splitSessionsBySpace: [SpaceRef: SpaceSplitSession] = [:]
     private var splitShellViews: [SpaceRef: WeakTerminalViewBox] = [:]
+    private var splitProvisioningIDs: [SpaceRef: UUID] = [:]
     private var restoringSplitSession = false
+    private static let splitTerminalLabel = "HerdrM Sidecar"
     /// Live terminal views of the ⌘D split, used by menu commands to move focus.
     /// Held weakly so the views are not kept alive by the model.
     weak var splitAgentView: LocalProcessTerminalView?
@@ -538,21 +549,33 @@ final class AppModel: ObservableObject {
     }
 
     func closeSplitSession(for space: SpaceRef) {
-        splitShellViews.removeValue(forKey: space)
         if attachedSpaceRef == space {
+            // The published axis is the command/UI source of truth. Clearing it
+            // runs the same removal path whether the user presses ⌘W, clicks a
+            // close action, or closes a provisioning failure.
             shellSplitAxis = nil
             activeSplitSide = .agent
-        } else {
-            splitSessionsBySpace.removeValue(forKey: space)
+            return
         }
+        let removed = splitSessionsBySpace.removeValue(forKey: space)
+        splitProvisioningIDs.removeValue(forKey: space)
+        splitShellViews.removeValue(forKey: space)
+        if let removed { closeSplitTerminalIfReady(removed) }
+    }
+
+    func retrySplitTerminal(for space: SpaceRef) {
+        guard splitSessionsBySpace[space] != nil else { return }
+        provisionSplitTerminal(for: space)
     }
 
     private func persistCurrentSplitSession() {
         guard !restoringSplitSession, let space = attachedSpaceRef else { return }
         guard let axis = shellSplitAxis else {
-            splitSessionsBySpace.removeValue(forKey: space)
+            let removed = splitSessionsBySpace.removeValue(forKey: space)
+            splitProvisioningIDs.removeValue(forKey: space)
             splitShellViews.removeValue(forKey: space)
             splitShellView = nil
+            if let removed { closeSplitTerminalIfReady(removed) }
             return
         }
         if var session = splitSessionsBySpace[space] {
@@ -561,15 +584,137 @@ final class AppModel: ObservableObject {
             session.ratio = splitRatio
             splitSessionsBySpace[space] = session
         } else {
+            let terminal: SpaceSplitTerminalState
+            if let existing = reusableSplitTerminal(for: space) {
+                terminal = .ready(
+                    paneID: existing.paneID,
+                    terminalID: existing.terminalID
+                )
+            } else {
+                terminal = .creating
+            }
             splitSessionsBySpace[space] = SpaceSplitSession(
                 id: UUID(),
                 space: space,
                 axis: axis,
                 activeSide: activeSplitSide,
-                ratio: splitRatio
+                ratio: splitRatio,
+                terminal: terminal
             )
+            if case .creating = terminal {
+                provisionSplitTerminal(for: space)
+            }
         }
         splitShellView = splitShellViews[space]?.view
+    }
+
+    private func reusableSplitTerminal(
+        for space: SpaceRef
+    ) -> (paneID: String, terminalID: String)? {
+        let state = session(space.deviceID)
+        let sidecarTabIDs = Set(state.tabs.compactMap { tab in
+            guard tab.workspaceID == space.workspaceID,
+                  tab.customLabel == Self.splitTerminalLabel
+            else { return nil }
+            return tab.tabID
+        })
+        guard !sidecarTabIDs.isEmpty else { return nil }
+        guard let pane = state.panes.first(where: { pane in
+            guard pane.workspaceID == space.workspaceID,
+                  let tabID = pane.tabID,
+                  sidecarTabIDs.contains(tabID)
+            else { return false }
+            return pane.terminalID != nil
+        }), let terminalID = pane.terminalID else { return nil }
+        return (pane.paneID, terminalID)
+    }
+
+    private func provisionSplitTerminal(for space: SpaceRef) {
+        guard var splitSession = splitSessionsBySpace[space] else { return }
+        if let existing = reusableSplitTerminal(for: space) {
+            splitProvisioningIDs.removeValue(forKey: space)
+            splitSession.terminal = .ready(
+                paneID: existing.paneID,
+                terminalID: existing.terminalID
+            )
+            splitSessionsBySpace[space] = splitSession
+            return
+        }
+
+        let attemptID = UUID()
+        splitProvisioningIDs[space] = attemptID
+        splitSession.terminal = .creating
+        splitSessionsBySpace[space] = splitSession
+
+        Task { [weak self] in
+            guard let self else { return }
+            guard let device = self.device(space.deviceID) else {
+                self.failSplitTerminalProvisioning(
+                    for: space,
+                    attemptID: attemptID,
+                    message: String(localized: "The Sidecar device is no longer configured.")
+                )
+                return
+            }
+            let service = self.service(for: device)
+            var createdPaneID: String?
+            do {
+                let paneID = try await service.createTab(
+                    workspaceID: space.workspaceID,
+                    cwd: nil,
+                    label: Self.splitTerminalLabel
+                )
+                createdPaneID = paneID
+                let terminalID = try await service.terminalID(forPane: paneID)
+
+                guard self.splitProvisioningIDs[space] == attemptID,
+                      var current = self.splitSessionsBySpace[space]
+                else {
+                    try? await service.closePane(paneID: paneID)
+                    return
+                }
+                current.terminal = .ready(
+                    paneID: paneID,
+                    terminalID: terminalID
+                )
+                self.splitSessionsBySpace[space] = current
+                self.splitProvisioningIDs.removeValue(forKey: space)
+                await self.refresh(space.deviceID)
+            } catch {
+                if let createdPaneID {
+                    try? await service.closePane(paneID: createdPaneID)
+                }
+                self.failSplitTerminalProvisioning(
+                    for: space,
+                    attemptID: attemptID,
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func failSplitTerminalProvisioning(
+        for space: SpaceRef,
+        attemptID: UUID,
+        message: String
+    ) {
+        guard splitProvisioningIDs[space] == attemptID,
+              var current = splitSessionsBySpace[space]
+        else { return }
+        current.terminal = .failed(message)
+        splitSessionsBySpace[space] = current
+        splitProvisioningIDs.removeValue(forKey: space)
+    }
+
+    private func closeSplitTerminalIfReady(_ session: SpaceSplitSession) {
+        guard case .ready(let paneID, _) = session.terminal,
+              let device = device(session.space.deviceID)
+        else { return }
+        let service = service(for: device)
+        Task { [weak self] in
+            try? await service.closePane(paneID: paneID)
+            await self?.refresh(session.space.deviceID)
+        }
     }
 
     private func pruneSplitSessions(deviceID: UUID, validWorkspaceIDs: Set<String>) {
@@ -578,8 +723,38 @@ final class AppModel: ObservableObject {
         }
         for space in stale {
             splitSessionsBySpace.removeValue(forKey: space)
+            splitProvisioningIDs.removeValue(forKey: space)
             splitShellViews.removeValue(forKey: space)
+            deactivateVisibleSplitIfNeeded(for: space)
         }
+    }
+
+    private func pruneMissingSplitTerminals(
+        deviceID: UUID,
+        validPaneIDs: Set<String>
+    ) {
+        let stale = splitSessionsBySpace.compactMap { space, split -> SpaceRef? in
+            guard space.deviceID == deviceID,
+                  case .ready(let paneID, _) = split.terminal,
+                  !validPaneIDs.contains(paneID)
+            else { return nil }
+            return space
+        }
+        for space in stale {
+            splitSessionsBySpace.removeValue(forKey: space)
+            splitProvisioningIDs.removeValue(forKey: space)
+            splitShellViews.removeValue(forKey: space)
+            deactivateVisibleSplitIfNeeded(for: space)
+        }
+    }
+
+    private func deactivateVisibleSplitIfNeeded(for space: SpaceRef) {
+        guard attachedSpaceRef == space else { return }
+        restoringSplitSession = true
+        shellSplitAxis = nil
+        activeSplitSide = .agent
+        splitShellView = nil
+        restoringSplitSession = false
     }
 
     func agentDisplayKind(for entry: AgentEntry) -> String {
@@ -1030,6 +1205,10 @@ final class AppModel: ObservableObject {
             )
             let paneIDs = Set((snapshot.panes ?? []).map(\.paneID))
                 .union(snapshot.agents.map(\.paneID))
+            pruneMissingSplitTerminals(
+                deviceID: deviceID,
+                validPaneIDs: paneIDs
+            )
             if let selected = selectedPane, selected.deviceID == deviceID,
                !paneIDs.contains(selected.paneID) {
                 selectedPane = nil

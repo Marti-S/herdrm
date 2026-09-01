@@ -531,6 +531,31 @@ public actor HerdrService {
         return initializing
     }
 
+    /// Resolves a pane's stable terminal ID. Newly-created tabs can take a
+    /// brief moment to publish terminal metadata, so callers get a bounded retry
+    /// rather than having to duplicate pane.get polling.
+    public func terminalID(forPane paneID: String) async throws -> String {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        var lastError: Error?
+        while true {
+            do {
+                if let terminalID = try await paneTerminalID(paneID),
+                   !terminalID.isEmpty {
+                    return terminalID
+                }
+            } catch {
+                lastError = error
+            }
+            guard clock.now < deadline else { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        if let lastError { throw lastError }
+        throw HerdrError.malformedResponse(
+            "pane.get returned no terminal_id for \(paneID)"
+        )
+    }
+
     private func paneTerminalID(_ paneID: String) async throws -> String? {
         let result = try await client().request(
             method: "pane.get",
