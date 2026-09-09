@@ -212,17 +212,19 @@ enum MobileClientIdentity {
   }
 }
 
-/// Maintains the one long-lived fleet subscription. Per-device RPC and terminal
-/// transports are stateless and open their own authenticated bridge connection.
+/// Owns a shared RPC client and fleet subscription for one connection generation.
+/// Closing the generation closes its transcript and terminal channels as well.
 @MainActor
 final class MobileBridgeSession {
   let bridge: MobileBridge
   var state: MobileConnectionState = .idle
   var snapshot: FleetSnapshot?
   var onChange: (() -> Void)?
+  private(set) var transportID = UUID()
 
   private let clientID: UUID
   private let clientName: String
+  private var client: FleetBridgeClient?
   private var runTask: Task<Void, Never>?
   private var generation: UInt64 = 0
 
@@ -255,46 +257,44 @@ final class MobileBridgeSession {
   func disconnect() async {
     generation &+= 1
     let task = runTask
+    let stale = client
     runTask = nil
+    client = nil
     task?.cancel()
-    await task?.value
+    // Publish before awaiting cleanup: a later connect must never be overwritten
+    // by this disconnect finishing on a stale generation.
     state = .idle
     onChange?()
+    await stale?.close()
+    await task?.value
   }
 
   func refresh() async {
+    guard runTask != nil else { return }
+    let expected = generation
     do {
       let next = try await makeClient().snapshot()
-      let previousState = state
-      let snapshotChanged = snapshot != next
-      if snapshotChanged {
+      guard generation == expected, !Task.isCancelled else { return }
+      if snapshot != next {
         snapshot = next
-      }
-      state = .connected(version: "Bridge \(FleetBridgeProtocol.version)")
-      if snapshotChanged || state != previousState {
         onChange?()
       }
     } catch {
-      let nextState = MobileConnectionState.failed(Self.presentation(error))
-      guard state != nextState else { return }
-      state = nextState
-      onChange?()
+      // A one-off read does not define connection health; the subscription does.
     }
   }
 
   func transport(for deviceID: UUID) -> (any MobileTransport)? {
-    guard snapshot?.device(deviceID) != nil,
-      let client = try? makeClient()
-    else { return nil }
+    guard state.isConnected, snapshot?.device(deviceID) != nil, let client else {
+      return nil
+    }
     return FleetBridgeDeviceTransport(client: client, deviceID: deviceID)
   }
 
   private func runSubscriptionLoop(generation expectedGeneration: UInt64) async {
     var backoff: Double = 1
     defer {
-      if generation == expectedGeneration {
-        runTask = nil
-      }
+      if generation == expectedGeneration { runTask = nil }
     }
 
     while !Task.isCancelled, generation == expectedGeneration {
@@ -304,65 +304,52 @@ final class MobileBridgeSession {
       }
       do {
         var receivedSnapshotOnConnection = false
-        let stream = try makeClient().snapshots(after: snapshot?.revision)
+        let activeClient = try makeClient()
+        let stream = activeClient.snapshots(after: snapshot?.revision)
         for try await next in stream {
-          guard
-            !Task.isCancelled,
-            generation == expectedGeneration
-          else { return }
-
+          guard !Task.isCancelled, generation == expectedGeneration else { return }
           let previousState = state
           let snapshotChanged: Bool
           if receivedSnapshotOnConnection {
             snapshotChanged = next.revision > (snapshot?.revision ?? 0)
           } else {
-            // A restarted bridge begins a new revision sequence. Accept its
-            // first snapshot even when the number moves backwards, while still
-            // suppressing an identical reconnect snapshot.
+            // A restarted bridge may begin a new revision sequence.
             snapshotChanged = snapshot != next
             receivedSnapshotOnConnection = true
           }
-          if snapshotChanged {
-            snapshot = next
-          }
+          if snapshotChanged { snapshot = next }
           backoff = 1
           state = .connected(version: "Bridge \(FleetBridgeProtocol.version)")
-          if snapshotChanged || state != previousState {
-            onChange?()
-          }
+          if snapshotChanged || state != previousState { onChange?() }
         }
-        guard
-          !Task.isCancelled,
-          generation == expectedGeneration
-        else { return }
+        guard !Task.isCancelled, generation == expectedGeneration else { return }
         throw FleetBridgeClientError.connectionClosed
       } catch {
-        guard
-          !Task.isCancelled,
-          generation == expectedGeneration
-        else { return }
+        guard !Task.isCancelled, generation == expectedGeneration else { return }
+        let stale = client
+        client = nil
         state = .failed(Self.presentation(error))
         onChange?()
-        if (error as? FleetBridgeClientError)?.isPermanent == true {
-          return
-        }
+        await stale?.close()
+        guard !Task.isCancelled, generation == expectedGeneration else { return }
+        if (error as? FleetBridgeClientError)?.isPermanent == true { return }
       }
-
       try? await Task.sleep(for: .seconds(backoff))
       backoff = min(backoff * 2, 30)
     }
   }
 
   private func makeClient() throws -> FleetBridgeClient {
-    guard let token = try MobileBridgeSecretStore.token(for: bridge.id),
-      !token.isEmpty
-    else { throw FleetBridgeClientError.missingToken }
-    return FleetBridgeClient(
-      bridge: bridge,
-      token: token,
-      clientID: clientID,
-      clientName: clientName
+    if let client { return client }
+    guard let token = try MobileBridgeSecretStore.token(for: bridge.id), !token.isEmpty else {
+      throw FleetBridgeClientError.missingToken
+    }
+    let next = FleetBridgeClient(
+      bridge: bridge, token: token, clientID: clientID, clientName: clientName
     )
+    client = next
+    transportID = UUID()
+    return next
   }
 
   private static func presentation(_ error: any Error) -> String {

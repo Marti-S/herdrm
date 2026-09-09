@@ -1,4 +1,10 @@
+import HerdrKit
 import SwiftUI
+
+private struct MobilePaneConnectionIdentity: Hashable {
+    let pane: FleetPaneRef
+    let connection: UUID
+}
 
 /// iPhone uses a navigation stack; iPad presents the same fleet sidebar beside
 /// the selected terminal. A paired Mac defaults to All Devices and mirrors the
@@ -97,10 +103,11 @@ struct MobileRootView: View {
                     for: entry.ref,
                     transport: transport
                 ),
-
                 title: entry.agent.title(tabLabel: model.tabLabel(for: entry))
             )
-            .id(entry.ref)
+            .id(MobilePaneConnectionIdentity(
+                pane: entry.ref, connection: model.transportIdentity(for: entry.ref.deviceID)
+            ))
         } else if let entry = model.selectedTerminalPane,
                   let terminalID = entry.pane.terminalID,
                   let transport = model.transport(for: entry.ref.deviceID) {
@@ -110,7 +117,9 @@ struct MobileRootView: View {
                 paneID: entry.pane.paneID,
                 title: model.terminalLabel(for: entry)
             )
-            .id(entry.ref)
+            .id(MobilePaneConnectionIdentity(
+                pane: entry.ref, connection: model.transportIdentity(for: entry.ref.deviceID)
+            ))
         } else {
             ContentUnavailableView(
                 String(localized: "No Terminal Selected"),

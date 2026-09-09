@@ -1,13 +1,14 @@
 import Foundation
 
 /// Coalesces terminal frames to display cadence while bounding queued bytes.
-/// The receive loop only waits when rendering falls more than the configured
-/// memory bound behind, so normal bursts stay off the main actor.
+/// Individual UI deliveries are also bounded so a burst cannot become one
+/// multi-megabyte main-actor terminal parse.
 public actor TerminalOutputBatcher {
     public typealias Delivery = @MainActor @Sendable (Data) async -> Void
 
     private let maximumQueuedBytes: Int
     private let immediateDrainBytes: Int
+    private let maximumDeliveryBytes: Int
     private let delivery: Delivery
     private var buffer = Data()
     private var drainTask: Task<Void, Never>?
@@ -21,10 +22,12 @@ public actor TerminalOutputBatcher {
     public init(
         maximumQueuedBytes: Int = 2 * 1024 * 1024,
         immediateDrainBytes: Int = 128 * 1024,
+        maximumDeliveryBytes: Int = 32 * 1024,
         delivery: @escaping Delivery
     ) {
         self.maximumQueuedBytes = max(1, maximumQueuedBytes)
         self.immediateDrainBytes = max(1, min(immediateDrainBytes, maximumQueuedBytes))
+        self.maximumDeliveryBytes = max(1, min(maximumDeliveryBytes, maximumQueuedBytes))
         self.delivery = delivery
     }
 
@@ -37,16 +40,15 @@ public actor TerminalOutputBatcher {
             return
         }
 
-        var offset = 0
-        while offset < data.count, !closed {
+        var offset = data.startIndex
+        while offset < data.endIndex, !closed {
             while buffer.count >= maximumQueuedBytes, !closed {
                 await withCheckedContinuation { continuation in
                     capacityWaiters.append(continuation)
                 }
             }
             guard !closed else { break }
-
-            let count = min(maximumQueuedBytes - buffer.count, data.count - offset)
+            let count = min(maximumQueuedBytes - buffer.count, data.endIndex - offset)
             buffer.append(data[offset..<(offset + count)])
             offset += count
             scheduleDrain(immediate: buffer.count >= immediateDrainBytes)
@@ -62,15 +64,12 @@ public actor TerminalOutputBatcher {
             completeAdmission(admission)
             return
         }
-
         finishing = true
-        if let drainTask {
-            await drainTask.value
-        }
+        if let drainTask { await drainTask.value }
         self.drainTask = nil
-        let finalBatch = takeBufferedBytes()
-        if !finalBatch.isEmpty {
-            await delivery(finalBatch)
+        while !closed, !buffer.isEmpty {
+            await deliver(takeBufferedBytes())
+            await Task.yield()
         }
         closed = true
         resumeCapacityWaiters()
@@ -112,40 +111,42 @@ public actor TerminalOutputBatcher {
     private func resumeAdmissionWaiters() {
         let waiters = admissionWaiters.values
         admissionWaiters.removeAll(keepingCapacity: false)
-        for waiter in waiters {
-            waiter.resume()
-        }
+        for waiter in waiters { waiter.resume() }
     }
 
     private func scheduleDrain(immediate: Bool) {
         guard drainTask == nil, !closed, !finishing else { return }
         drainTask = Task { [weak self] in
-            if !immediate {
-                try? await Task.sleep(for: .milliseconds(12))
-            }
+            if !immediate { try? await Task.sleep(for: .milliseconds(12)) }
             guard !Task.isCancelled else { return }
             await self?.drain()
         }
     }
 
     private func drain() async {
-        guard !closed else {
-            drainTask = nil
-            return
-        }
+        guard !closed else { drainTask = nil; return }
         let batch = takeBufferedBytes()
-        if !batch.isEmpty {
-            await delivery(batch)
-        }
+        if !batch.isEmpty { await deliver(batch) }
+        await Task.yield()
         drainTask = nil
         if !buffer.isEmpty, !finishing {
-            scheduleDrain(immediate: buffer.count >= immediateDrainBytes)
+            // Yield between bounded deliveries without imposing another timer
+            // on an already queued burst.
+            scheduleDrain(immediate: true)
         }
     }
 
+    private func deliver(_ data: Data) async {
+        let interval = PerformanceInterval("MobileTerminalDelivery")
+        defer { interval.end(bytes: data.count) }
+        await delivery(data)
+    }
+
     private func takeBufferedBytes() -> Data {
-        let batch = buffer
-        buffer.removeAll(keepingCapacity: true)
+        let count = min(buffer.count, maximumDeliveryBytes)
+        let batch = Data(buffer.prefix(count))
+        buffer.removeFirst(count)
+        if buffer.isEmpty { buffer = Data() }
         resumeCapacityWaiters()
         return batch
     }
@@ -153,8 +154,6 @@ public actor TerminalOutputBatcher {
     private func resumeCapacityWaiters() {
         let waiters = capacityWaiters
         capacityWaiters.removeAll(keepingCapacity: true)
-        for waiter in waiters {
-            waiter.resume()
-        }
+        for waiter in waiters { waiter.resume() }
     }
 }

@@ -5,6 +5,29 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Changed
+- iOS bridge RPCs reuse an authenticated connection after capability negotiation;
+  older peers retain their existing one-operation-per-connection protocol.
+- Conversation readers use activity-driven, read-only transcript subscriptions
+  with bounded UTF-8 updates when supported, and adaptive polling otherwise.
+- Terminal delivery is split into bounded UI batches; Mac bridge decoding and
+  serialization run off the main actor with ordered, bounded output writes.
+
+### Fixed
+- Cached mobile conversations rebind after transport replacement instead of
+  retaining closed SSH connections. Late reads cannot overwrite newer output.
+- Repeated activation no longer reconnects healthy sessions. Background cleanup
+  closes all bridge streams; transient direct-SSH failures reconnect with backoff.
+- Continuous direct-device event bursts are rate-limited, and unchanged transcript
+  content does not repeatedly invalidate rendered rows.
+
+### Added
+- Regression tests for transcript patching, reconnect lifecycle, bounded writes,
+  RPC cancellation and deadlines, refresh coalescing, and terminal byte ordering.
+- Content-free performance signposts and an iOS compatibility/profiling guide.
+
 ## [0.5.3] - 2026-08-29
 
 ### Added
