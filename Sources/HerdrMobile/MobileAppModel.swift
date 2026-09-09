@@ -17,7 +17,6 @@ final class MobileAppModel {
 
   /// Bumped by nested, non-Observable session state.
   private(set) var revision = 0
-
   private let directStore = MobileDeviceStore()
   private let bridgeStore = MobileBridgeStore()
   private var directSessions: [UUID: MobileDeviceSession] = [:]
@@ -25,22 +24,36 @@ final class MobileAppModel {
   @ObservationIgnored private var fleetIndexRevision = -1
   @ObservationIgnored private var cachedFleetIndex = MobileFleetIndex.empty
   @ObservationIgnored private var conversationStores: [FleetPaneRef: ConversationReaderStore] = [:]
+  @ObservationIgnored private var conversationRecency: [FleetPaneRef: UInt64] = [:]
+  @ObservationIgnored private var accessCounter: UInt64 = 0
+  @ObservationIgnored private var isActive = false
+  @ObservationIgnored private var lifecycleGeneration: UInt64 = 0
+  @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
 
   func conversationStore(
     for ref: FleetPaneRef,
     transport: any MobileTransport
   ) -> ConversationReaderStore {
+    accessCounter &+= 1
+    conversationRecency[ref] = accessCounter
     if let existing = conversationStores[ref] { return existing }
     let store = ConversationReaderStore(
-      provider: HerdrPaneTranscriptProvider(
-        transport: transport,
-        paneID: ref.paneID
-      )
+      provider: HerdrPaneTranscriptProvider(transport: transport, paneID: ref.paneID),
+      bindingID: transportIdentity(for: ref.deviceID)
     )
+    if !isActive { store.suspend() }
     conversationStores[ref] = store
+    // Keep recent content, not an unbounded history of transports and readers.
+    while conversationStores.count > 12,
+      let oldest = conversationRecency
+        .filter({ $0.key != ref && $0.key != selectedPaneRef })
+        .min(by: { $0.value < $1.value })?.key
+    {
+      conversationStores.removeValue(forKey: oldest)?.stop()
+      conversationRecency.removeValue(forKey: oldest)
+    }
     return store
   }
-
 
   init() {
     bridge = bridgeStore.load()
@@ -49,9 +62,7 @@ final class MobileAppModel {
     selectedDeviceID = bridge == nil ? directDevices.first?.id : nil
   }
 
-  var hasConfiguredSources: Bool {
-    bridge != nil || !directDevices.isEmpty
-  }
+  var hasConfiguredSources: Bool { bridge != nil || !directDevices.isEmpty }
 
   private var fleetIndex: MobileFleetIndex {
     _ = revision
@@ -62,9 +73,7 @@ final class MobileAppModel {
     return cachedFleetIndex
   }
 
-  var deviceEntries: [MobileDeviceEntry] {
-    fleetIndex.devices
-  }
+  var deviceEntries: [MobileDeviceEntry] { fleetIndex.devices }
 
   var selectedDevice: MobileDeviceEntry? {
     guard let selectedDeviceID else { return nil }
@@ -74,21 +83,14 @@ final class MobileAppModel {
   var selectedConnectionState: MobileConnectionState {
     _ = revision
     if let selectedDevice { return selectedDevice.state }
-
-    if let bridgeSession, !bridgeSession.state.isConnected {
-      return bridgeSession.state
-    }
+    if let bridgeSession, !bridgeSession.state.isConnected { return bridgeSession.state }
     let states = deviceEntries.map(\.state)
     if let failed = states.first(where: {
       if case .failed = $0 { return true }
       return false
-    }) {
-      return failed
-    }
+    }) { return failed }
     if states.contains(.connecting) { return .connecting }
-    if !states.isEmpty, states.allSatisfy(\.isConnected) {
-      return .connected(version: "")
-    }
+    if !states.isEmpty, states.allSatisfy(\.isConnected) { return .connected(version: "") }
     return states.isEmpty ? .idle : .connecting
   }
 
@@ -97,31 +99,58 @@ final class MobileAppModel {
     return bridgeSession?.state ?? .idle
   }
 
+  /// Root-view startup and scene activation can both call this. Neither should
+  /// tear down a healthy session or overtake a previous background cleanup.
   func activate() {
-    if let bridgeSession {
-      Task { await bridgeSession.reconnect() }
-    }
-    for device in directDevices {
-      guard let session = directSession(for: device.id) else { continue }
-      Task { await session.reconnect() }
+    guard !isActive else { return }
+    isActive = true
+    lifecycleGeneration &+= 1
+    let expected = lifecycleGeneration
+    let previous = lifecycleTask
+    lifecycleTask = Task { [weak self] in
+      await previous?.value
+      guard let self, self.isActive, self.lifecycleGeneration == expected,
+        !Task.isCancelled else { return }
+      self.bridgeSession?.connect()
+      let sessions = self.directDevices.compactMap { self.directSession(for: $0.id) }
+      await withTaskGroup(of: Void.self) { group in
+        for session in sessions {
+          group.addTask { @MainActor [weak self] in
+            guard let self, self.isActive, self.lifecycleGeneration == expected,
+              self.directSessions[session.device.id] === session, !Task.isCancelled else { return }
+            await session.connect()
+          }
+        }
+      }
+      guard self.isActive, self.lifecycleGeneration == expected else { return }
+      self.reconcileConversationBindings()
     }
   }
 
   func deactivate() {
+    guard isActive else { return }
+    isActive = false
+    lifecycleGeneration &+= 1
+    for store in conversationStores.values { store.suspend() }
+    let previous = lifecycleTask
+    previous?.cancel()
     let bridgeSession = bridgeSession
     let sessions = Array(directSessions.values)
-    Task {
-      await bridgeSession?.disconnect()
-      for session in sessions {
-        await session.disconnect()
+    lifecycleTask = Task {
+      await withTaskGroup(of: Void.self) { group in
+        if let bridgeSession { group.addTask { await bridgeSession.disconnect() } }
+        for session in sessions { group.addTask { await session.disconnect() } }
       }
+      await previous?.value
     }
   }
 
   func refreshAll() async {
-    await bridgeSession?.refresh()
-    for session in directSessions.values {
-      await session.refresh()
+    let bridgeSession = bridgeSession
+    let sessions = Array(directSessions.values)
+    await withTaskGroup(of: Void.self) { group in
+      if let bridgeSession { group.addTask { await bridgeSession.refresh() } }
+      for session in sessions { group.addTask { await session.refresh() } }
     }
   }
 
@@ -130,11 +159,11 @@ final class MobileAppModel {
     selectedDeviceID = id
     selectedSpaceRef = nil
     selectedPaneRef = nil
-    if let id,
-      let direct = directDevices.first(where: { $0.id == id }),
-      let session = directSession(for: direct.id)
-    {
-      Task { await session.connect() }
+    if let id, let session = directSession(for: id) {
+      Task { [weak self] in
+        guard let self, self.isActive, self.directSessions[id] === session else { return }
+        await session.connect()
+      }
     }
   }
 
@@ -145,17 +174,12 @@ final class MobileAppModel {
       selectedPaneRef.deviceID == ref.deviceID,
       let snapshot = snapshot(for: ref.deviceID)
     {
-      let workspaceID =
-        snapshot.agents
-        .first { $0.paneID == selectedPaneRef.paneID }?.workspaceID
-        ?? snapshot.ordinaryTerminalPanes
-        .first { $0.paneID == selectedPaneRef.paneID }?.workspaceID
+      let workspaceID = snapshot.agents.first { $0.paneID == selectedPaneRef.paneID }?.workspaceID
+        ?? snapshot.ordinaryTerminalPanes.first { $0.paneID == selectedPaneRef.paneID }?.workspaceID
       if workspaceID == ref.workspaceID { return }
     }
-
     let candidates = agents
-    selectedPaneRef =
-      candidates.first(where: { $0.agent.status == .blocked })?.ref
+    selectedPaneRef = candidates.first(where: { $0.agent.status == .blocked })?.ref
       ?? candidates.first(where: { $0.agent.status == .done })?.ref
       ?? candidates.first(where: { $0.agent.status == .working })?.ref
       ?? candidates.first?.ref
@@ -167,23 +191,26 @@ final class MobileAppModel {
     if bridgeSession?.snapshot?.device(deviceID) != nil {
       return bridgeSession?.transport(for: deviceID)
     }
-    return directSession(for: deviceID)?.transport
+    guard let session = directSession(for: deviceID), session.state.isConnected else { return nil }
+    return session.transport
+  }
+
+  func transportIdentity(for deviceID: UUID) -> UUID {
+    _ = revision
+    if let bridgeSession, bridgeSession.snapshot?.device(deviceID) != nil {
+      return bridgeSession.transportID
+    }
+    return directSession(for: deviceID)?.transportID ?? deviceID
   }
 
   // MARK: - Source management
 
   func addBridge(
-    name: String,
-    host: String,
-    port: UInt16,
-    token: String,
-    expectedServerID: UUID?
+    name: String, host: String, port: UInt16, token: String, expectedServerID: UUID?
   ) throws {
     let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmedHost.isEmpty, port > 0 else {
-      throw FleetBridgeClientError.invalidEndpoint
-    }
+    guard !trimmedHost.isEmpty, port > 0 else { throw FleetBridgeClientError.invalidEndpoint }
     guard let expectedServerID else {
       throw MobileBridgePairingError.invalid(
         "The Mac identity is missing. Paste its pairing JSON or enter its server ID.")
@@ -193,19 +220,18 @@ final class MobileAppModel {
     }
     let id = expectedServerID
     let next = MobileBridge(
-      id: id,
-      expectedServerID: expectedServerID,
+      id: id, expectedServerID: expectedServerID,
       name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         ? trimmedHost : name.trimmingCharacters(in: .whitespacesAndNewlines),
-      host: trimmedHost,
-      port: port
+      host: trimmedHost, port: port
     )
     try MobileBridgeSecretStore.setToken(trimmedToken, for: id)
-
     if let previous = bridge, previous.id != id {
       try? MobileBridgeSecretStore.removeToken(for: previous.id)
     }
     let oldSession = bridgeSession
+    oldSession?.onChange = nil
+    for device in oldSession?.snapshot?.devices ?? [] { removeConversationStores(deviceID: device.id) }
     bridge = next
     bridgeStore.save(next)
     configureBridgeSession()
@@ -214,12 +240,14 @@ final class MobileAppModel {
     selectedSpaceRef = nil
     selectedPaneRef = nil
     Task { await oldSession?.disconnect() }
-    bridgeSession?.connect()
+    if isActive { bridgeSession?.connect() }
   }
 
   func removeBridge() {
     guard let bridge else { return }
     let oldSession = bridgeSession
+    oldSession?.onChange = nil
+    for device in oldSession?.snapshot?.devices ?? [] { removeConversationStores(deviceID: device.id) }
     try? MobileBridgeSecretStore.removeToken(for: bridge.id)
     self.bridge = nil
     bridgeStore.save(nil)
@@ -232,39 +260,31 @@ final class MobileAppModel {
   }
 
   func addDirectDevice(
-    name: String,
-    host: String,
-    port: UInt16,
-    username: String,
-    authMethod: MobileDevice.AuthMethod,
-    password: String
+    name: String, host: String, port: UInt16, username: String,
+    authMethod: MobileDevice.AuthMethod, password: String
   ) {
     let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     let device = MobileDevice(
       name: trimmedName.isEmpty ? host : trimmedName,
-      host: host.trimmingCharacters(in: .whitespacesAndNewlines),
-      port: port,
-      username: username.trimmingCharacters(in: .whitespacesAndNewlines),
-      authMethod: authMethod
+      host: host.trimmingCharacters(in: .whitespacesAndNewlines), port: port,
+      username: username.trimmingCharacters(in: .whitespacesAndNewlines), authMethod: authMethod
     )
-    if authMethod == .password {
-      MobileSecretStore.setPassword(password, for: device.id)
-    }
+    if authMethod == .password { MobileSecretStore.setPassword(password, for: device.id) }
     directDevices.append(device)
     directStore.save(directDevices)
     revision += 1
     selectDevice(device.id)
   }
 
-  var deviceKeyAuthorizedLine: String {
-    DeviceKey.authorizedKeysLine(DeviceKey.ensure())
-  }
+  var deviceKeyAuthorizedLine: String { DeviceKey.authorizedKeysLine(DeviceKey.ensure()) }
 
   func removeDirectDevice(_ id: UUID) {
     guard let device = directDevices.first(where: { $0.id == id }) else { return }
     if let session = directSessions.removeValue(forKey: id) {
+      session.onChange = nil
       Task { await session.disconnect() }
     }
+    removeConversationStores(deviceID: id)
     MobileSecretStore.removePassword(for: device.id)
     KnownHostsStore.unpin(host: device.host, port: device.port)
     directDevices.removeAll { $0.id == id }
@@ -280,29 +300,19 @@ final class MobileAppModel {
   // MARK: - Derived fleet lists
 
   var spaces: [MobileSpaceEntry] {
-    if let selectedDeviceID {
-      return fleetIndex.spacesByDeviceID[selectedDeviceID] ?? []
-    }
+    if let selectedDeviceID { return fleetIndex.spacesByDeviceID[selectedDeviceID] ?? [] }
     return fleetIndex.spaces
   }
 
   var agents: [MobileAgentEntry] {
-    if let selectedSpaceRef {
-      return fleetIndex.agentsBySpaceRef[selectedSpaceRef] ?? []
-    }
-    if let selectedDeviceID {
-      return fleetIndex.agentsByDeviceID[selectedDeviceID] ?? []
-    }
+    if let selectedSpaceRef { return fleetIndex.agentsBySpaceRef[selectedSpaceRef] ?? [] }
+    if let selectedDeviceID { return fleetIndex.agentsByDeviceID[selectedDeviceID] ?? [] }
     return fleetIndex.agents
   }
 
   var terminalPanes: [MobileTerminalEntry] {
-    if let selectedSpaceRef {
-      return fleetIndex.terminalsBySpaceRef[selectedSpaceRef] ?? []
-    }
-    if let selectedDeviceID {
-      return fleetIndex.terminalsByDeviceID[selectedDeviceID] ?? []
-    }
+    if let selectedSpaceRef { return fleetIndex.terminalsBySpaceRef[selectedSpaceRef] ?? [] }
+    if let selectedDeviceID { return fleetIndex.terminalsByDeviceID[selectedDeviceID] ?? [] }
     return fleetIndex.terminals
   }
 
@@ -317,10 +327,7 @@ final class MobileAppModel {
   }
 
   func tabLabel(for entry: MobileAgentEntry) -> String? {
-    fleetIndex.tabLabel(
-      deviceID: entry.ref.deviceID,
-      tabID: entry.agent.tabID
-    )
+    fleetIndex.tabLabel(deviceID: entry.ref.deviceID, tabID: entry.agent.tabID)
   }
 
   func spaceName(deviceID: UUID, workspaceID: String) -> String {
@@ -329,17 +336,12 @@ final class MobileAppModel {
 
   func terminalLabel(for entry: MobileTerminalEntry) -> String {
     if let tabID = entry.pane.tabID,
-      let label = fleetIndex.tabLabel(deviceID: entry.ref.deviceID, tabID: tabID)
-    {
-      return label
-    }
+      let label = fleetIndex.tabLabel(deviceID: entry.ref.deviceID, tabID: tabID) { return label }
     if let title = entry.pane.terminalTitle, !title.isEmpty { return title }
     return String(localized: "Terminal")
   }
 
-  var showsDeviceBadges: Bool {
-    selectedDeviceID == nil && fleetIndex.devices.count > 1
-  }
+  var showsDeviceBadges: Bool { selectedDeviceID == nil && fleetIndex.devices.count > 1 }
 
   private func snapshot(for deviceID: UUID) -> SessionSnapshot? {
     fleetIndex.snapshotsByDeviceID[deviceID]
@@ -347,34 +349,21 @@ final class MobileAppModel {
 
   private func buildDeviceEntries() -> [MobileDeviceEntry] {
     var result: [MobileDeviceEntry] = []
-
-    if let bridgeSession,
-      let fleet = bridgeSession.snapshot
-    {
+    if let bridgeSession, let fleet = bridgeSession.snapshot {
       let bridgeIsLive = bridgeSession.state.isConnected
       for device in fleet.devices {
         result.append(MobileDeviceEntry(
-          id: device.id,
-          source: .bridge,
-          name: device.device.name,
-          subtitle: device.device.subtitle,
+          id: device.id, source: .bridge, name: device.device.name, subtitle: device.device.subtitle,
           state: bridgeIsLive ? MobileConnectionState(device.connection) : bridgeSession.state,
-          snapshot: device.snapshot,
-          availableAgentKinds: device.availableAgentKinds
+          snapshot: device.snapshot, availableAgentKinds: device.availableAgentKinds
         ))
       }
     }
-
     for device in directDevices {
       let session = directSession(for: device.id)
       result.append(MobileDeviceEntry(
-        id: device.id,
-        source: .direct,
-        name: device.name,
-        subtitle: device.subtitle,
-        state: session?.state ?? .idle,
-        snapshot: session?.snapshot,
-        availableAgentKinds: []
+        id: device.id, source: .direct, name: device.name, subtitle: device.subtitle,
+        state: session?.state ?? .idle, snapshot: session?.snapshot, availableAgentKinds: []
       ))
     }
     return result
@@ -384,25 +373,43 @@ final class MobileAppModel {
     if let existing = directSessions[deviceID] { return existing }
     guard let device = directDevices.first(where: { $0.id == deviceID }) else { return nil }
     let session = MobileDeviceSession(device: device)
-    session.onChange = { [weak self] in
-      self?.revision += 1
-      self?.reconcileSelection()
-    }
+    session.onChange = { [weak self] in self?.sourceDidChange() }
     directSessions[deviceID] = session
     return session
   }
 
   private func configureBridgeSession() {
-    guard let bridge else {
-      bridgeSession = nil
-      return
-    }
+    guard let bridge else { bridgeSession = nil; return }
     let session = MobileBridgeSession(bridge: bridge)
-    session.onChange = { [weak self] in
-      self?.revision += 1
-      self?.reconcileSelection()
-    }
+    session.onChange = { [weak self] in self?.sourceDidChange() }
     bridgeSession = session
+  }
+
+  private func sourceDidChange() {
+    revision += 1
+    reconcileSelection()
+    reconcileConversationBindings()
+  }
+
+  private func reconcileConversationBindings() {
+    for (ref, store) in conversationStores {
+      guard isActive, let transport = transport(for: ref.deviceID) else {
+        store.suspend()
+        continue
+      }
+      store.rebind(
+        provider: HerdrPaneTranscriptProvider(transport: transport, paneID: ref.paneID),
+        bindingID: transportIdentity(for: ref.deviceID)
+      )
+      store.resume()
+    }
+  }
+
+  private func removeConversationStores(deviceID: UUID) {
+    for ref in Array(conversationStores.keys) where ref.deviceID == deviceID {
+      conversationStores.removeValue(forKey: ref)?.stop()
+      conversationRecency.removeValue(forKey: ref)
+    }
   }
 
   private func reconcileSelection() {
@@ -412,20 +419,16 @@ final class MobileAppModel {
         self.selectedPaneRef = nil
         return
       }
-      if !snapshot.workspaces.contains(where: {
-        $0.workspaceID == selectedSpaceRef.workspaceID
-      }) {
+      if !snapshot.workspaces.contains(where: { $0.workspaceID == selectedSpaceRef.workspaceID }) {
         self.selectedSpaceRef = nil
       }
     }
-
     if let selectedPaneRef {
       guard let snapshot = snapshot(for: selectedPaneRef.deviceID) else {
         self.selectedPaneRef = nil
         return
       }
-      let paneExists =
-        snapshot.agents.contains { $0.paneID == selectedPaneRef.paneID }
+      let paneExists = snapshot.agents.contains { $0.paneID == selectedPaneRef.paneID }
         || snapshot.ordinaryTerminalPanes.contains { $0.paneID == selectedPaneRef.paneID }
       if !paneExists { self.selectedPaneRef = nil }
     }

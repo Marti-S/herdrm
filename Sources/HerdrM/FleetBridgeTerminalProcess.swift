@@ -1,15 +1,40 @@
+import Darwin
 import Foundation
 import HerdrKit
 
-/// Owns one `herdr terminal session observe/control` subprocess. The process is
-/// local for this Mac's session and OpenSSH-backed for a remote HerdrM device.
+/// A single blocking pipe operation lives on a dedicated dispatch queue, not
+/// the cooperative executor. The next stdout read starts only after its decoded
+/// records have reached the bounded bridge writer.
+private final class FleetBridgePipeReader: @unchecked Sendable {
+    private let handle: FileHandle
+    private let queue = DispatchQueue(label: "dev.bybee.herdrm.bridge-pipe-read")
+    init(_ handle: FileHandle) { self.handle = handle }
+    func read() async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                var bytes = [UInt8](repeating: 0, count: 64 * 1024)
+                var count: Int
+                repeat {
+                    count = Darwin.read(self.handle.fileDescriptor, &bytes, bytes.count)
+                } while count < 0 && errno == EINTR
+                if count < 0 {
+                    continuation.resume(throwing: POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO))
+                } else {
+                    continuation.resume(returning: Data(bytes.prefix(count)))
+                }
+            }
+        }
+    }
+}
+
+/// Owns one read-only/control Herdr subprocess. Process lifecycle remains on
+/// the main actor; stdout decoding runs in one ordered, backpressured worker.
 @MainActor
 final class FleetBridgeTerminalProcess {
     let mode: TerminalSessionMode
     let streamID: UUID
-
-    var onRecord: ((TerminalSessionRecord) -> Void)?
-    var onFailure: ((Error) -> Void)?
+    var onRecord: ((TerminalSessionRecord) async -> Void)?
+    var onFailure: ((Error) async -> Void)?
 
     private let command: TerminalCommand
     private let process = Process()
@@ -17,15 +42,12 @@ final class FleetBridgeTerminalProcess {
     private let outputPipe = Pipe()
     private let errorPipe = Pipe()
     private let writeQueue = DispatchQueue(label: "dev.bybee.herdrm.bridge-terminal-write")
-    private var decoder = TerminalSessionRecordDecoder()
+    private var outputTask: Task<Void, Never>?
+    private var errorTask: Task<Void, Never>?
     private var stderr = Data()
     private var closed = false
 
-    init(
-        streamID: UUID,
-        mode: TerminalSessionMode,
-        command: TerminalCommand
-    ) {
+    init(streamID: UUID, mode: TerminalSessionMode, command: TerminalCommand) {
         self.streamID = streamID
         self.mode = mode
         self.command = command
@@ -38,121 +60,126 @@ final class FleetBridgeTerminalProcess {
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = errorPipe
-
-        outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            Task { @MainActor in self?.ingest(data) }
-        }
-        errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            Task { @MainActor in self?.ingestError(data) }
-        }
         process.terminationHandler = { [weak self] process in
-            Task { @MainActor in self?.terminated(status: process.terminationStatus) }
+            let status = process.terminationStatus
+            Task { @MainActor in
+                guard let self else { return }
+                // Process exit can arrive before the pipe's final bytes.
+                await self.outputTask?.value
+                await self.errorTask?.value
+                await self.terminated(status: status)
+            }
         }
+        do { try process.run() }
+        catch { cleanupAuthorization(); throw error }
 
-        do {
-            try process.run()
-        } catch {
-            cleanupAuthorization()
-            throw error
+        try? outputPipe.fileHandleForWriting.close()
+        try? errorPipe.fileHandleForWriting.close()
+        try? inputPipe.fileHandleForReading.close()
+        let output = FleetBridgePipeReader(outputPipe.fileHandleForReading)
+        outputTask = Task.detached(priority: .userInitiated) { [weak self] in
+            var decoder = TerminalSessionRecordDecoder()
+            do {
+                while !Task.isCancelled {
+                    let data = try await output.read()
+                    guard !data.isEmpty, !Task.isCancelled else { break }
+                    try decoder.append(data)
+                    while !Task.isCancelled, let record = try decoder.nextRecord() {
+                        await self?.deliver(record)
+                        if case .closed = record { return }
+                    }
+                }
+            } catch {
+                if !Task.isCancelled { await self?.fail(error) }
+            }
+        }
+        let errors = FleetBridgePipeReader(errorPipe.fileHandleForReading)
+        errorTask = Task.detached { [weak self] in
+            var bounded = Data()
+            do {
+                while !Task.isCancelled {
+                    let data = try await errors.read()
+                    guard !data.isEmpty else { break }
+                    if bounded.count < 16 * 1024 { bounded.append(data.prefix(16 * 1024 - bounded.count)) }
+                }
+            } catch {}
+            await self?.setStderr(bounded)
         }
     }
 
-    func send(_ data: Data) throws {
+    func send(_ data: Data) async throws {
         guard mode.allowsInput else { throw TerminalSessionError.readOnly }
         guard !closed else { throw TerminalSessionError.closed }
-        enqueue(try TerminalSessionWire.encodeInput(data))
+        try await write(TerminalSessionWire.encodeInput(data))
     }
 
-    func resize(_ size: TerminalSize) throws {
+    func resize(_ size: TerminalSize) async throws {
         guard mode.allowsResize else { throw TerminalSessionError.readOnly }
         guard !closed else { throw TerminalSessionError.closed }
-        enqueue(try TerminalSessionWire.encodeResize(size))
+        try await write(TerminalSessionWire.encodeResize(size))
     }
 
-    func release() {
+    func release() async {
         guard !closed else { return }
-        if mode.access == .control, let data = try? TerminalSessionWire.encodeRelease() {
-            try? inputPipe.fileHandleForWriting.write(contentsOf: data)
-        }
-        onRecord?(.closed(reason: "released"))
+        if mode.access == .control { try? await write(TerminalSessionWire.encodeRelease()) }
+        await onRecord?(.closed(reason: "released"))
         stop()
     }
 
     func stop() {
         guard !closed else { return }
         closed = true
-        outputPipe.fileHandleForReading.readabilityHandler = nil
-        errorPipe.fileHandleForReading.readabilityHandler = nil
-        if process.isRunning { process.terminate() }
+        outputTask?.cancel()
+        errorTask?.cancel()
+        if process.isRunning {
+            process.terminate()
+            let process = process
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1))
+                if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+            }
+        }
         try? inputPipe.fileHandleForWriting.close()
+        // Close parent-owned write ends too, so pending pipe reads can see EOF.
+        try? outputPipe.fileHandleForWriting.close()
+        try? errorPipe.fileHandleForWriting.close()
         cleanupAuthorization()
     }
 
-    private func enqueue(_ data: Data) {
+    private func write(_ data: Data) async throws {
         let handle = inputPipe.fileHandleForWriting
-        writeQueue.async { [weak self] in
-            do {
-                try handle.write(contentsOf: data)
-            } catch {
-                Task { @MainActor in self?.fail(error) }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            writeQueue.async {
+                do { try handle.write(contentsOf: data); continuation.resume() }
+                catch { continuation.resume(throwing: error) }
             }
         }
     }
 
-    private func ingest(_ data: Data) {
+    private func deliver(_ record: TerminalSessionRecord) async {
         guard !closed else { return }
-        if data.isEmpty {
-            return
-        }
-        do {
-            try decoder.append(data)
-            while let record = try decoder.nextRecord() {
-                onRecord?(record)
-                if case .closed = record {
-                    finishAfterRemoteClose()
-                }
-            }
-        } catch {
-            fail(error)
-        }
+        await onRecord?(record)
+        if case .closed = record { stop() }
     }
 
-    private func ingestError(_ data: Data) {
-        guard !data.isEmpty, stderr.count < 16 * 1024 else { return }
-        stderr.append(data.prefix(16 * 1024 - stderr.count))
-    }
+    private func setStderr(_ data: Data) { stderr = data }
 
-    private func terminated(status: Int32) {
-        cleanupAuthorization()
+    private func terminated(status: Int32) async {
         guard !closed else { return }
-        closed = true
-        let detail = String(data: stderr, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = String(data: stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if status == 0 {
-            onRecord?(.closed(reason: detail?.isEmpty == false ? detail : nil))
+            await onRecord?(.closed(reason: detail?.isEmpty == false ? detail : nil))
         } else {
-            let message = detail?.isEmpty == false
-                ? detail!
-                : "terminal session exited with status \(status)"
-            onFailure?(FleetBridgeHostError.terminalFailed(message))
+            let message = detail?.isEmpty == false ? detail! : "terminal session exited with status \(status)"
+            await onFailure?(FleetBridgeHostError.terminalFailed(message))
         }
-    }
-
-    private func fail(_ error: Error) {
-        guard !closed else { return }
-        onFailure?(error)
         stop()
     }
 
-    private func finishAfterRemoteClose() {
+    private func fail(_ error: Error) async {
         guard !closed else { return }
-        closed = true
-        outputPipe.fileHandleForReading.readabilityHandler = nil
-        errorPipe.fileHandleForReading.readabilityHandler = nil
-        try? inputPipe.fileHandleForWriting.close()
-        cleanupAuthorization()
+        await onFailure?(error)
+        stop()
     }
 
     private func cleanupAuthorization() {

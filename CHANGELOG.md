@@ -5,6 +5,29 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Changed
+- iOS bridge RPCs reuse an authenticated connection after capability negotiation;
+  older peers retain their existing one-operation-per-connection protocol.
+- Conversation readers use activity-driven, read-only transcript subscriptions
+  with bounded UTF-8 updates when supported, and adaptive polling otherwise.
+- Terminal delivery is split into bounded UI batches; Mac bridge decoding and
+  serialization run off the main actor with ordered, bounded output writes.
+
+### Fixed
+- Cached mobile conversations rebind after transport replacement instead of
+  retaining closed SSH connections. Late reads cannot overwrite newer output.
+- Repeated activation no longer reconnects healthy sessions. Background cleanup
+  closes all bridge streams; transient direct-SSH failures reconnect with backoff.
+- Continuous direct-device event bursts are rate-limited, and unchanged transcript
+  content does not repeatedly invalidate rendered rows.
+
+### Added
+- Regression tests for transcript patching, reconnect lifecycle, bounded writes,
+  RPC cancellation and deadlines, refresh coalescing, and terminal byte ordering.
+- Content-free performance signposts and an iOS compatibility/profiling guide.
+
 ## [0.5.3] - 2026-08-29
 
 ### Added
@@ -248,7 +271,7 @@ the Sparkle update description — a release without a section here fails CI.
   carries the same keepalives as the tunnel so dead paths are noticed within
   ~45 s. (#23, thanks @lcandy2!)
 - Settings → Terminal: the preview no longer sits indented by the form's label
-  column, and the mouse-reporting description no longer truncates.
+  column, and the font controls no longer keep keyboard focus after a click.
 
 ## [0.3.6] - 2026-08-20
 
@@ -274,10 +297,9 @@ the Sparkle update description — a release without a section here fails CI.
 - Custom SSH ports: enter the device target as `user@host:port` (or an
   `ssh://` URI); plain targets and `~/.ssh/config` aliases work as before.
 - Right-click context menu in the terminal: Copy, Paste, Select All — plus
-  Open Link and Copy Link Address when the selected text contains a URL
-  (double-click selects a whole URL). (#19)
-- ⌘-click opens http(s) links under the pointer in the default browser
-  (SwiftTerm's built-in link detection; hold ⌘ to highlight). (#19)
+  Copy Link and Open Link for URLs. (#19)
+- ⌘-click opens http(s) links under the pointer (SwiftTerm's built-in link
+  detection); ⌘-hover underlines a recognized URL. (#19)
 
 ## [0.3.4] - 2026-08-20
 
@@ -312,7 +334,7 @@ the Sparkle update description — a release without a section here fails CI.
 - Terminal colors now adapt to Light mode: explicit truecolor output (like
   Codex's dark input box) is luminance-flipped before it reaches the terminal,
   and the ANSI palette follows the theme. (#15, thanks @hhmy27!) On top of
-  that, palette entries that already read well on white — red, blue, magenta,
+  that, palette entries that are already readable on white — red, blue, magenta,
   black — keep their original colors instead of washing out to pastels.
 
 ## [0.3.1] - 2026-08-20
@@ -384,11 +406,9 @@ the Sparkle update description — a release without a section here fails CI.
 ### Added
 - All devices now stay connected in parallel: the sidebar aggregates spaces and
   agents across every machine, with a small OS badge marking where each row
-  lives. The bottom-left switcher became a filter (All Devices by default).
+  lives, and keeps each device on its own reconnect loop.
 - Notifications now watch every connected device, not just the selected one;
-  clicking a notification jumps straight to that agent.
-- New Agent and New Space gained a device picker; installed-agent sniffing is
-  cached per device.
+  clicking jumps straight to that agent.
 - Per-device connection health with automatic reconnect (1s → 30s backoff).
 
 ### Changed
