@@ -56,6 +56,11 @@ struct SidebarView: View {
                 actionRow(icon: "terminal", label: "New Terminal") {
                     model.showNewTerminal = true
                 }
+                // Also reachable from the folder.badge.plus by the Spaces
+                // header; promoted here alongside the other New … actions (#84).
+                actionRow(icon: "folder.badge.plus", label: "New Space") {
+                    model.showNewSpace = true
+                }
                 actionRow(icon: "folder", label: "Files") {
                     model.openFileManager()
                 }
