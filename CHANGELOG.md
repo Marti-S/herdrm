@@ -5,6 +5,13 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [0.6.5] - 2026-09-13
+
+### Added
+- New Space is now a top-level sidebar action alongside New Agent and New
+  Terminal, so creating a space no longer means hunting for the small button
+  by the Spaces header (which stays as a secondary affordance). (#84)
+
 ## [0.6.4] - 2026-09-13
 
 ### Added
