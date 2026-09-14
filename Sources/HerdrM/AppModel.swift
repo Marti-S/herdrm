@@ -631,13 +631,50 @@ final class AppModel: ObservableObject {
             startSession(device)
             probeOSIfNeeded(device)
         }
+        // Surface any herdr named sessions running now (issue #81).
+        refreshNamedSessions()
     }
 
     func service(for device: Device) -> HerdrService {
         if let service = services[device.id] { return service }
-        let service = HerdrService(device: device)
+        // Only the built-in Local device (no socket override) may auto-start a
+        // herdr server. A named-session device points at an existing session's
+        // socket; that server is the user's to run, and auto-start would spawn a
+        // default-session server on the wrong socket.
+        let service = HerdrService(
+            device: device,
+            autoStartLocalServer: device.isLocal && device.socketPath == nil
+        )
         services[device.id] = service
         return service
+    }
+
+    /// Merges live herdr named sessions in as extra Local devices (issue #81)
+    /// and drops ones whose session went away. Discovered, never persisted:
+    /// named sessions come and go, unlike user-added SSH/tailcat devices.
+    func refreshNamedSessions() {
+        let discovered = HerdrSessionDiscovery.namedSessions()
+            .map(HerdrSessionDiscovery.device(for:))
+        let discoveredIDs = Set(discovered.map(\.id))
+        // Named-session devices already present, by id.
+        let existingIDs = Set(devices.filter(\.isNamedSession).map(\.id))
+
+        for device in discovered where !existingIDs.contains(device.id) {
+            devices.append(device)
+            startSession(device)
+            probeOSIfNeeded(device)
+        }
+        // Remove named-session devices whose session is gone.
+        for device in devices where device.isNamedSession && !discoveredIDs.contains(device.id) {
+            stopSession(device.id)
+            attachSessions.removeAll { $0.device.id == device.id }
+            devices.removeAll { $0.id == device.id }
+            if deviceFilter == device.id { deviceFilter = nil }
+            if selectedSpace?.deviceID == device.id { selectedSpace = nil }
+            if selectedPane?.deviceID == device.id {
+                selectedPane = preferredVisibleAgent()?.ref ?? firstVisiblePaneRef
+            }
+        }
     }
 
     /// Runs one device's session: connect, snapshot, event stream, and reconnect
@@ -854,6 +891,9 @@ final class AppModel: ObservableObject {
             startSession(device)
             probeOSIfNeeded(device)
         }
+        // Reconnect is also the natural moment to pick up a named session that
+        // started (or dropped) since launch (issue #81).
+        refreshNamedSessions()
     }
 
     private func isFailed(_ deviceID: UUID) -> Bool {

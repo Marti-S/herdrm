@@ -8,6 +8,11 @@ the Sparkle update description — a release without a section here fails CI.
 ## [Unreleased]
 
 ### Added
+- herdr named sessions (`herdr --session <name>` / `HERDR_SESSION`) now appear
+  as extra Local devices in the switcher, instead of being invisible. Each live
+  session under `~/.config/herdr/sessions/<name>/herdr.sock` is discovered at
+  launch and on Reconnect; RPC, events, and terminal attach all target that
+  session's socket. (#81, thanks @acy103!)
 - The custom titlebar now behaves like a native macOS titlebar: drag it to
   move the window, and double-click it to follow the system Zoom, Minimize,
   or Do Nothing preference.
