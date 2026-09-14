@@ -16,6 +16,18 @@ the Sparkle update description — a release without a section here fails CI.
 - Copy now works through both terminal paths: Command-C writes a local Ghostty
   selection directly to the macOS pasteboard, while agent TUI copy actions can
   write through OSC 52.
+- HerdrSSH handshake compiles under Swift 6 region isolation: `performHandshake`
+  no longer captures a local `OpaquePointer` across `repeatUntilComplete`
+  awaits, so `HerdrMobile` / `make mobile-build` succeed again. (#85, thanks
+  @jt-wang!)
+
+### Changed
+- Documented `make mobile-build` and `make ssh-test` (HerdrSSH Swift Testing on
+  Simulator). Removed the HerdrSSH README “Direct-streamlocal / Jump Host
+  acceptance” block that documented Heeler’s `scripts/run-ci-ios-tests.sh`
+  workflow: that script and those suites were never checked into herdrm, so the
+  old text told people to run something that does not exist here. (#85, thanks
+  @jt-wang!)
 
 ## [0.6.3] - 2026-09-10
 
