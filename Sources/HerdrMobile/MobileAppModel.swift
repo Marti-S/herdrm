@@ -115,7 +115,21 @@ final class MobileAppModel {
     return bridgeSession?.state ?? .idle
   }
 
+  /// Scene became active. Healthy sessions are verified and refreshed, not
+  /// torn down: `.active` also follows Notification Center, Control Center,
+  /// and Face ID, none of which invalidate a socket.
   func activate() {
+    if let bridgeSession {
+      Task { await bridgeSession.resume() }
+    }
+    for device in directDevices {
+      guard let session = directSession(for: device.id) else { continue }
+      Task { await session.resume() }
+    }
+  }
+
+  /// Explicit user request: always rebuild every connection.
+  func reconnectAll() {
     if let bridgeSession {
       Task { await bridgeSession.reconnect() }
     }

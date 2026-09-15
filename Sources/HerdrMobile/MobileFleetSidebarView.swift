@@ -67,7 +67,7 @@ struct MobileFleetSidebarView: View {
                 Text(reason)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Button(String(localized: "Reconnect")) { model.activate() }
+                Button(String(localized: "Reconnect")) { model.reconnectAll() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

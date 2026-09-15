@@ -241,6 +241,18 @@ final class MobileBridgeSession {
     connect()
   }
 
+  /// Scene became active: keep a live subscription and just refresh; only
+  /// (re)connect when nothing is running or the last state was a failure.
+  func resume() async {
+    if runTask != nil, state.isConnected {
+      await refresh()
+      return
+    }
+    if runTask == nil {
+      connect()
+    }
+  }
+
   func connect() {
     guard runTask == nil else { return }
     generation &+= 1
@@ -289,8 +301,13 @@ final class MobileBridgeSession {
     return FleetBridgeDeviceTransport(client: client, deviceID: deviceID)
   }
 
+  /// A dropped subscription stays invisible for this long while the loop
+  /// reconnects; Tailscale path changes recover well inside it.
+  static let failureGrace: Duration = .seconds(8)
+
   private func runSubscriptionLoop(generation expectedGeneration: UInt64) async {
     var backoff: Double = 1
+    var droppedAt: ContinuousClock.Instant?
     defer {
       if generation == expectedGeneration {
         runTask = nil
@@ -298,7 +315,10 @@ final class MobileBridgeSession {
     }
 
     while !Task.isCancelled, generation == expectedGeneration {
-      if state != .connecting {
+      // Within the grace window after a drop, keep showing the last good
+      // state and snapshot rather than flashing "Connecting…".
+      let withinGrace = droppedAt.map { $0.duration(to: .now) < Self.failureGrace } ?? false
+      if !withinGrace, state != .connecting {
         state = .connecting
         onChange?()
       }
@@ -326,6 +346,7 @@ final class MobileBridgeSession {
             snapshot = next
           }
           backoff = 1
+          droppedAt = nil
           state = .connected(version: "Bridge \(FleetBridgeProtocol.version)")
           if snapshotChanged || state != previousState {
             onChange?()
@@ -341,9 +362,16 @@ final class MobileBridgeSession {
           !Task.isCancelled,
           generation == expectedGeneration
         else { return }
-        state = .failed(Self.presentation(error))
-        onChange?()
-        if (error as? FleetBridgeClientError)?.isPermanent == true {
+        let permanent = (error as? FleetBridgeClientError)?.isPermanent == true
+        if state.isConnected, droppedAt == nil, !permanent {
+          droppedAt = .now
+        }
+        let stillInGrace = droppedAt.map { $0.duration(to: .now) < Self.failureGrace } ?? false
+        if permanent || !stillInGrace {
+          state = .failed(Self.presentation(error))
+          onChange?()
+        }
+        if permanent {
           return
         }
       }

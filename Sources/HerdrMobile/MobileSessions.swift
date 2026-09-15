@@ -76,6 +76,14 @@ final class MobileDeviceSession {
   private var refreshTaskGeneration: UInt64 = 0
   private var refreshDirty = false
   private var generation: UInt64 = 0
+  private var reconnectTask: Task<Void, Never>?
+
+  /// How long a dropped transport may stay invisible while reconnecting.
+  /// Tailscale path changes and a dozing Mac usually recover well inside
+  /// this window, so the UI keeps the last snapshot instead of flashing
+  /// "Connection lost" for a blip.
+  static let failureGrace: Duration = .seconds(8)
+  private static let reconnectBackoff: [Duration] = [.seconds(1), .seconds(2), .seconds(4), .seconds(8)]
 
   var onChange: (() -> Void)?
 
@@ -88,6 +96,26 @@ final class MobileDeviceSession {
     await connect()
   }
 
+  /// Scene became active. A healthy transport is kept and only verified;
+  /// tearing it down on every activation is what made the sidebar flash
+  /// "Connecting…" after Notification Center or Face ID.
+  func resume() async {
+    switch state {
+    case .connected:
+      guard let transport else { await reconnect(); return }
+      do {
+        _ = try await transport.request(method: "ping", params: .object([:]), as: PingResult.self)
+        await requestRefresh(generation: generation, debounce: false)
+      } catch {
+        await reconnect()
+      }
+    case .connecting:
+      return
+    case .idle, .failed:
+      await connect()
+    }
+  }
+
   func connect() async {
     switch state {
     case .connecting, .connected:
@@ -96,6 +124,17 @@ final class MobileDeviceSession {
       break
     }
 
+    do {
+      try await establish(showConnecting: true)
+    } catch {
+      // establish() already published the failed state.
+    }
+  }
+
+  /// Opens a fresh transport. With `showConnecting` false the previous
+  /// `.connected` state is left untouched until the outcome is known, so a
+  /// background reconnect does not flash through the sidebar.
+  private func establish(showConnecting: Bool) async throws {
     generation &+= 1
     let expectedGeneration = generation
     eventTask?.cancel()
@@ -106,8 +145,10 @@ final class MobileDeviceSession {
     }
     guard generation == expectedGeneration else { return }
 
-    state = .connecting
-    onChange?()
+    if showConnecting {
+      state = .connecting
+      onChange?()
+    }
     var candidate: SSHDirectTransport?
     do {
       let opened = try await SSHDirectTransport.connect(device: device)
@@ -133,8 +174,12 @@ final class MobileDeviceSession {
       startEventPump(transport: opened, generation: expectedGeneration)
     } catch {
       if let candidate { await candidate.close() }
-      guard generation == expectedGeneration else { return }
-      state = .failed(Self.presentation(error))
+      guard generation == expectedGeneration else { throw error }
+      if showConnecting {
+        state = .failed(Self.presentation(error))
+        onChange?()
+      }
+      throw error
     }
     onChange?()
   }
@@ -142,6 +187,8 @@ final class MobileDeviceSession {
   func disconnect() async {
     generation &+= 1
     let expectedGeneration = generation
+    reconnectTask?.cancel()
+    reconnectTask = nil
     eventTask?.cancel()
     eventTask = nil
     refreshTaskGeneration &+= 1
@@ -241,12 +288,45 @@ final class MobileDeviceSession {
         self.generation == expectedGeneration
       else { return }
       if case .connected = self.state {
-        self.state = .failed(String(localized: "Connection lost"))
         let stale = self.transport
         self.transport = nil
         await stale?.close()
         guard self.generation == expectedGeneration else { return }
-        self.onChange?()
+        self.scheduleReconnect()
+      }
+    }
+  }
+
+  /// Transport dropped while connected: keep the snapshot and state, retry
+  /// with backoff, and surface a failure only after `failureGrace`.
+  private func scheduleReconnect() {
+    reconnectTask?.cancel()
+    reconnectTask = Task { [weak self] in
+      guard let self else { return }
+      let startedAt = ContinuousClock.now
+      var attempt = 0
+      var lastError: (any Error)?
+      while !Task.isCancelled {
+        let delay = Self.reconnectBackoff[min(attempt, Self.reconnectBackoff.count - 1)]
+        attempt += 1
+        do { try await Task.sleep(for: delay) } catch { return }
+        guard !Task.isCancelled else { return }
+
+        if startedAt.duration(to: .now) > Self.failureGrace, lastError != nil,
+           case .connected = state {
+          state = .failed(String(localized: "Connection lost"))
+          onChange?()
+        }
+
+        do {
+          try await establish(showConnecting: !state.isConnected)
+          reconnectTask = nil
+          return
+        } catch is CancellationError {
+          return
+        } catch {
+          lastError = error
+        }
       }
     }
   }
