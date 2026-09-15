@@ -198,6 +198,7 @@ final class AppModel: ObservableObject {
     /// One app-owned sidecar shell per Space that has explicitly opened ⌘D.
     @Published private var splitSessionsBySpace: [SpaceRef: SpaceSplitSession] = [:]
     private var splitShellViews: [SpaceRef: WeakTerminalViewBox] = [:]
+    private var attachedTerminalViews: [PaneRef: WeakTerminalViewBox] = [:]
     private var restoringSplitSession = false
     /// Live terminal views of the ⌘D split, used by menu commands to move focus.
     /// Held weakly so the views are not kept alive by the model.
@@ -493,21 +494,43 @@ final class AppModel: ObservableObject {
     }
 
     var selectedEntry: AgentEntry? {
-        guard let selected = selectedPane, let device = device(selected.deviceID) else { return nil }
-        guard let agent = session(selected.deviceID).agents.first(where: { $0.paneID == selected.paneID })
+        guard let selected = selectedPane,
+              case .agent(let entry)? = attachedEntry(for: selected)
         else { return nil }
-        return agentEntry(device: device, agent: agent)
+        return entry
     }
 
     var selectedTerminalEntry: TerminalEntry? {
-        guard let selected = selectedPane, let device = device(selected.deviceID) else { return nil }
-        return terminalEntries(for: device).first { $0.pane.paneID == selected.paneID }
+        guard let selected = selectedPane,
+              case .terminal(let entry)? = attachedEntry(for: selected)
+        else { return nil }
+        return entry
+    }
+
+    func attachedEntry(for ref: PaneRef) -> AttachedEntry? {
+        guard let device = device(ref.deviceID) else { return nil }
+        if let agent = session(ref.deviceID).agents.first(where: { $0.paneID == ref.paneID }) {
+            return .agent(agentEntry(device: device, agent: agent))
+        }
+        if let terminal = terminalEntries(for: device).first(where: {
+            $0.pane.paneID == ref.paneID
+        }) {
+            return .terminal(terminal)
+        }
+        return nil
+    }
+
+    var allAttachedEntries: [AttachedEntry] {
+        devices.flatMap { device in
+            let agents = session(device.id).agents.map {
+                AttachedEntry.agent(agentEntry(device: device, agent: $0))
+            }
+            return agents + terminalEntries(for: device).map(AttachedEntry.terminal)
+        }
     }
 
     var selectedAttachedEntry: AttachedEntry? {
-        if let selectedEntry { return .agent(selectedEntry) }
-        if let selectedTerminalEntry { return .terminal(selectedTerminalEntry) }
-        return nil
+        selectedPane.flatMap(attachedEntry(for:))
     }
 
     var attachedSpaceRef: SpaceRef? {
@@ -541,6 +564,27 @@ final class AppModel: ObservableObject {
         activeSplitSide = session.activeSide
         splitRatio = session.ratio
         splitShellView = splitShellViews[space]?.view
+    }
+
+    func registerAttachedTerminalView(
+        _ view: LocalProcessTerminalView,
+        for ref: PaneRef
+    ) {
+        attachedTerminalViews[ref] = WeakTerminalViewBox(view)
+        if selectedPane == ref {
+            splitAgentView = view
+        }
+    }
+
+    func attachedTerminalView(for ref: PaneRef) -> LocalProcessTerminalView? {
+        attachedTerminalViews[ref]?.view
+    }
+
+    func unregisterAttachedTerminalView(for ref: PaneRef) {
+        attachedTerminalViews.removeValue(forKey: ref)
+        if selectedPane == ref {
+            splitAgentView = nil
+        }
     }
 
     func registerSplitShellView(_ view: LocalProcessTerminalView, for space: SpaceRef) {

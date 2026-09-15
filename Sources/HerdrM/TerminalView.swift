@@ -151,6 +151,18 @@ final class LineBreakTerminalView: LocalProcessTerminalView {
     var usesLightColors = false
     var appliedDarkAppearance: Bool?
     private var lightColorAdapter = LightTerminalANSIAdapter()
+    private var didAttemptMetalRenderer = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, !didAttemptMetalRenderer else { return }
+        didAttemptMetalRenderer = true
+
+        // SwiftTerm defaults to CoreGraphics. Metal keeps the terminal model
+        // unchanged but moves glyph atlas and cell rendering to the GPU. A
+        // failed setup leaves SwiftTerm on its existing CoreGraphics path.
+        try? setUseMetal(true)
+    }
 
     /// A light-mode feed can retain a partial SGR while waiting to identify a
     /// Powerline separator. Drop that parser state when switching themes so a

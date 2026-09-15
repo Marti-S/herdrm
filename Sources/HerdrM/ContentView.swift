@@ -99,6 +99,7 @@ enum TitlebarMetrics {
     static let trafficLightClearance: CGFloat = 78
 }
 
+
 struct DetailView: View {
     @ObservedObject var model: AppModel
     @Binding var sidebarCollapsed: Bool
@@ -137,6 +138,13 @@ struct DetailView: View {
         }
         .onAppear {
             if model.isFileManagerActive { hasOpenedFileManager = true }
+            retainSelectedAttachedTerminal()
+            pruneRetainedAttachedTerminals(
+                liveRefs: Set(model.allAttachedEntries.map(\.ref))
+            )
+        }
+        .onChange(of: model.allAttachedEntries.map(\.ref)) { _, refs in
+            pruneRetainedAttachedTerminals(liveRefs: Set(refs))
         }
     }
 
@@ -249,13 +257,16 @@ struct DetailView: View {
     @AppStorage(TerminalDefaults.lineSpacingKey) private var terminalLineSpacing = TerminalDefaults.defaultLineSpacing
     @AppStorage("terminal.mouseReporting") private var terminalMouseReporting = true
     @Environment(\.colorScheme) private var colorScheme
-    /// The entry whose attach process exited, and how. Keyed by entry id so a stale
-    /// exit from a previously selected pane never covers a live terminal.
-    @State private var endedAttachKey: String?
-    @State private var endedAttachCode: Int32?
-    @State private var attachRetry = 0
-    @State private var uploadingAttachment = false
+    /// Retain a bounded working set so revisiting recent agents is instant,
+    /// while inactive terminal views stay collapsed and out of resize/render work.
+    @State private var retainedAttachedRefs: [PaneRef] = []
+    @State private var endedAttachedRefs: Set<PaneRef> = []
+    @State private var endedAttachCodes: [PaneRef: Int32] = [:]
+    @State private var attachRetries: [PaneRef: Int] = [:]
+    @State private var uploadingAttachmentRefs: Set<PaneRef> = []
     @State private var splitTracker = SplitFocusTracker()
+
+    private let maximumRetainedAttachedTerminals = 6
 
     @ViewBuilder
     private var terminal: some View {
@@ -300,21 +311,27 @@ struct DetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.terminalBackground)
         .overlay(alignment: .bottomTrailing) {
-            if uploadingAttachment { uploadIndicator }
+            if let ref = model.selectedAttachedEntry?.ref,
+               uploadingAttachmentRefs.contains(ref) {
+                uploadIndicator
+            }
         }
         .onAppear {
             model.activateSplitSession(for: model.attachedSpaceRef)
             splitTracker.onSideChanged = { model.activeSplitSide = $0 }
             splitTracker.start()
             splitTracker.shellView = model.splitShellView
+            retainSelectedAttachedTerminal()
+            activateSelectedAttachedTerminal()
         }
         .onChange(of: model.selectedAttachedEntry?.id) { _, id in
-            endedAttachKey = nil
-            uploadingAttachment = false
+            retainSelectedAttachedTerminal()
             if id == nil {
                 model.pendingSplitAgentFocus = false
-            } else if model.shellSplitAxis != nil {
-                focusTerminal(model.splitAgentView)
+                model.splitAgentView = nil
+                splitTracker.agentView = nil
+            } else {
+                activateSelectedAttachedTerminal()
             }
         }
         // Keyed on the window becoming key rather than on a delay: that is the event
@@ -346,68 +363,136 @@ struct DetailView: View {
 
     @ViewBuilder
     private var attachedPrimary: some View {
-        if let entry = model.selectedAttachedEntry {
-            let attachmentCapabilities: AgentAttachmentCapabilities? = {
-                guard case .agent(let agentEntry) = entry else { return nil }
-                return model.attachmentCapabilities(
-                    deviceID: agentEntry.device.id,
-                    agentKind: agentEntry.agent.agentKindRaw
-                )
-            }()
-            ZStack {
-                AttachTerminalView(
-                    device: entry.device,
-                    target: entry.attachTarget,
-                    serverVersion: model.serverVersion(deviceID: entry.device.id),
-                    attachmentCapabilities: attachmentCapabilities,
-                    fontName: terminalFontName,
-                    fontSize: terminalFontSize,
-                    thinStrokes: terminalThinStrokes,
-                    fontWeight: terminalFontWeight,
-                    lineSpacing: terminalLineSpacing,
-                    dark: colorScheme == .dark,
-                    mouseReporting: terminalMouseReporting,
-                    onAttachmentError: { model.actionError = $0 },
-                    onAttachmentUploadingChanged: { uploadingAttachment = $0 },
-                    onExit: { code in
-                        endedAttachKey = entry.id
-                        endedAttachCode = code
-                    },
-                    onViewReady: {
-                        splitTracker.agentView = $0
-                        model.splitAgentView = $0
-                    }
-                )
-                    .id("attach-\(entry.id)-\(colorScheme)-\(attachRetry)")
+        ZStack {
+            ForEach(attachedEntriesToRender) { entry in
+                let active = model.selectedAttachedEntry?.ref == entry.ref
+                let attachmentCapabilities: AgentAttachmentCapabilities? = {
+                    guard case .agent(let agentEntry) = entry else { return nil }
+                    return model.attachmentCapabilities(
+                        deviceID: agentEntry.device.id,
+                        agentKind: agentEntry.agent.agentKindRaw
+                    )
+                }()
+                ZStack {
+                    AttachTerminalView(
+                        device: entry.device,
+                        target: entry.attachTarget,
+                        serverVersion: model.serverVersion(deviceID: entry.device.id),
+                        attachmentCapabilities: attachmentCapabilities,
+                        fontName: terminalFontName,
+                        fontSize: terminalFontSize,
+                        thinStrokes: terminalThinStrokes,
+                        fontWeight: terminalFontWeight,
+                        lineSpacing: terminalLineSpacing,
+                        dark: colorScheme == .dark,
+                        mouseReporting: terminalMouseReporting,
+                        onAttachmentError: { model.actionError = $0 },
+                        onAttachmentUploadingChanged: { uploading in
+                            if uploading {
+                                uploadingAttachmentRefs.insert(entry.ref)
+                            } else {
+                                uploadingAttachmentRefs.remove(entry.ref)
+                            }
+                        },
+                        onExit: { code in
+                            endedAttachedRefs.insert(entry.ref)
+                            if let code {
+                                endedAttachCodes[entry.ref] = code
+                            } else {
+                                endedAttachCodes.removeValue(forKey: entry.ref)
+                            }
+                        },
+                        onViewReady: { view in
+                            model.registerAttachedTerminalView(view, for: entry.ref)
+                            if model.selectedAttachedEntry?.ref == entry.ref {
+                                splitTracker.agentView = view
+                                model.splitAgentView = view
+                            }
+                        }
+                    )
+                    .id(
+                        "attach-\(entry.id)-\(attachRetries[entry.ref, default: 0])"
+                    )
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                if endedAttachKey == entry.id {
-                    attachEndedOverlay(entry)
-                }
-            }
-        } else {
-            VStack(spacing: 10) {
-                Image(systemName: "terminal")
-                    .font(.system(size: 28, weight: .light))
-                    .foregroundStyle(Theme.textGhost)
-                Text(placeholderText)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.textTertiary)
-                if showsStartAgentShortcut {
-                    Button("New Agent…") {
-                        model.showNewAgent = true
+                    if endedAttachedRefs.contains(entry.ref) {
+                        attachEndedOverlay(
+                            entry,
+                            code: endedAttachCodes[entry.ref]
+                        )
                     }
-                    .controlSize(.small)
-                } else if model.hasReconnectableDevice {
-                    Button("Reconnect") {
-                        model.reconnectFailedDevices()
-                    }
-                    .controlSize(.small)
                 }
+                .mountedTerminal(isActive: active)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.terminalBackground)
+
+            if model.selectedAttachedEntry == nil {
+                VStack(spacing: 10) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 28, weight: .light))
+                        .foregroundStyle(Theme.textGhost)
+                    Text(placeholderText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textTertiary)
+                    if showsStartAgentShortcut {
+                        Button("New Agent…") {
+                            model.showNewAgent = true
+                        }
+                        .controlSize(.small)
+                    } else if model.hasReconnectableDevice {
+                        Button("Reconnect") {
+                            model.reconnectFailedDevices()
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.terminalBackground)
+            }
         }
+    }
+
+    private var attachedEntriesToRender: [AppModel.AttachedEntry] {
+        var refs = Set(retainedAttachedRefs)
+        if let selected = model.selectedAttachedEntry?.ref {
+            refs.insert(selected)
+        }
+        return model.allAttachedEntries.filter { refs.contains($0.ref) }
+    }
+
+    private func retainSelectedAttachedTerminal() {
+        guard let ref = model.selectedAttachedEntry?.ref else { return }
+        retainedAttachedRefs.removeAll { $0 == ref }
+        retainedAttachedRefs.append(ref)
+
+        while retainedAttachedRefs.count > maximumRetainedAttachedTerminals {
+            let evicted = retainedAttachedRefs.removeFirst()
+            removeRetainedAttachedState(for: evicted)
+        }
+    }
+
+    private func pruneRetainedAttachedTerminals(liveRefs: Set<PaneRef>) {
+        let removed = retainedAttachedRefs.filter { !liveRefs.contains($0) }
+        retainedAttachedRefs.removeAll { !liveRefs.contains($0) }
+        for ref in removed {
+            removeRetainedAttachedState(for: ref)
+        }
+    }
+
+    private func removeRetainedAttachedState(for ref: PaneRef) {
+        model.unregisterAttachedTerminalView(for: ref)
+        endedAttachedRefs.remove(ref)
+        endedAttachCodes.removeValue(forKey: ref)
+        attachRetries.removeValue(forKey: ref)
+        uploadingAttachmentRefs.remove(ref)
+    }
+
+    private func activateSelectedAttachedTerminal() {
+        guard let ref = model.selectedAttachedEntry?.ref,
+              let view = model.attachedTerminalView(for: ref)
+        else { return }
+        splitTracker.agentView = view
+        model.splitAgentView = view
+        focusTerminal(view)
     }
 
     private var splitShellTerminals: some View {
@@ -440,8 +525,11 @@ struct DetailView: View {
 
     /// ssh exits 255 for transport failures; everything else is the far end closing
     /// (takeover by another client, the pane going away, herdr stopping).
-    private func attachEndedOverlay(_ entry: AppModel.AttachedEntry) -> some View {
-        let dropped = endedAttachCode == 255
+    private func attachEndedOverlay(
+        _ entry: AppModel.AttachedEntry,
+        code: Int32?
+    ) -> some View {
+        let dropped = code == 255
         return VStack(spacing: 10) {
             Image(systemName: dropped ? "bolt.horizontal.circle" : "rectangle.slash")
                 .font(.system(size: 28, weight: .light))
@@ -455,8 +543,9 @@ struct DetailView: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(Theme.textTertiary)
             Button("Reconnect") {
-                endedAttachKey = nil
-                attachRetry += 1
+                endedAttachedRefs.remove(entry.ref)
+                endedAttachCodes.removeValue(forKey: entry.ref)
+                attachRetries[entry.ref, default: 0] += 1
             }
             .controlSize(.small)
             .keyboardShortcut(.defaultAction)
