@@ -452,9 +452,15 @@ public actor HerdrService {
         try await sendKeys(paneID: paneID, keys: ["enter"])
     }
 
-    /// Launches a Pi-compatible CLI through a Pi-named symlink so Herdr's
-    /// existing process and screen detectors classify forks such as Atomic as
-    /// Pi without requiring a second server-side harness.
+    /// Launches a Pi-compatible CLI through a Pi-named wrapper *script* so
+    /// Herdr's process detector classifies forks such as Atomic as Pi.
+    ///
+    /// A symlink is not enough: Atomic sets `process.title = "atomic"` at
+    /// startup, overwriting its own argv, so herdr only ever sees `atomic` and
+    /// files the pane as an unknown terminal. Running the binary as a *child*
+    /// of `/bin/sh <shim>/pi` (deliberately not `exec`) keeps a `pi` cmdline in
+    /// the pane's foreground process list, which herdr matches as kind `pi`.
+    /// Same trick as the `~/bin/pi` shim herdr users hand-roll.
     public func startPiCompatibleAgent(
         executable: String,
         paneID: String,
@@ -468,8 +474,12 @@ public actor HerdrService {
             "atomic_binary=$(command -v \(quotedExecutable)) || exit 127; "
             + "shim_dir=\"${TMPDIR:-/tmp}/herdrm-agent-shims\"; "
             + "mkdir -p \"$shim_dir\" && "
-            + "ln -sf \"$atomic_binary\" \"$shim_dir/pi\" && "
-            + "exec \"$shim_dir/pi\"\(argumentSuffix)"
+            // Earlier builds left a symlink here; writing through it would
+            // clobber the real binary, so always replace it first.
+            + "rm -f \"$shim_dir/pi\" && "
+            + "printf '#!/bin/sh\\n\"%s\" \"$@\"\\n' \"$atomic_binary\" > \"$shim_dir/pi\" && "
+            + "chmod +x \"$shim_dir/pi\" && "
+            + "\"$shim_dir/pi\"\(argumentSuffix)"
         try await runShellCommand(
             command,
             paneID: paneID,
