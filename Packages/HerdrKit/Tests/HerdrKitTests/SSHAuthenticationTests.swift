@@ -538,3 +538,34 @@ final class AgentAttachmentDeliveryPolicyTests: XCTestCase {
         )
     }
 }
+
+final class SSHAskPassHandoffTests: XCTestCase {
+    func testAskPassIsAShellHelperThatConsumesTheHandoffFile() throws {
+        let deviceID = UUID()
+        defer { try? SSHCredentialStore.removePassword(for: deviceID) }
+        try SSHCredentialStore.setPassword("s3cret", for: deviceID)
+
+        let authentication = SSHTunnel.authenticationConfiguration(for: deviceID)
+        defer { authentication.discardAuthorization() }
+        let askPass = try XCTUnwrap(authentication.environment["SSH_ASKPASS"])
+        XCTAssertTrue(askPass.hasSuffix("herdrm-askpass.sh"), askPass)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: askPass))
+        XCTAssertNotEqual(askPass, Bundle.main.executablePath, "ssh must not launch the GUI binary")
+
+        let file = try XCTUnwrap(authentication.environment[SSHCredentialStore.passwordFileEnvironmentKey])
+        let attributes = try FileManager.default.attributesOfItem(atPath: file)
+        XCTAssertEqual((attributes[.posixPermissions] as? Int).map { $0 & 0o777 }, 0o600)
+
+        // Run the helper exactly as ssh would.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: askPass)
+        process.environment = [SSHCredentialStore.passwordFileEnvironmentKey: file]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertEqual(String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8), "s3cret\n")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file), "hand-off is one-shot")
+    }
+}

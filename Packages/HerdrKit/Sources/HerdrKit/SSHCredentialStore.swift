@@ -37,19 +37,46 @@ public enum SSHCredentialStore {
         try? removeLegacyLocalData(directory: "passwords", id: deviceID)
     }
 
+    // MARK: - One-shot askpass hand-off
+    //
+    // The password is looked up in the Keychain exactly once, here, by the
+    // running app. It is then handed to `ssh` through a private 0600 file that
+    // a shell-script `SSH_ASKPASS` prints and deletes. The askpass helper used
+    // to be this app's own executable doing a second Keychain lookup, which
+    // launched a GUI process per `ssh` (dock bounce) and re-prompted for
+    // Keychain access on every differently-signed build; when the prompt was
+    // killed by the tunnel deadline the retry loop bounced the icon forever.
+
+    public static let passwordFileEnvironmentKey = "HERDRM_SSH_PASSWORD_FILE"
+
     static func createAuthorization(for deviceID: UUID) throws -> UUID? {
-        guard try password(for: deviceID) != nil else { return nil }
+        guard let password = try password(for: deviceID) else { return nil }
         let authorizationID = UUID()
-        var item = keychainQuery(service: authorizationService, account: authorizationID.uuidString)
-        item[kSecValueData as String] = Data(deviceID.uuidString.utf8)
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else { throw SSHCredentialStoreError(status: status) }
+        let url = authorizationURL(authorizationID)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try Data("\(password)\n".utf8).write(to: url, options: [.atomic, .completeFileProtection])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return authorizationID
     }
 
-    /// Drops grants stranded by a crash between creation and askpass consumption.
+    /// Absolute path of the one-shot password file for `SSH_ASKPASS`.
+    public static func authorizationFilePath(_ authorizationID: UUID) -> String {
+        authorizationURL(authorizationID).path
+    }
+
+    /// Drops hand-off files stranded by a crash between creation and askpass
+    /// consumption, plus any grants left in the Keychain by older builds.
     public static func purgeAuthorizations() {
+        let directory = authorizationsDirectory
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) {
+            for name in names {
+                try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+            }
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: authorizationService,
@@ -57,26 +84,65 @@ public enum SSHCredentialStore {
         SecItemDelete(query as CFDictionary)
     }
 
+    /// Reads and deletes the hand-off file. Used by the in-process fallback
+    /// askpass and by tests; the shell helper does the same with `cat`+`rm`.
     public static func consumePassword(authorizationID: UUID) throws -> String? {
-        guard let authorization = try keychainData(
-            service: authorizationService,
-            account: authorizationID.uuidString
-        ) else { return nil }
+        let url = authorizationURL(authorizationID)
+        guard let data = try? Data(contentsOf: url) else { return nil }
         defer { try? removeAuthorization(authorizationID) }
-        guard let rawDeviceID = String(data: authorization, encoding: .utf8),
-              let deviceID = UUID(uuidString: rawDeviceID)
-        else { throw SSHCredentialStoreError(status: errSecDecode) }
-        return try password(for: deviceID)
+        guard var password = String(data: data, encoding: .utf8) else {
+            throw SSHCredentialStoreError(status: errSecDecode)
+        }
+        if password.hasSuffix("\n") { password.removeLast() }
+        return password
     }
 
     public static func removeAuthorization(_ authorizationID: UUID) throws {
-        let status = SecItemDelete(
-            keychainQuery(service: authorizationService, account: authorizationID.uuidString) as CFDictionary
-        )
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw SSHCredentialStoreError(status: status)
+        let url = authorizationURL(authorizationID)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
         }
         try? removeLegacyLocalData(directory: "authorizations", id: authorizationID)
+    }
+
+    /// The `SSH_ASKPASS` program: a two-line shell script materialized in the
+    /// app's private directory so `ssh` never launches the GUI binary.
+    public static func askPassHelperPath() throws -> String {
+        let url = privateRoot.appendingPathComponent("herdrm-askpass.sh", isDirectory: false)
+        let script = """
+        #!/bin/sh
+        # HerdrM SSH_ASKPASS: print the one-shot password hand-off, then remove it.
+        f="$\(passwordFileEnvironmentKey)"
+        [ -n "$f" ] && [ -f "$f" ] || exit 1
+        cat "$f"
+        rm -f "$f"
+
+        """
+        let data = Data(script.utf8)
+        if (try? Data(contentsOf: url)) != data {
+            try FileManager.default.createDirectory(
+                at: privateRoot, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try data.write(to: url, options: .atomic)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        return url.path
+    }
+
+    private static var privateRoot: URL {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HerdrM", isDirectory: true)
+            .appendingPathComponent("SSHAskPass", isDirectory: true)
+    }
+
+    private static var authorizationsDirectory: URL {
+        privateRoot.appendingPathComponent("pending", isDirectory: true)
+    }
+
+    private static func authorizationURL(_ authorizationID: UUID) -> URL {
+        authorizationsDirectory.appendingPathComponent(authorizationID.uuidString, isDirectory: false)
     }
 
     private static func decodePassword(_ data: Data) throws -> String {

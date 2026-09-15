@@ -480,7 +480,7 @@ public actor SSHTunnel {
     static func authenticationConfiguration(
         for credentialID: UUID?
     ) -> SSHAuthenticationConfiguration {
-        guard let credentialID, let executablePath = Bundle.main.executablePath,
+        guard let credentialID,
               let authorizationID = try? SSHCredentialStore.createAuthorization(for: credentialID)
         else {
             return SSHAuthenticationConfiguration(
@@ -489,13 +489,20 @@ public actor SSHTunnel {
                 authorizationID: nil
             )
         }
+        // Prefer the shell helper; fall back to the app binary's askpass mode
+        // only if the helper cannot be written (both read the same file).
+        let askPass = (try? SSHCredentialStore.askPassHelperPath())
+            ?? Bundle.main.executablePath
+            ?? "/usr/bin/false"
         return SSHAuthenticationConfiguration(
             arguments: ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"],
             environment: [
-                "SSH_ASKPASS": executablePath,
+                "SSH_ASKPASS": askPass,
                 "SSH_ASKPASS_REQUIRE": "force",
                 SSHCredentialStore.askPassModeEnvironmentKey: "1",
                 SSHCredentialStore.authorizationIDEnvironmentKey: authorizationID.uuidString,
+                SSHCredentialStore.passwordFileEnvironmentKey:
+                    SSHCredentialStore.authorizationFilePath(authorizationID),
             ],
             authorizationID: authorizationID
         )
