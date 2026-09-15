@@ -574,15 +574,6 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    var allAttachedEntries: [AttachedEntry] {
-        devices.flatMap { device in
-            let agents = session(device.id).agents.map {
-                AttachedEntry.agent(agentEntry(device: device, agent: $0))
-            }
-            return agents + terminalEntries(for: device).map(AttachedEntry.terminal)
-        }
-    }
-
     var selectedAttachedEntry: AttachedEntry? {
         selectedPane.flatMap(attachedEntry(for:))
     }

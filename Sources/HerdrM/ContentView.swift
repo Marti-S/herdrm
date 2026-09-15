@@ -490,7 +490,10 @@ struct DetailView: View {
     /// terminal's overlay never covers another and Reconnect rebuilds only its own.
     @State private var endedAttach: [String: Int32?] = [:]
     @State private var attachRetry: [String: Int] = [:]
-    @State private var uploadingAttachment = false
+    /// Ids of the attaches with an upload in flight. Per-entry like `endedAttach`
+    /// and `attachRetry`: several attaches stay mounted, so a background pane
+    /// finishing its upload must not clear the selected pane's indicator.
+    @State private var uploadingAttachment: Set<String> = []
     @State private var splitTracker = SplitFocusTracker()
 
     @ViewBuilder
@@ -523,6 +526,7 @@ struct DetailView: View {
                     .background(Theme.terminalBackground)
                     .opacity(model.selectedShellID == session.id ? 1 : 0)
                     .allowsHitTesting(model.selectedShellID == session.id)
+                    .accessibilityHidden(model.selectedShellID != session.id)
             }
         }
         .background(Theme.terminalBackground)
@@ -552,7 +556,7 @@ struct DetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.terminalBackground)
             .overlay(alignment: .bottomTrailing) {
-                if uploadingAttachment { uploadIndicator }
+                if uploadingAttachment.contains(entry.id) { uploadIndicator }
             }
             .onAppear {
                 // Single source of truth: the tracker writes straight into the model
@@ -568,7 +572,6 @@ struct DetailView: View {
                 splitTracker.start()
             }
             .onChange(of: entry.id) { _, newID in
-                uploadingAttachment = false
                 // A re-selected kept-alive view does not self-focus (makeNSView ran once
                 // at creation), so hand it the keyboard explicitly — matching how every
                 // selection used to focus the freshly built terminal.
@@ -658,7 +661,13 @@ struct DetailView: View {
                 // link instead of drawing frames nobody can see.
                 surfaceVisible: isSelected,
                 onAttachmentError: { model.actionError = $0 },
-                onAttachmentUploadingChanged: { uploadingAttachment = $0 },
+                onAttachmentUploadingChanged: { uploading in
+                    if uploading {
+                        uploadingAttachment.insert(session.id)
+                    } else {
+                        uploadingAttachment.remove(session.id)
+                    }
+                },
                 onExit: { code in endedAttach[session.id] = code }
             )
                 // Keyed on the retry generation only — NOT colorScheme. A theme toggle
@@ -681,6 +690,9 @@ struct DetailView: View {
         .background(Theme.terminalBackground)
         .opacity(isSelected ? 1 : 0)
         .allowsHitTesting(isSelected)
+        // A kept-alive child stays in the view tree, so VoiceOver would otherwise
+        // reach every hidden terminal alongside the visible one.
+        .accessibilityHidden(!isSelected)
     }
 
     /// The ⌘D sidecar shells, one per Space that has opened a split. Every shell stays
@@ -719,6 +731,7 @@ struct DetailView: View {
                     .background(Theme.terminalBackground)
                     .opacity(active ? 1 : 0)
                     .allowsHitTesting(active)
+                    .accessibilityHidden(!active)
             }
         }
     }
