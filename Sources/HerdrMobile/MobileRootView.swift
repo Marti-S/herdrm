@@ -87,8 +87,17 @@ struct MobileRootView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if let entry = model.selectedAgent,
-           let transport = model.transport(for: entry.ref.deviceID) {
+        if let paneRef = model.selectedPaneRef, model.isTailcatDevice(paneRef.deviceID) {
+            // tailcat carries herdr's control plane only — no shell, no PTY
+            // channel — so there is no terminal byte stream to attach to on
+            // iOS. Prompting stays available from the agent's row.
+            ContentUnavailableView(
+                String(localized: "No Terminal over Tailcat"),
+                systemImage: "terminal",
+                description: Text(String(localized: "This device's tunnel reaches herdr's control plane only. Use an SSH device to attach to a live terminal."))
+            )
+        } else if let entry = model.selectedAgent,
+                  let transport = model.transport(for: entry.ref.deviceID) {
             MobileTerminalScreen(
                 transport: transport,
                 target: .agent(paneID: entry.agent.paneID),
@@ -98,7 +107,6 @@ struct MobileRootView: View {
                     agent: entry.agent,
                     transport: transport
                 ),
-
                 title: entry.agent.title(tabLabel: model.tabLabel(for: entry))
             )
             .id(entry.ref)

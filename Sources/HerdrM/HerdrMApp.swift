@@ -2,7 +2,6 @@ import AppKit
 import Darwin
 import HerdrKit
 import Sparkle
-import SwiftTerm
 import SwiftUI
 import UserNotifications
 
@@ -281,6 +280,7 @@ struct AgentsSettingsView: View {
         ("opencode", "OpenCode", "opencode"),
         ("pi", "Pi", "pi"),
         ("atomic", "Atomic", "atomic"),
+        ("omp", "Oh My Pi", "omp"),
         ("copilot", "Copilot", "copilot"),
     ]
 

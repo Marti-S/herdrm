@@ -6,12 +6,16 @@ struct HerdrMobileApp: App {
   @Environment(\.scenePhase) private var scenePhase
 
   init() {
-    // Public by definition; the private key remains in the Keychain and is
-    // only used by the advanced direct-SSH connection mode.
+    // The public half of the device key, for the pairing UI and support
+    // tooling. Public by definition; the private key remains in the Keychain
+    // and is only used by the advanced direct-SSH connection mode.
     UserDefaults.standard.set(
       DeviceKey.authorizedKeysLine(DeviceKey.ensure()),
       forKey: "deviceKey.publicLine"
     )
+    // Nerd Font symbols for agent-TUI icon glyphs (Ghostty codepoint-maps
+    // the PUA ranges to this family).
+    MobileGhosttyRuntime.registerBundledFonts()
   }
 
   var body: some Scene {

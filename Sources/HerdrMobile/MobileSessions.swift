@@ -149,9 +149,17 @@ final class MobileDeviceSession {
       state = .connecting
       onChange?()
     }
-    var candidate: SSHDirectTransport?
+    var candidate: (any MobileTransport)?
     do {
-      let opened = try await SSHDirectTransport.connect(device: device)
+      let opened: any MobileTransport
+      switch device.kind {
+      case .ssh:
+        opened = try await SSHDirectTransport.connect(device: device)
+      case .tailcat:
+        // Control plane only: the tunnel re-serves herdr's API socket
+        // locally, so RPC and events work and terminal attach throws.
+        opened = try await TailcatMobileTransport.connect(device: device)
+      }
       candidate = opened
       let pong = try await opened.request(
         method: "ping", params: .object([:]), as: PingResult.self
@@ -278,8 +286,41 @@ final class MobileDeviceSession {
     eventTask?.cancel()
     eventTask = Task { [weak self] in
       do {
-        for try await _ in transport.events(kinds: HerdrEvent.allKinds) {
-          await self?.scheduleRefresh(generation: expectedGeneration)
+        // herdr 0.9.0 scopes `pane.agent_status_changed` per pane, so the
+        // subscription is re-armed whenever pane topology moves the set.
+        eventSubscriptions: while !Task.isCancelled {
+          guard let self, self.generation == expectedGeneration else { return }
+          let subscribedPaneIDs = self.statusSubscriptionPaneIDs
+          var needsResubscribe = false
+          for try await event in transport.events(
+            kinds: HerdrEvent.allKinds,
+            statusPaneIDs: subscribedPaneIDs
+          ) {
+            guard !Task.isCancelled, self.generation == expectedGeneration else { return }
+            if event.kind == HerdrEvent.agentStatusChangedKind {
+              // Apply the status in place so the sidebar turns immediately;
+              // the debounced snapshot still reconciles everything else.
+              _ = self.applyAgentStatusEvent(event)
+              self.scheduleRefresh(generation: expectedGeneration)
+              continue
+            }
+            if event.kind == HerdrEvent.subscriptionStartedKind
+              || Self.paneTopologyEventKinds.contains(event.kind)
+            {
+              // The pane set decides the subscription, so this snapshot is
+              // fetched eagerly rather than debounced.
+              await self.requestRefresh(generation: expectedGeneration, debounce: false)
+              guard self.generation == expectedGeneration else { return }
+              if self.statusSubscriptionPaneIDs != subscribedPaneIDs {
+                needsResubscribe = true
+                break
+              }
+              continue
+            }
+            self.scheduleRefresh(generation: expectedGeneration)
+          }
+          guard needsResubscribe, !Task.isCancelled else { break eventSubscriptions }
+          try? await Task.sleep(for: .milliseconds(100))
         }
       } catch {}
       guard
@@ -296,6 +337,37 @@ final class MobileDeviceSession {
       }
     }
   }
+
+  /// Every pane herdr must report status for. Scoped subscriptions only fire
+  /// for panes named here, so this is recomputed from each new snapshot.
+  private var statusSubscriptionPaneIDs: [String] {
+    guard let snapshot else { return [] }
+    return Array(Set(
+      snapshot.agents.map(\.paneID)
+        + snapshot.ordinaryTerminalPanes.map(\.paneID)
+    )).sorted()
+  }
+
+  @discardableResult
+  private func applyAgentStatusEvent(_ event: HerdrEvent) -> Bool {
+    guard let paneID = event.payload["data"]?["pane_id"]?.stringValue,
+          let statusRaw = event.payload["data"]?["agent_status"]?.stringValue,
+          let updated = snapshot?.updatingAgentStatus(
+            paneID: paneID,
+            status: AgentStatus(wire: statusRaw)
+          )
+    else { return false }
+    snapshot = updated
+    onChange?()
+    return true
+  }
+
+  private static let paneTopologyEventKinds: Set<String> = [
+    "pane.created",
+    "pane.closed",
+    "pane.moved",
+    "pane.agent_detected",
+  ]
 
   /// Transport dropped while connected: keep the snapshot and state, retry
   /// with backoff, and surface a failure only after `failureGrace`.

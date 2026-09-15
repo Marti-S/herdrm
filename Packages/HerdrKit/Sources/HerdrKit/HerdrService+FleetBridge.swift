@@ -24,11 +24,22 @@ extension HerdrService {
             + " --cols \(size.columns) --rows \(size.rows)"
 
         switch device.kind {
-        case .local:
+        case .local, .tailcat:
             var environment = (ShellEnvironment.cached ?? .empty).launchEnvironment(binary: nil)
             environment.removeValue(forKey: "TERM")
             environment.removeValue(forKey: "COLUMNS")
             environment.removeValue(forKey: "LINES")
+            // Same socket overrides as `attachCommand`: a tailcat device runs
+            // the LOCAL herdr CLI against the tunnel's bridge socket, so the
+            // session stream rides the same WireGuard tunnel as the RPCs, and a
+            // named-session Local device must not fall back to the default
+            // session's socket.
+            if device.isTailcat {
+                environment["HERDR_SOCKET_PATH"] =
+                    TailcatBridgeManager.localSocketPath(deviceID: device.id)
+            } else if let socketPath = device.socketPath {
+                environment["HERDR_SOCKET_PATH"] = socketPath
+            }
             let script = "\(Self.attachBinarySelection(serverVersion: serverVersion)); "
                 + "exec \"$hb\" \(arguments)"
             return TerminalCommand(
