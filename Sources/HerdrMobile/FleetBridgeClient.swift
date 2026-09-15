@@ -593,5 +593,21 @@ struct FleetBridgeDeviceTransport: MobileTransport {
     )
   }
 
+  func readFileRange(path: String, offset: Int64, limit: Int) async throws -> FileRangeRead {
+    let result = try await request(
+      method: "file.read_range",
+      params: .object([
+        "path": .string(path),
+        "offset": .number(Double(offset)),
+        "limit": .number(Double(limit)),
+      ])
+    )
+    guard case .number(let size)? = result["size"],
+          let base64 = result["data"]?.stringValue,
+          let data = Data(base64Encoded: base64)
+    else { throw HerdrError.malformedResponse("file.read_range returned no size/data") }
+    return FileRangeRead(data: data, totalSize: Int64(size))
+  }
+
   func close() async {}
 }

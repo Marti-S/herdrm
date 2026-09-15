@@ -95,6 +95,7 @@ struct MobileRootView: View {
                 paneID: entry.agent.paneID,
                 conversationStore: model.conversationStore(
                     for: entry.ref,
+                    agent: entry.agent,
                     transport: transport
                 ),
 

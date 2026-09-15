@@ -437,15 +437,13 @@ struct MobileTerminalScreen: View {
         }
         .onChange(of: displayMode) { _, newValue in
             keyboardShown = false
-            switch newValue {
-            case .conversation:
+            // The conversation store follows its own view's task lifecycle;
+            // only the terminal session needs an explicit stop here.
+            if newValue == .conversation {
                 session.stop()
-            case .terminal:
-                conversationStore.stop()
             }
         }
         .onDisappear {
-            conversationStore.stop()
             session.stop()
         }
     }

@@ -168,6 +168,9 @@ struct HerdrPaneTranscriptProvider: AgentTranscriptProvider {
 
 }
 
+/// Thrown when one transcript read outlives its deadline.
+private struct TranscriptLoadTimeout: Error {}
+
 @MainActor
 final class ConversationReaderStore: ObservableObject {
     enum LoadState: Equatable {
@@ -183,11 +186,15 @@ final class ConversationReaderStore: ObservableObject {
     @Published private(set) var updateErrorMessage: String?
     @Published private(set) var isPinnedToLatest = true
     @Published private(set) var contentVersion: UInt64 = 0
-
     private let provider: any AgentTranscriptProvider
+    private var loadTask: Task<Void, Never>?
+    private var loadGeneration: UInt64 = 0
     private var updateTask: Task<Void, Never>?
     private var pendingSnapshot: TranscriptSnapshot?
-    private var started = false
+    /// Views currently showing this store. The store is cached per pane and a
+    /// replacement screen's `.task` can start before the old screen's task is
+    /// cancelled, so lifecycle is counted rather than toggled.
+    private var viewerCount = 0
 
     init(provider: any AgentTranscriptProvider) {
         self.provider = provider
@@ -198,38 +205,116 @@ final class ConversationReaderStore: ObservableObject {
     var isTruncated: Bool { snapshot?.isTruncated ?? false }
     var source: TranscriptSource? { snapshot?.source }
 
-    func start() async {
-        guard !started else { return }
-        started = true
+    /// Keeps the transcript live for as long as the calling task runs. Bind
+    /// it to the view with `.task { await store.run() }`; cancellation is the
+    /// only detach signal.
+    func run() async {
+        attach()
+        defer { detach() }
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(3600))
+        }
+    }
+
+    private func attach() {
+        viewerCount += 1
+        if viewerCount == 1 { beginLoading() }
+    }
+
+    private func detach() {
+        viewerCount = max(0, viewerCount - 1)
+        if viewerCount == 0 { cancelWork() }
+    }
+
+    private var isRunning: Bool { loadTask != nil || updateTask != nil }
+
+    /// A single first read may queue behind other SSH work on the same
+    /// connection (`SessionDriver` serializes operations FIFO and the wait is
+    /// not cancellable), so an attempt is abandoned at this deadline and
+    /// retried instead of spinning forever.
+    static let loadAttemptTimeout: Duration = .seconds(6)
+    private static let loadRetryDelay: Duration = .seconds(1)
+
+    private func beginLoading() {
+        guard !isRunning else { return }
         updateErrorMessage = nil
         if snapshot == nil {
             loadState = .loading
         }
-
-        do {
-            let initial = try await provider.snapshot()
-            guard started, !Task.isCancelled else { return }
-            install(initial, force: true)
-            loadState = .ready
-            startUpdates(after: initial.sequence)
-        } catch is CancellationError {
-            started = false
-        } catch {
-            guard started else { return }
-            started = false
-            loadState = .failed(Self.presentation(error))
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            // Only clear the handle this task owns: a cancelled task can run
+            // its cleanup after the next attempt has already been stored.
+            defer { if loadGeneration == generation { loadTask = nil } }
+            var attempt = 0
+            while !Task.isCancelled, viewerCount > 0, loadGeneration == generation {
+                attempt += 1
+                do {
+                    let initial = try await Self.withTimeout(Self.loadAttemptTimeout) {
+                        try await self.provider.snapshot()
+                    }
+                    guard !Task.isCancelled, loadGeneration == generation else { return }
+                    install(initial, force: true)
+                    loadState = .ready
+                    updateErrorMessage = nil
+                    startUpdates(after: initial.sequence)
+                    return
+                } catch is CancellationError {
+                    return
+                } catch is TranscriptLoadTimeout {
+                    // Keep the spinner and try again; the connection is busy,
+                    // not broken.
+                    guard !Task.isCancelled else { return }
+                    if attempt >= 3 {
+                        updateErrorMessage = String(localized: "Still loading — the connection is busy.")
+                    }
+                } catch {
+                    guard !Task.isCancelled, loadGeneration == generation else { return }
+                    loadState = .failed(Self.presentation(error))
+                    return
+                }
+                do { try await Task.sleep(for: Self.loadRetryDelay) } catch { return }
+            }
         }
     }
 
-    func stop() {
-        started = false
+    /// Runs `operation` but stops waiting after `duration`. The abandoned work
+    /// is cancelled; uncancellable native waits simply finish unobserved.
+    private static func withTimeout<T: Sendable>(
+        _ duration: Duration,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: duration)
+                throw TranscriptLoadTimeout()
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else { throw TranscriptLoadTimeout() }
+            return result
+        }
+    }
+
+    private func cancelWork() {
+        loadGeneration &+= 1
+        loadTask?.cancel()
+        loadTask = nil
         updateTask?.cancel()
         updateTask = nil
+        if loadState == .loading, snapshot == nil {
+            // Never leave a detached store looking busy; the next viewer
+            // starts a fresh load.
+            loadState = .idle
+        }
     }
 
     func retry() {
-        stop()
-        Task { await start() }
+        cancelWork()
+        updateErrorMessage = nil
+        if viewerCount > 0 { beginLoading() }
     }
 
     func refresh() {
@@ -263,6 +348,10 @@ final class ConversationReaderStore: ObservableObject {
         hasNewOutput = false
     }
 
+    private static let updateRetryDelay: Duration = .seconds(3)
+
+    /// Follows the provider stream and, if it ends or fails while a viewer is
+    /// still attached, resumes from the last known sequence after a pause.
     private func startUpdates(after sequence: UInt64?) {
         updateTask?.cancel()
         let stream = provider.updates(after: sequence)
@@ -270,15 +359,23 @@ final class ConversationReaderStore: ObservableObject {
             guard let self else { return }
             do {
                 for try await event in stream {
-                    guard started, !Task.isCancelled else { return }
+                    guard !Task.isCancelled else { return }
                     receive(event)
                 }
+                guard !Task.isCancelled else { return }
             } catch is CancellationError {
                 return
             } catch {
-                guard started else { return }
+                guard !Task.isCancelled else { return }
                 updateErrorMessage = Self.presentation(error)
             }
+            do {
+                try await Task.sleep(for: Self.updateRetryDelay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, viewerCount > 0 else { return }
+            startUpdates(after: revision)
         }
     }
 
@@ -332,11 +429,15 @@ struct ConversationReaderView: View {
                 }
             }
             .task {
-                await store.start()
-                await Task.yield()
-                proxy.scrollTo(bottomID, anchor: .bottom)
+                await store.run()
             }
-            .onDisappear { store.stop() }
+            .onChange(of: store.loadState) { _, state in
+                guard state == .ready else { return }
+                Task { @MainActor in
+                    await Task.yield()
+                    proxy.scrollTo(bottomID, anchor: .bottom)
+                }
+            }
             .onChange(of: store.contentVersion) { _, _ in
                 guard store.isPinnedToLatest, !userDrivenScroll else { return }
                 Task { @MainActor in
@@ -351,7 +452,7 @@ struct ConversationReaderView: View {
 
     private var transcriptScrollView: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 transcriptNotices
                 transcriptContent
                 Color.clear
@@ -359,8 +460,8 @@ struct ConversationReaderView: View {
                     .id(bottomID)
             }
             .scrollTargetLayout()
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
             .padding(.bottom, 20)
             .textSelection(.enabled)
         }
@@ -398,21 +499,17 @@ struct ConversationReaderView: View {
     @ViewBuilder
     private var transcriptNotices: some View {
         if store.source == .terminalRecentUnwrapped {
-            Label(
-                String(localized: "Terminal-derived transcript"),
-                systemImage: "text.and.command.macwindow"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text("Terminal-derived transcript")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, 12)
         }
 
         if store.isTruncated {
-            Label(
-                String(localized: "Showing the latest terminal history"),
-                systemImage: "ellipsis"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text("Showing the latest terminal history")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, 12)
         }
 
         if let error = store.updateErrorMessage {
@@ -422,12 +519,10 @@ struct ConversationReaderView: View {
                     .lineLimit(2)
                 Spacer(minLength: 8)
                 Button(String(localized: "Retry")) { store.retry() }
-                    .buttonStyle(.borderless)
             }
-            .font(.caption)
+            .font(.footnote)
             .foregroundStyle(.secondary)
-            .padding(10)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .padding(.bottom, 12)
         }
     }
 
@@ -435,30 +530,28 @@ struct ConversationReaderView: View {
     private var transcriptContent: some View {
         switch store.loadState {
         case .idle, .loading where store.items.isEmpty:
-            HStack {
-                Spacer()
-                ProgressView()
-                    .tint(.white)
-                    .padding(.top, 40)
-                Spacer()
-            }
+            ProgressView()
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
 
         case .failed(let message) where store.items.isEmpty:
-            EmptyConversationView(
-                title: String(localized: "Could Not Load Conversation"),
-                message: message,
-                actionTitle: String(localized: "Retry"),
-                action: store.retry
-            )
+            ContentUnavailableView {
+                Label(String(localized: "Could Not Load Conversation"), systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(message)
+            } actions: {
+                Button(String(localized: "Retry"), action: store.retry)
+            }
 
         default:
             if store.items.isEmpty {
-                EmptyConversationView(
-                    title: String(localized: "No Conversation Output"),
-                    message: String(localized: "Output will appear here when the agent writes to its terminal."),
-                    actionTitle: String(localized: "Refresh"),
-                    action: store.refresh
-                )
+                ContentUnavailableView {
+                    Label(String(localized: "No Conversation Output"), systemImage: "text.bubble")
+                } description: {
+                    Text("Output will appear here when the agent writes to its terminal.")
+                } actions: {
+                    Button(String(localized: "Refresh"), action: store.refresh)
+                }
             } else {
                 ForEach(store.items) { item in
                     ConversationItemView(item: item)
@@ -477,47 +570,61 @@ struct ConversationReaderView: View {
                 }
             }
         } label: {
-            Label(
-                store.hasNewOutput
-                    ? String(localized: "New output")
-                    : String(localized: "Latest"),
-                systemImage: "arrow.down"
-            )
-            .font(.callout.weight(.semibold))
-            .padding(.horizontal, 12)
-            .frame(height: 38)
+            Image(systemName: "arrow.down")
+                .font(.body.weight(.semibold))
+                .frame(width: 36, height: 36)
         }
-        .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.capsule)
-        .accessibilityLabel(String(localized: "Scroll to latest output"))
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.circle)
+        .accessibilityLabel(
+            store.hasNewOutput
+                ? String(localized: "New output — scroll to latest")
+                : String(localized: "Scroll to latest output")
+        )
     }
 }
 
+/// ChatGPT-style rows: assistant text is bare body text, tool activity is a
+/// single secondary-colored line with a glyph, and only the user's own
+/// message gets a bubble. No custom colors — system hierarchy only.
 private struct ConversationItemView: View {
     let item: ConversationItem
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(item.blocks.enumerated()), id: \.offset) { _, block in
-                TranscriptBlockView(block: block, role: item.role)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: item.role == .user ? .trailing : .leading)
-        .padding(item.role == .user ? 12 : 0)
-        .background {
+        Group {
             if item.role == .user {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.white.opacity(0.10))
+                userBubble
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(item.blocks.enumerated()), id: \.offset) { _, block in
+                        TranscriptBlockView(block: block)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.leading, item.role == .user ? 44 : 0)
-        .opacity(item.state == .failed ? 0.65 : 1)
+        .opacity(item.state == .failed ? 0.6 : 1)
+    }
+
+    private var userBubble: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(item.blocks.enumerated()), id: \.offset) { _, block in
+                TranscriptBlockView(block: block)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 48)
+        .padding(.vertical, 12)
     }
 }
 
 private struct TranscriptBlockView: View {
     let block: TranscriptContentBlock
-    let role: ConversationRole
+
+    @State private var expanded = false
 
     @ViewBuilder
     var body: some View {
@@ -525,53 +632,75 @@ private struct TranscriptBlockView: View {
         case .markdown(let markdown):
             markdownText(markdown)
                 .font(.body)
-                .foregroundStyle(.primary)
+                .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 10)
 
-        case .code(let language, let text):
-            VStack(alignment: .leading, spacing: 8) {
-                if let language, !language.isEmpty {
-                    Text(language)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
+        case .code(_, let text):
+            ScrollView(.horizontal, showsIndicators: false) {
                 Text(text)
-                    .font(.system(.callout, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.system(.footnote, design: .monospaced))
+                    .padding(12)
             }
-            .padding(12)
-            .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.vertical, 6)
 
         case .tool(let name, let status, let detail):
             VStack(alignment: .leading, spacing: 6) {
-                Label(name, systemImage: status.systemImage)
-                    .font(.callout.weight(.semibold))
-                if let detail, !detail.isEmpty {
-                    Text(detail)
-                        .font(.caption)
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Image(systemName: status.glyph(for: name))
+                        .font(.body)
+                        .frame(width: 20)
+                        .foregroundStyle(status == .failed ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                        .symbolEffect(.pulse, isActive: status == .running)
+                    Text(toolSummary(name: name, detail: detail))
+                        .font(.body)
                         .foregroundStyle(.secondary)
+                        .lineLimit(expanded ? nil : 1)
+                        .truncationMode(.tail)
+                }
+                if expanded, let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(.footnote, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 32)
                 }
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } }
 
         case .notice(let text):
             Text(text)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(.tertiary)
+                .padding(.vertical, 6)
 
         case .terminalText(let text):
             Text(text)
                 .font(.body)
-                .foregroundStyle(.primary)
+                .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 10)
         }
     }
 
+    /// One line: the tool name is the verb, the first detail line is the object.
+    private func toolSummary(name: String, detail: String?) -> String {
+        guard let firstLine = detail?
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .first?
+            .trimmingCharacters(in: .whitespaces),
+            !firstLine.isEmpty
+        else { return name }
+        return "\(name) \(firstLine)"
+    }
+
     private func markdownText(_ markdown: String) -> Text {
-        guard let attributed = try? AttributedString(markdown: markdown) else {
+        guard let attributed = try? AttributedString(
+            markdown: markdown,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) else {
             return Text(markdown)
         }
         return Text(attributed)
@@ -579,37 +708,29 @@ private struct TranscriptBlockView: View {
 }
 
 private extension TranscriptToolStatus {
-    var systemImage: String {
-        switch self {
-        case .pending: return "clock"
-        case .running: return "progress.indicator"
-        case .succeeded: return "checkmark.circle"
-        case .failed: return "xmark.circle"
+    /// Glyph by tool family; status only changes tint and animation.
+    func glyph(for toolName: String) -> String {
+        let lowered = toolName.lowercased()
+        if lowered.contains("bash") || lowered.contains("shell") || lowered.contains("terminal") {
+            return "terminal"
         }
-    }
-}
-
-private struct EmptyConversationView: View {
-    let title: String
-    let message: String
-    let actionTitle: String
-    let action: () -> Void
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "text.bubble")
-                .font(.system(size: 30))
-                .foregroundStyle(.secondary)
-            Text(title)
-                .font(.headline)
-            Text(message)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            Button(actionTitle, action: action)
-                .buttonStyle(.bordered)
+        if lowered.contains("edit") || lowered.contains("write") || lowered.contains("patch") {
+            return "pencil"
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 44)
+        if lowered.contains("read") || lowered.contains("cat") {
+            return "doc.text"
+        }
+        if lowered.contains("search") || lowered.contains("grep") || lowered.contains("find")
+            || lowered.contains("glob") || lowered.contains("locate") {
+            return "magnifyingglass"
+        }
+        if lowered.contains("web") || lowered.contains("fetch") || lowered.contains("http")
+            || lowered.contains("browse") {
+            return "globe"
+        }
+        if lowered.contains("agent") || lowered.contains("task") || lowered.contains("workflow") {
+            return "person.2"
+        }
+        return "circle.dotted"
     }
 }

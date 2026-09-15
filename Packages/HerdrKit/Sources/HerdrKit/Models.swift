@@ -41,9 +41,19 @@ public struct AgentInfo: Codable, Sendable, Identifiable, Equatable {
     public let focused: Bool?
     public let cwd: String?
     public let revision: Int?
+    /// herdr's resolved session reference for the agent (`agent_session`),
+    /// e.g. the Atomic/Pi JSONL transcript path reported by the state hook.
+    public let agentSession: AgentSessionRef?
 
     public var id: String { paneID }
     public var status: AgentStatus { AgentStatus(wire: agentStatusRaw) }
+    /// Absolute path of the agent's session transcript when herdr reports one.
+    public var agentSessionPath: String? {
+        guard let agentSession, agentSession.kind == "path",
+              let value = agentSession.value, !value.isEmpty
+        else { return nil }
+        return value
+    }
     public var agent: String { agentKindRaw ?? "agent" }
     /// Sidebar / titlebar label without a tab label. Prefer `title(tabLabel:)`.
     public var title: String { title(tabLabel: nil) }
@@ -142,6 +152,22 @@ public struct AgentInfo: Codable, Sendable, Identifiable, Equatable {
         case focused
         case cwd
         case revision
+        case agentSession = "agent_session"
+    }
+}
+
+/// `agent_session` on the wire: `{"agent":"pi","kind":"path","source":"herdr:pi","value":"…jsonl"}`.
+public struct AgentSessionRef: Codable, Sendable, Equatable {
+    public let agent: String?
+    public let kind: String?
+    public let source: String?
+    public let value: String?
+
+    public init(agent: String?, kind: String?, source: String?, value: String?) {
+        self.agent = agent
+        self.kind = kind
+        self.source = source
+        self.value = value
     }
 }
 

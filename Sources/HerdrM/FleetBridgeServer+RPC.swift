@@ -86,6 +86,31 @@ extension FleetBridgeServer {
             )
             return .object(["read": try jsonValue(read)])
 
+        case "file.read_range":
+            let path = try requiredString(params, "path")
+            guard FileRangeRead.isAllowedSessionPath(path) else {
+                throw FleetBridgeHostError.invalidRequest(
+                    "file.read_range only serves agent session transcripts."
+                )
+            }
+            guard case .number(let requestedOffset)? = params["offset"],
+                  let offset = Int64(exactly: requestedOffset)
+            else {
+                throw FleetBridgeHostError.invalidRequest("file.read_range requires an integer offset.")
+            }
+            var limit = FileRangeRead.defaultLimit
+            if case .number(let requestedLimit)? = params["limit"],
+               let requested = Int(exactly: requestedLimit) {
+                limit = max(1, min(requested, FileRangeRead.defaultLimit))
+            }
+            let read = try await DeviceFileService(device: device).readFileRange(
+                at: path, offset: offset, limit: limit
+            )
+            return .object([
+                "size": .number(Double(read.totalSize)),
+                "data": .string(read.data.base64EncodedString()),
+            ])
+
         case "workspace.create":
             let created = try await service.createWorkspace(
                 label: optionalString(params, "label"),

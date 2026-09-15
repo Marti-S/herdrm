@@ -113,6 +113,25 @@ public actor DeviceFileService {
         )
     }
 
+    /// Tails an append-only file by byte range. Mirrors the mobile client's
+    /// direct-SSH read so bridge-relayed devices get identical semantics.
+    public func readFileRange(
+        at path: String,
+        offset: Int64,
+        limit: Int = FileRangeRead.defaultLimit
+    ) async throws -> FileRangeRead {
+        switch device.kind {
+        case .local:
+            return try FileRangeRead.readLocal(path: path, offset: offset, limit: limit)
+        case .ssh:
+            let output = try await runSSHData(
+                command: FileRangeRead.shellCommand(path: path, offset: offset, limit: limit),
+                timeout: 30
+            )
+            return try FileRangeRead.parse(output)
+        }
+    }
+
     public func uploadFile(
         from localURL: URL,
         toDirectory requestedDirectory: String,

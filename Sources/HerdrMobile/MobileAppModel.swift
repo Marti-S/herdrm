@@ -25,19 +25,37 @@ final class MobileAppModel {
   @ObservationIgnored private var fleetIndexRevision = -1
   @ObservationIgnored private var cachedFleetIndex = MobileFleetIndex.empty
   @ObservationIgnored private var conversationStores: [FleetPaneRef: ConversationReaderStore] = [:]
+  @ObservationIgnored private var conversationSessionPaths: [FleetPaneRef: String?] = [:]
 
   func conversationStore(
     for ref: FleetPaneRef,
+    agent: AgentInfo,
     transport: any MobileTransport
   ) -> ConversationReaderStore {
-    if let existing = conversationStores[ref] { return existing }
-    let store = ConversationReaderStore(
-      provider: HerdrPaneTranscriptProvider(
+    let sessionPath = agent.agentSessionPath.flatMap {
+      FileRangeRead.isAllowedSessionPath($0) ? $0 : nil
+    }
+    if let existing = conversationStores[ref],
+       conversationSessionPaths[ref] == sessionPath {
+      return existing
+    }
+    let provider: any AgentTranscriptProvider
+    if let sessionPath {
+      // Atomic / Pi: structured rows straight from the session JSONL.
+      provider = AtomicSessionTranscriptProvider(
+        transport: transport,
+        paneID: ref.paneID,
+        sessionPath: sessionPath
+      )
+    } else {
+      provider = HerdrPaneTranscriptProvider(
         transport: transport,
         paneID: ref.paneID
       )
-    )
+    }
+    let store = ConversationReaderStore(provider: provider)
     conversationStores[ref] = store
+    conversationSessionPaths[ref] = sessionPath
     return store
   }
 

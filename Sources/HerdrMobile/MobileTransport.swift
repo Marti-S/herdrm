@@ -14,6 +14,8 @@ protocol MobileTransport: Sendable {
         size: TerminalSize
     ) async throws -> any TerminalSession
     func stageAttachment(_ attachment: MobileAttachmentPayload) async throws -> String
+    /// Tails an agent session transcript by byte range (see `FileRangeRead`).
+    func readFileRange(path: String, offset: Int64, limit: Int) async throws -> FileRangeRead
     func close() async
 }
 
@@ -243,6 +245,20 @@ final class SSHDirectTransport: MobileTransport {
             mode: mode,
             initialSize: size
         )
+    }
+
+    func readFileRange(path: String, offset: Int64, limit: Int) async throws -> FileRangeRead {
+        let result = try await connection.execute(
+            FileRangeRead.shellCommand(path: path, offset: offset, limit: limit),
+            timeout: .seconds(30)
+        )
+        guard result.exitStatus == 0 else {
+            throw HerdrError.fileOperationFailed(
+                String(data: result.stderr, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? "session read failed"
+            )
+        }
+        return try FileRangeRead.parse(result.stdout)
     }
 
     func stageAttachment(_ attachment: MobileAttachmentPayload) async throws -> String {
