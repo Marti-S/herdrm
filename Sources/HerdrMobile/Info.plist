@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
+	<key>NSCameraUsageDescription</key>
+	<string>herdrm uses the camera only to scan the pairing QR code shown by HerdrM on your Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>herdrm connects to your paired Mac bridge or directly to Herdr hosts on your local or Tailscale network.</string>
 	<key>UILaunchScreen</key>
