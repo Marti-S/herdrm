@@ -5,6 +5,18 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Fixed
+- macOS no longer attributes the coding agents' file-access prompts to herdrm.
+  The on-demand `herdr server` (and the one-time login-shell PATH probe) are now
+  spawned with their TCC responsibility disclaimed, so "'herdrm' would like to
+  access data from other apps" prompts triggered by an *agent* reading a file are
+  attributed to that process, not to herdrm — the same disclaim every terminal
+  emulator applies to the programs it launches. Clicking **Don't Allow** was
+  always safe; now the prompt stops naming herdrm for work herdrm didn't do.
+  (#87)
+
 ## [0.6.5] - 2026-09-13
 
 ### Added
