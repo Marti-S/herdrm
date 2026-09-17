@@ -147,6 +147,14 @@ brew install owo-network/brew/herdrm
 unzip, drag `herdrm.app` into `/Applications`. Either way it self-updates from then on — **HerdrM
 → Check for Updates…**, or **HerdrM → About HerdrM** for the version you're running.
 
+> [!WARNING]
+> The **only** official sources for herdrm are this repository
+> (`github.com/missuo/herdrm`) and the Homebrew cask above. Every genuine build
+> is signed by *MOE AI LLC* and notarized by Apple. Third-party "download" sites
+> or mirrors are not affiliated with the project and have been used to distribute
+> unrelated (Windows) payloads under the herdrm name — don't run anything from
+> them.
+
 ## ⚡ Quick Start
 
 ```text
