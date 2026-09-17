@@ -5,7 +5,13 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
-## [Unreleased]
+## [0.6.6] - 2026-09-16
+
+### Added
+- Sidebar section headers (Spaces / Agents / Terminals) now stick to the top as
+  you scroll — each header pins while its rows scroll under it and the next
+  header slides over it with a fade, so you always know which section you're in.
+  Collapse / expand still works while pinned. (#90, thanks @jt-wang!)
 
 ### Fixed
 - macOS no longer attributes the coding agents' file-access prompts to herdrm.
