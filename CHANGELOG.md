@@ -5,6 +5,15 @@ on [Keep a Changelog](https://keepachangelog.com); versions follow semver.
 Release automation extracts the matching section for GitHub release notes and
 the Sparkle update description — a release without a section here fails CI.
 
+## [Unreleased]
+
+### Added
+- **Settings → Terminal → Import from Ghostty…** copies your `font-family` and
+  `font-size` from `~/.config/ghostty/config` (honoring `XDG_CONFIG_HOME`) into
+  herdrm's terminal settings, so switching over doesn't mean a jarring font
+  change. It's a one-time import — herdrm's own settings stay in charge
+  afterward — and it reports what it applied or skipped. (#73)
+
 ## [0.6.6] - 2026-09-16
 
 ### Added
