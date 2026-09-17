@@ -1,6 +1,7 @@
 import AppKit
 import HerdrKit
 import SwiftUI
+import StickySectionHeaders
 
 struct VisualEffectView: NSViewRepresentable {
     var material: NSVisualEffectView.Material = .sidebar
@@ -72,90 +73,111 @@ struct SidebarView: View {
 
             Spacer().frame(height: 10)
 
+            // Section headers pin at the top and hand off with a scroll-linked
+            // fade (StickySectionHeaders). Each section = header + rows + gap.
             ScrollView {
                 VStack(spacing: 1) {
-                    // Title + chevron used to be a decorative HStack with no
-                    // tap target, so the chevron promised a disclosure that
-                    // never fired. Trailing New Space stays a sibling Button
-                    // so it does not toggle the section.
-                    groupHeader("Spaces", expanded: $spacesExpanded) {
-                        Button {
-                            model.showNewSpace = true
-                        } label: {
-                            Image(systemName: "folder.badge.plus")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(Theme.textGhost)
-                                .frame(width: 20, height: 20)
-                                .contentShape(Rectangle())
+                    StickySection(background: { VisualEffectView(material: .sidebar) }) {
+                        // Title + chevron used to be a decorative HStack with no
+                        // tap target, so the chevron promised a disclosure that
+                        // never fired. Trailing New Space stays a sibling Button
+                        // so it does not toggle the section.
+                        groupHeader("Spaces", expanded: $spacesExpanded) {
+                            Button {
+                                model.showNewSpace = true
+                            } label: {
+                                Image(systemName: "folder.badge.plus")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(Theme.textGhost)
+                                    .frame(width: 20, height: 20)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("New Space")
+                            .focusEffectDisabled()
                         }
-                        .buttonStyle(.plain)
-                        .help("New Space")
-                        .focusEffectDisabled()
-                    }
-                    if spacesExpanded {
-                        allSpacesRow
-                        ForEach(model.visibleSpaces) { entry in
-                            SpaceRowView(
-                                entry: entry,
-                                model: model,
-                                draggingSpaceID: $draggingSpaceID,
-                                spaceDrop: $spaceDrop
-                            )
-                        }
-                    }
-
-                    Spacer().frame(height: 10)
-
-                    groupHeader("Agents", expanded: $agentsExpanded)
-                    if agentsExpanded {
-                        if model.visibleAgents.isEmpty {
-                            Text(emptyAgentsHint)
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(Theme.textGhost)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(8)
-                        }
-                        ForEach(model.visibleAgents) { entry in
-                            AgentRowView(
-                                entry: entry,
-                                model: model,
-                                draggingAgentID: $draggingAgentID,
-                                agentDrop: $agentDrop
-                            )
-                        }
-                    }
-
-                    if !model.visibleTerminals.isEmpty || !model.shellSessions.isEmpty {
-                        Spacer().frame(height: 10)
-                        groupHeader("Terminals", expanded: $terminalsExpanded)
-                        if terminalsExpanded {
-                            ForEach(model.visibleTerminals) { entry in
-                                TerminalRowView(
+                        .accessibilityIdentifier("sidebar.section.spaces")
+                    } content: {
+                        if spacesExpanded {
+                            allSpacesRow
+                            ForEach(model.visibleSpaces) { entry in
+                                SpaceRowView(
                                     entry: entry,
                                     model: model,
-                                    draggingTerminalID: $draggingTerminalID,
-                                    terminalDrop: $terminalDrop
+                                    draggingSpaceID: $draggingSpaceID,
+                                    spaceDrop: $spaceDrop
                                 )
                             }
-                            ForEach(model.shellSessions) { session in
-                                shellRow(session)
-                                    .contextMenu {
-                                        Button("Close Terminal", role: .destructive) {
-                                            model.closeShellSession(session.id)
+                        }
+                        Spacer().frame(height: 10)
+                    }
+
+                    StickySection(background: { VisualEffectView(material: .sidebar) }) {
+                        groupHeader("Agents", expanded: $agentsExpanded)
+                            .accessibilityIdentifier("sidebar.section.agents")
+                    } content: {
+                        if agentsExpanded {
+                            if model.visibleAgents.isEmpty {
+                                Text(emptyAgentsHint)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(Theme.textGhost)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(8)
+                            }
+                            ForEach(model.visibleAgents) { entry in
+                                AgentRowView(
+                                    entry: entry,
+                                    model: model,
+                                    draggingAgentID: $draggingAgentID,
+                                    agentDrop: $agentDrop
+                                )
+                            }
+                        }
+                        if terminalsSectionVisible {
+                            Spacer().frame(height: 10)
+                        }
+                    }
+
+                    if terminalsSectionVisible {
+                        StickySection(background: { VisualEffectView(material: .sidebar) }) {
+                            groupHeader("Terminals", expanded: $terminalsExpanded)
+                                .accessibilityIdentifier("sidebar.section.terminals")
+                        } content: {
+                            if terminalsExpanded {
+                                ForEach(model.visibleTerminals) { entry in
+                                    TerminalRowView(
+                                        entry: entry,
+                                        model: model,
+                                        draggingTerminalID: $draggingTerminalID,
+                                        terminalDrop: $terminalDrop
+                                    )
+                                }
+                                ForEach(model.shellSessions) { session in
+                                    shellRow(session)
+                                        .contextMenu {
+                                            Button("Close Terminal", role: .destructive) {
+                                                model.closeShellSession(session.id)
+                                            }
                                         }
-                                    }
+                                }
                             }
                         }
                     }
                 }
                 .padding(.horizontal, 10)
+                .stickySectionHeaders()
             }
+            .clipped()
 
             Spacer(minLength: 0)
             footer
         }
         .frame(width: 260)
         .background(VisualEffectView(material: .sidebar).ignoresSafeArea())
+    }
+
+    private var terminalsSectionVisible: Bool {
+        !model.visibleTerminals.isEmpty || !model.shellSessions.isEmpty
     }
 
     private var emptyAgentsHint: String {

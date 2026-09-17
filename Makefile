@@ -1,4 +1,4 @@
-.PHONY: gen build run test kit-test ssh-test mobile-build clean
+.PHONY: gen build run test kit-test uiux-test ssh-test mobile-build clean
 
 # HerdrMobile / HerdrSSH are arm64-only (libssh2 + OpenSSL xcframeworks).
 # Keep code signing on so Simulator Keychain (device SSH key) works; unsigned
@@ -25,8 +25,25 @@ gen:
 build: gen
 	xcodebuild -project HerdrM.xcodeproj -scheme HerdrM -configuration Debug -derivedDataPath build build CODE_SIGN_IDENTITY="$(CODE_SIGN_IDENTITY)" CODE_SIGN_STYLE=Manual -skipPackagePluginValidation | tail -5
 
+# `open` only activates an already-running app, so a rebuilt binary would never
+# be exercised. Quit the previous Debug instance first (the /Applications copy is untouched).
 run: build
+	pkill -f 'build/Build/Products/Debug/herdrm.app/Contents/MacOS/herdrm' || true
+	sleep 1
 	open build/Build/Products/Debug/herdrm.app
+
+# HerdrM UI/UX tests (HerdrMTests, hosted in the app): sidebar behavior through the real SidebarView.
+UIUX_TEST = xcodebuild test \
+	-project HerdrM.xcodeproj \
+	-scheme HerdrM \
+	-configuration Debug \
+	-derivedDataPath build \
+	-destination 'platform=macOS,arch=arm64' \
+	CODE_SIGN_IDENTITY="-" CODE_SIGN_STYLE=Manual \
+	-skipPackagePluginValidation
+
+uiux-test: gen
+	$(UIUX_TEST)
 
 kit-test:
 	cd Packages/HerdrKit && swift test
