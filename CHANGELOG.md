@@ -7,12 +7,37 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Added
+- **Settings → Terminal → Import from Ghostty…** copies your `font-family` and
+  `font-size` from `~/.config/ghostty/config` (honoring `XDG_CONFIG_HOME`) into
+  herdrm's terminal settings, so switching over doesn't mean a jarring font
+  change. It's a one-time import — herdrm's own settings stay in charge
+  afterward — and it reports what it applied or skipped. (#73)
+
 ### Fixed
 - Connecting no longer fails at random with `setsockopt(SO_RCVTIMEO): Invalid
   argument`. herdr closes each request connection right after writing its
   reply, and macOS refuses every socket option once the peer is gone — so
   losing that race turned an answered request into a connection error even
   though the reply was already buffered. The reply is now read.
+
+## [0.6.6] - 2026-09-16
+
+### Added
+- Sidebar section headers (Spaces / Agents / Terminals) now stick to the top as
+  you scroll — each header pins while its rows scroll under it and the next
+  header slides over it with a fade, so you always know which section you're in.
+  Collapse / expand still works while pinned. (#90, thanks @jt-wang!)
+
+### Fixed
+- macOS no longer attributes the coding agents' file-access prompts to herdrm.
+  The on-demand `herdr server` (and the one-time login-shell PATH probe) are now
+  spawned with their TCC responsibility disclaimed, so "'herdrm' would like to
+  access data from other apps" prompts triggered by an *agent* reading a file are
+  attributed to that process, not to herdrm — the same disclaim every terminal
+  emulator applies to the programs it launches. Clicking **Don't Allow** was
+  always safe; now the prompt stops naming herdrm for work herdrm didn't do.
+  (#87)
 
 ## [0.6.5] - 2026-09-13
 

@@ -88,6 +88,24 @@ enum TerminalDefaults {
             return font.isFixedPitch
         }.sorted()
     }
+
+    /// Resolves a family name (e.g. a Ghostty `font-family`) to a family
+    /// installed on this Mac that the picker stores, case-insensitively. Ghostty
+    /// also accepts a PostScript/full name, so an exact-family miss falls back to
+    /// resolving the name through `NSFont` and mapping to its family. nil when
+    /// nothing matches.
+    static func resolveFamily(_ requested: String) -> String? {
+        let trimmed = requested.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        let families = monospacedFamilies()
+        if let exact = families.first(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            return exact
+        }
+        if let font = NSFont(name: trimmed, size: 12), let family = font.familyName {
+            return families.first(where: { $0.caseInsensitiveCompare(family) == .orderedSame }) ?? family
+        }
+        return nil
+    }
 }
 
 /// The process-wide Ghostty app object: every terminal surface shares it, so
