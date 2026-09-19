@@ -575,8 +575,12 @@ struct FleetBridgeDeviceTransport: MobileTransport {
 
   /// Fleet changes are owned by the bridge session's one shared subscription.
   /// Returning an empty stream prevents every device view from opening a
-  /// duplicate fleet subscription.
-  func events(kinds: [String]) -> AsyncThrowingStream<HerdrEvent, Error> {
+  /// duplicate fleet subscription. `statusPaneIDs` is moot for the same reason:
+  /// the host scopes its own `pane.agent_status_changed` subscriptions.
+  func events(
+    kinds _: [String],
+    statusPaneIDs _: [String]
+  ) -> AsyncThrowingStream<HerdrEvent, Error> {
     AsyncThrowingStream { continuation in continuation.finish() }
   }
 

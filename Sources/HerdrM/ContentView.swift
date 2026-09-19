@@ -1,3 +1,4 @@
+import AppKit
 import HerdrKit
 import SwiftUI
 
@@ -60,6 +61,7 @@ struct RootView: View {
         .sheet(isPresented: $model.showNewSpace) { NewSpaceSheet(model: model) }
         .sheet(item: $model.spaceToRename) { entry in RenameSpaceSheet(model: model, entry: entry) }
         .sheet(item: $model.agentToRename) { entry in RenameAgentSheet(model: model, entry: entry) }
+        .sheet(item: $model.terminalToRename) { entry in RenameTerminalSheet(model: model, entry: entry) }
         .sheet(item: $model.deviceToEdit) { device in EditDeviceSheet(model: model, device: device) }
         .sheet(item: $model.sshAuthenticationRequest) { request in
             SSHAuthenticationSheet(model: model, request: request)
@@ -99,6 +101,159 @@ enum TitlebarMetrics {
     static let trafficLightClearance: CGFloat = 78
 }
 
+private struct WindowTitlebarInteraction: NSViewRepresentable {
+    func makeNSView(context _: Context) -> NSView {
+        WindowTitlebarInteractionView()
+    }
+
+    func updateNSView(_: NSView, context _: Context) {}
+}
+
+private final class WindowTitlebarInteractionView: NSView {
+    private static let fillRestoreFrames =
+        NSMapTable<NSWindow, NSValue>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+    private var rememberFrameWorkItem: DispatchWorkItem?
+
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool {
+        true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        rememberFrameWorkItem?.cancel()
+        NotificationCenter.default.removeObserver(self)
+        guard let window else { return }
+        Self.rememberNonFilledFrame(of: window)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowFrameDidChange(_:)),
+            name: NSWindow.didMoveNotification,
+            object: window
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowFrameDidChange(_:)),
+            name: NSWindow.didResizeNotification,
+            object: window
+        )
+    }
+
+    deinit {
+        rememberFrameWorkItem?.cancel()
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func windowFrameDidChange(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        rememberFrameWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak window] in
+            guard let window else { return }
+            Self.rememberNonFilledFrame(of: window)
+        }
+        rememberFrameWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        guard event.clickCount == 2 else {
+            window.performDrag(with: event)
+            return
+        }
+        guard !window.styleMask.contains(.fullScreen) else { return }
+
+        let action = UserDefaults.standard
+            .string(forKey: "AppleActionOnDoubleClick")?
+            .lowercased()
+        switch action {
+        case "fill":
+            Self.toggleFill(window)
+        case nil:
+            if #available(macOS 15.0, *) {
+                Self.toggleFill(window)
+            } else {
+                Self.fillRestoreFrames.removeObject(forKey: window)
+                window.performZoom(nil)
+            }
+        case "minimize":
+            Self.fillRestoreFrames.removeObject(forKey: window)
+            window.performMiniaturize(nil)
+        case "none":
+            break
+        default:
+            Self.fillRestoreFrames.removeObject(forKey: window)
+            window.performZoom(nil)
+        }
+    }
+
+    private static func toggleFill(_ window: NSWindow) {
+        guard let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame else {
+            return
+        }
+        if framesApproximatelyEqual(window.frame, visibleFrame) {
+            let previous = fillRestoreFrames.object(forKey: window)?.rectValue
+                ?? fallbackRestoreFrame(in: visibleFrame)
+            fillRestoreFrames.removeObject(forKey: window)
+            let restored = constrainedRestoreFrame(previous, for: window)
+            window.setFrame(restored, display: true, animate: true)
+        } else {
+            fillRestoreFrames.setObject(NSValue(rect: window.frame), forKey: window)
+            window.setFrame(visibleFrame, display: true, animate: true)
+        }
+    }
+
+    private static func rememberNonFilledFrame(of window: NSWindow) {
+        guard !window.styleMask.contains(.fullScreen),
+              let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame,
+              !framesApproximatelyEqual(window.frame, visibleFrame)
+        else { return }
+        fillRestoreFrames.setObject(NSValue(rect: window.frame), forKey: window)
+    }
+
+    private static func fallbackRestoreFrame(in visibleFrame: NSRect) -> NSRect {
+        visibleFrame.insetBy(
+            dx: visibleFrame.width * 0.1,
+            dy: visibleFrame.height * 0.1
+        )
+    }
+
+    private static func framesApproximatelyEqual(_ lhs: NSRect, _ rhs: NSRect) -> Bool {
+        abs(lhs.minX - rhs.minX) < 1
+            && abs(lhs.minY - rhs.minY) < 1
+            && abs(lhs.width - rhs.width) < 1
+            && abs(lhs.height - rhs.height) < 1
+    }
+
+    private static func constrainedRestoreFrame(_ frame: NSRect, for window: NSWindow) -> NSRect {
+        let intersectingScreen = NSScreen.screens
+            .map { screen in
+                let intersection = frame.intersection(screen.visibleFrame)
+                let area = intersection.isNull ? 0 : intersection.width * intersection.height
+                return (screen, area)
+            }
+            .max { $0.1 < $1.1 }
+        let screen = if let intersectingScreen, intersectingScreen.1 > 0 {
+            intersectingScreen.0
+        } else {
+            window.screen ?? NSScreen.main
+        }
+        guard let screen else { return frame }
+        return window.constrainFrameRect(frame, to: screen)
+    }
+}
+
+private struct WindowTitlebarInteractionModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(WindowTitlebarInteraction())
+    }
+}
+
+extension View {
+    func windowTitlebarInteraction() -> some View {
+        modifier(WindowTitlebarInteractionModifier())
+    }
+}
 
 struct DetailView: View {
     @ObservedObject var model: AppModel
@@ -118,6 +273,26 @@ struct DetailView: View {
                     model.activateSplitSession(for: space)
                     splitTracker.shellView = model.splitShellView
                 }
+                // Losing the selected agent tears the SplitContainer down without
+                // resetting the axis, which would leave the same phantom split.
+                //
+                // Load-bearing beyond that: this is the ONLY thing that clears the axis
+                // when the agent goes away. `dismantleNSView` nils the coordinator's
+                // onExit before killing the shell, so the shell's own onExit never fires
+                // on teardown. Remove this and "split open with no agent selected"
+                // becomes reachable, which is a state a deferred focus request can be
+                // armed into with nothing left in the tree to consume it.
+                .onChange(of: model.selectedAttachedEntry?.id) { _, id in
+                    if id == nil {
+                        model.shellSplitAxis = nil
+                        // The placeholder tore every kept-alive attach down along with
+                        // the SplitContainer. Empty the session list and per-entry state
+                        // so a later selection doesn't resurrect them all at once.
+                        model.attachSessions = []
+                        endedAttach = [:]
+                        attachRetry = [:]
+                    }
+                }
                 .onChange(of: model.isFileManagerActive) { _, active in
                     if active { hasOpenedFileManager = true }
                 }
@@ -129,7 +304,9 @@ struct DetailView: View {
     private var detailContent: some View {
         ZStack {
             terminal
-                .mountedTerminal(isActive: !model.isFileManagerActive)
+                .clipped()
+                .opacity(model.isFileManagerActive ? 0 : 1)
+                .allowsHitTesting(!model.isFileManagerActive)
             if hasOpenedFileManager {
                 DeviceFilesView(model: model)
                     .opacity(model.isFileManagerActive ? 1 : 0)
@@ -138,13 +315,15 @@ struct DetailView: View {
         }
         .onAppear {
             if model.isFileManagerActive { hasOpenedFileManager = true }
-            retainSelectedAttachedTerminal()
-            pruneRetainedAttachedTerminals(
-                liveRefs: Set(model.allAttachedEntries.map(\.ref))
-            )
         }
-        .onChange(of: model.allAttachedEntries.map(\.ref)) { _, refs in
-            pruneRetainedAttachedTerminals(liveRefs: Set(refs))
+        // The kept-alive working set is bounded, and panes close, so entries leave
+        // `attachSessions` on their own. Evict the per-entry state of everything no
+        // longer mounted: a stale `endedAttach` would otherwise put a dead terminal's
+        // reconnect overlay back over a freshly reopened pane with the same id.
+        .onChange(of: model.attachSessions.map(\.id)) { _, ids in
+            let live = Set(ids)
+            endedAttach = endedAttach.filter { live.contains($0.key) }
+            attachRetry = attachRetry.filter { live.contains($0.key) }
         }
     }
 
@@ -158,82 +337,93 @@ struct DetailView: View {
                     sidebarCollapsed = false
                 }
             }
-            if model.isFileManagerActive {
-                Image(systemName: "folder")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textTertiary)
-                Text("Files")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.text)
-                Spacer()
-            } else if let shell = model.selectedShell {
-                Image(systemName: "terminal")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textTertiary)
-                Text(shell.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.text)
-                Text(shell.device.name)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.textTertiary)
-                Spacer()
-            } else if let attached = model.selectedAttachedEntry {
-                switch attached {
-                case .agent(let entry):
-                    let agent = entry.agent
-                    Text(entry.title)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                        .help((agent.cwd as NSString?)?.abbreviatingWithTildeInPath ?? "")
-                    Spacer(minLength: 12)
-                    Text(model.spaceName(deviceID: entry.device.id, workspaceID: agent.workspaceID))
-                        .font(.system(size: 11.5, weight: .regular))
+            Group {
+                if model.isFileManagerActive {
+                    Image(systemName: "folder")
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.textTertiary)
-                        .lineLimit(1)
-                    if let branch = model.branchName(for: entry) {
-                        Text("\u{b7}")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Theme.textGhost)
-                        Text(branch)
-                            .font(.system(size: 11.5, weight: .regular))
-                            .foregroundStyle(Theme.textTertiary)
-                            .lineLimit(1)
-                            .help(branch)
-                    }
-                    if model.showsRowDeviceBadges {
-                        DeviceChip(device: entry.device)
-                    }
-                case .terminal(let entry):
+                    Text("Files")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                    Spacer()
+                } else if let shell = model.selectedShell {
                     Image(systemName: "terminal")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.textTertiary)
-                    Text(entry.title)
+                    Text(shell.title)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Theme.text)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                        .help((entry.pane.cwd as NSString?)?.abbreviatingWithTildeInPath ?? "")
-                    Spacer(minLength: 12)
-                    Text(model.spaceName(deviceID: entry.device.id, workspaceID: entry.pane.workspaceID))
+                    Text(shell.device.name)
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textTertiary)
-                        .lineLimit(1)
-                    if model.showsRowDeviceBadges {
-                        DeviceChip(device: entry.device)
+                    Spacer()
+                } else if let attached = model.selectedAttachedEntry {
+                    switch attached {
+                    case .agent(let entry):
+                        let agent = entry.agent
+                        statusGlyph(agent.status)
+                        Text(entry.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                            .help((agent.cwd as NSString?)?.abbreviatingWithTildeInPath ?? "")
+                        Spacer(minLength: 12)
+                        AgentKindBadge(kind: agent.agent)
+                        Text("\u{b7}")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.textGhost)
+                        Text(model.spaceName(deviceID: entry.device.id, workspaceID: agent.workspaceID))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.textTertiary)
+                            .lineLimit(1)
+                        if let branch = model.branchName(for: entry) {
+                            Text("\u{b7}")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Theme.textGhost)
+                            Text(branch)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Theme.textTertiary)
+                                .lineLimit(1)
+                                .help(branch)
+                        }
+                        if model.showsRowDeviceBadges {
+                            DeviceChip(device: entry.device)
+                        }
+                        statusPill(agent.status)
+                    case .terminal(let entry):
+                        Image(systemName: "terminal")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.textTertiary)
+                        Text(entry.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                            .help((entry.pane.cwd as NSString?)?.abbreviatingWithTildeInPath ?? "")
+                        Spacer(minLength: 12)
+                        Text(model.spaceName(deviceID: entry.device.id, workspaceID: entry.pane.workspaceID))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.textTertiary)
+                            .lineLimit(1)
+                        if model.showsRowDeviceBadges {
+                            DeviceChip(device: entry.device)
+                        }
                     }
+                } else {
+                    Text("No terminal selected")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.textTertiary)
+                    Spacer()
                 }
-            } else {
-                Text("No terminal selected")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.textTertiary)
-                Spacer()
             }
+            .allowsHitTesting(false)
         }
         .padding(.leading, sidebarCollapsed ? 10 : 14)
         .padding(.trailing, 12)
         .frame(height: TitlebarMetrics.height)
+        .windowTitlebarInteraction()
+        // The branch of the selected agent's worktree, polled while it is on screen.
         .task(id: selectedAgentBranchTaskID) {
             guard let entry = model.selectedEntry else { return }
             while !Task.isCancelled {
@@ -248,6 +438,42 @@ struct DetailView: View {
         return "\(entry.id)|\(entry.agent.cwd ?? "")"
     }
 
+    @ViewBuilder
+    private func statusGlyph(_ status: AgentStatus) -> some View {
+        switch status {
+        case .working:
+            SpinnerView(color: Theme.working).frame(width: 13, height: 13)
+        case .blocked:
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.warning)
+        case .done:
+            EmptyView()
+        case .idle, .unknown:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func statusPill(_ status: AgentStatus) -> some View {
+        let label: String? = {
+            switch status {
+            case .working: return String(localized: "Working")
+            case .blocked: return String(localized: "Needs input")
+            case .done: return String(localized: "Done")
+            case .idle, .unknown: return nil
+            }
+        }()
+        if let label {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.statusColor(status))
+                .padding(.horizontal, 8)
+                .frame(height: 20)
+                .background(Theme.statusColor(status).opacity(0.13), in: Capsule())
+        }
+    }
+
     // MARK: - Terminal
 
     @AppStorage(TerminalDefaults.fontNameKey) private var terminalFontName = ""
@@ -257,22 +483,23 @@ struct DetailView: View {
     @AppStorage(TerminalDefaults.lineSpacingKey) private var terminalLineSpacing = TerminalDefaults.defaultLineSpacing
     @AppStorage("terminal.mouseReporting") private var terminalMouseReporting = true
     @Environment(\.colorScheme) private var colorScheme
-    /// Retain a bounded working set so revisiting recent agents is instant,
-    /// while inactive terminal views stay collapsed and out of resize/render work.
-    @State private var retainedAttachedRefs: [PaneRef] = []
-    @State private var endedAttachedRefs: Set<PaneRef> = []
-    @State private var endedAttachCodes: [PaneRef: Int32] = [:]
-    @State private var attachRetries: [PaneRef: Int] = [:]
-    @State private var uploadingAttachmentRefs: Set<PaneRef> = []
+    /// Per-entry attach state, keyed by `AttachedEntry.id`. `endedAttach` holds the exit
+    /// code of a dead attach (nil code = no status, e.g. killed by a signal); a present
+    /// key drives that entry's reconnect overlay. `attachRetry` is a generation the
+    /// Reconnect button bumps to rebuild just that one terminal. Per-entry so one dead
+    /// terminal's overlay never covers another and Reconnect rebuilds only its own.
+    @State private var endedAttach: [String: Int32?] = [:]
+    @State private var attachRetry: [String: Int] = [:]
+    /// Ids of the attaches with an upload in flight. Per-entry like `endedAttach`
+    /// and `attachRetry`: several attaches stay mounted, so a background pane
+    /// finishing its upload must not clear the selected pane's indicator.
+    @State private var uploadingAttachment: Set<String> = []
     @State private var splitTracker = SplitFocusTracker()
-
-    private let maximumRetainedAttachedTerminals = 6
 
     @ViewBuilder
     private var terminal: some View {
         ZStack {
             attachedTerminal
-                .mountedTerminal(isActive: model.selectedShellID == nil)
             // Standalone shells stay in the hierarchy while deselected: unlike a
             // herdr pane, an app-owned shell has no server side to reattach to,
             // so tearing the view down would kill whatever is running in it.
@@ -287,214 +514,190 @@ struct DetailView: View {
                     lineSpacing: terminalLineSpacing,
                     dark: colorScheme == .dark,
                     mouseReporting: terminalMouseReporting,
+                    surfaceVisible: model.selectedShellID == session.id,
                     onExit: { _ in model.closeShellSession(session.id) }
                 )
                     .id("shell-\(session.id)")
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .mountedTerminal(isActive: model.selectedShellID == session.id)
+                    // Solid backdrop inside the opacity compositing group so
+                    // glyph AA on Ghostty's non-opaque Metal layer stays crisp
+                    // (see attachChild) instead of rendering pale.
+                    .background(Theme.terminalBackground)
+                    .opacity(model.selectedShellID == session.id ? 1 : 0)
+                    .allowsHitTesting(model.selectedShellID == session.id)
+                    .accessibilityHidden(model.selectedShellID != session.id)
             }
         }
         .background(Theme.terminalBackground)
-    }
-
-    private var attachedTerminal: some View {
-        SplitContainer(
-            axis: model.selectedAttachedEntry == nil ? nil : model.shellSplitAxis,
-            activeSide: model.activeSplitSide,
-            ratio: $model.splitRatio
-        ) {
-            attachedPrimary
-        } second: {
-            splitShellTerminals
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.terminalBackground)
-        .overlay(alignment: .bottomTrailing) {
-            if let ref = model.selectedAttachedEntry?.ref,
-               uploadingAttachmentRefs.contains(ref) {
-                uploadIndicator
-            }
-        }
-        .onAppear {
-            model.activateSplitSession(for: model.attachedSpaceRef)
-            splitTracker.onSideChanged = { model.activeSplitSide = $0 }
-            splitTracker.start()
-            splitTracker.shellView = model.splitShellView
-            retainSelectedAttachedTerminal()
-            activateSelectedAttachedTerminal()
-        }
-        .onChange(of: model.selectedAttachedEntry?.id) { _, id in
-            retainSelectedAttachedTerminal()
-            if id == nil {
-                model.pendingSplitAgentFocus = false
-                model.splitAgentView = nil
-                splitTracker.agentView = nil
-            } else {
-                activateSelectedAttachedTerminal()
-            }
-        }
-        // Keyed on the window becoming key rather than on a delay: that is the event
-        // that follows the sheet's responder restore. Filtered to the terminal's own
-        // window and consumed no matter which window it was, so a pending request can
-        // never survive to a later, unrelated activation — coming back from ⌘Tab or
-        // closing Settings would otherwise yank the keyboard into a live pane.
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
-            guard model.pendingSplitAgentFocus else { return }
-            model.pendingSplitAgentFocus = false
-            guard let window = note.object as? NSWindow,
-                  window === model.splitAgentView?.window
-            else { return }
-            focusTerminal(model.splitAgentView)
-        }
-        // Splitting moves the keyboard to the shell, so closing the split has to
-        // hand it back — by ⌘W or by the shell exiting on its own. Reset the
-        // tracked side to the agent so the next split starts predictably.
-        .onChange(of: model.shellSplitAxis) { _, axis in
-            if axis == nil {
-                model.activeSplitSide = .agent
-                model.pendingSplitAgentFocus = false
-                focusRemainingTerminal()
-            } else {
-                splitTracker.shellView = model.splitShellView
-            }
-        }
     }
 
     @ViewBuilder
-    private var attachedPrimary: some View {
-        ZStack {
-            ForEach(attachedEntriesToRender) { entry in
-                let active = model.selectedAttachedEntry?.ref == entry.ref
-                let attachmentCapabilities: AgentAttachmentCapabilities? = {
-                    guard case .agent(let agentEntry) = entry else { return nil }
-                    return model.attachmentCapabilities(
-                        deviceID: agentEntry.device.id,
-                        agentKind: agentEntry.agent.agentKindRaw
-                    )
-                }()
+    private var attachedTerminal: some View {
+        if let entry = model.selectedAttachedEntry {
+            SplitContainer(
+                axis: model.shellSplitAxis,
+                activeSide: model.activeSplitSide,
+                ratio: $model.splitRatio
+            ) {
+                // One structural position holding every kept-alive attach. Each child
+                // keeps a stable identity and is toggled by opacity, so switching the
+                // selection — or opening/closing the split — never tears a terminal
+                // down: its content survives the round trip. Do not key this on the
+                // selection; that rebuild-on-switch is exactly what this removes.
                 ZStack {
-                    AttachTerminalView(
-                        device: entry.device,
-                        target: entry.attachTarget,
-                        serverVersion: model.serverVersion(deviceID: entry.device.id),
-                        attachmentCapabilities: attachmentCapabilities,
-                        fontName: terminalFontName,
-                        fontSize: terminalFontSize,
-                        thinStrokes: terminalThinStrokes,
-                        fontWeight: terminalFontWeight,
-                        lineSpacing: terminalLineSpacing,
-                        dark: colorScheme == .dark,
-                        mouseReporting: terminalMouseReporting,
-                        onAttachmentError: { model.actionError = $0 },
-                        onAttachmentUploadingChanged: { uploading in
-                            if uploading {
-                                uploadingAttachmentRefs.insert(entry.ref)
-                            } else {
-                                uploadingAttachmentRefs.remove(entry.ref)
-                            }
-                        },
-                        onExit: { code in
-                            endedAttachedRefs.insert(entry.ref)
-                            if let code {
-                                endedAttachCodes[entry.ref] = code
-                            } else {
-                                endedAttachCodes.removeValue(forKey: entry.ref)
-                            }
-                        },
-                        onViewReady: { view in
-                            model.registerAttachedTerminalView(view, for: entry.ref)
-                            if model.selectedAttachedEntry?.ref == entry.ref {
-                                splitTracker.agentView = view
-                                model.splitAgentView = view
-                            }
-                        }
-                    )
-                    .id(
-                        "attach-\(entry.id)-\(attachRetries[entry.ref, default: 0])"
-                    )
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    if endedAttachedRefs.contains(entry.ref) {
-                        attachEndedOverlay(
-                            entry,
-                            code: endedAttachCodes[entry.ref]
-                        )
+                    ForEach(model.attachSessions) { session in
+                        attachChild(session, isSelected: session.id == entry.id)
                     }
                 }
-                .mountedTerminal(isActive: active)
+            } second: {
+                splitShellTerminals
             }
-
-            if model.selectedAttachedEntry == nil {
-                VStack(spacing: 10) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 28, weight: .light))
-                        .foregroundStyle(Theme.textGhost)
-                    Text(placeholderText)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.textTertiary)
-                    if showsStartAgentShortcut {
-                        Button("New Agent…") {
-                            model.showNewAgent = true
-                        }
-                        .controlSize(.small)
-                    } else if model.hasReconnectableDevice {
-                        Button("Reconnect") {
-                            model.reconnectFailedDevices()
-                        }
-                        .controlSize(.small)
-                    }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.terminalBackground)
+            .overlay(alignment: .bottomTrailing) {
+                if uploadingAttachment.contains(entry.id) { uploadIndicator }
+            }
+            .onAppear {
+                // Single source of truth: the tracker writes straight into the model
+                // instead of holding its own copy for a second onChange to mirror.
+                splitTracker.onSideChanged = { model.activeSplitSide = $0 }
+                // The ⌘D shell is per-Space, so the tracker's shell side follows the
+                // Space the selection is in.
+                model.activateSplitSession(for: model.attachedSpaceRef)
+                splitTracker.shellView = model.splitShellView
+                splitTracker.isAgentView = { view in
+                    AttachViewRegistry.liveViews.contains { $0 === view }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.terminalBackground)
+                splitTracker.start()
+            }
+            .onChange(of: entry.id) { _, newID in
+                // A re-selected kept-alive view does not self-focus (makeNSView ran once
+                // at creation), so hand it the keyboard explicitly — matching how every
+                // selection used to focus the freshly built terminal.
+                AttachViewRegistry.focus(newID)
+            }
+            // Keyed on the window becoming key rather than on a delay: that is the event
+            // that follows the sheet's responder restore. Filtered to the terminal's own
+            // window and consumed no matter which window it was, so a pending request can
+            // never survive to a later, unrelated activation — coming back from ⌘Tab or
+            // closing Settings would otherwise yank the keyboard into a live pane.
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+                guard model.pendingSplitAgentFocus else { return }
+                model.pendingSplitAgentFocus = false
+                guard let window = note.object as? NSWindow,
+                      window === model.splitAgentView?.window
+                else { return }
+                focusTerminal(model.splitAgentView)
+            }
+            // Splitting moves the keyboard to the shell, so closing the split has to
+            // hand it back — by ⌘W or by the shell exiting on its own. Reset the
+            // tracked side to the agent so the next split starts predictably.
+            .onChange(of: model.shellSplitAxis) { _, axis in
+                if axis == nil {
+                    model.activeSplitSide = .agent
+                    model.pendingSplitAgentFocus = false
+                    focusRemainingTerminal(preferring: model.splitAgentView)
+                } else {
+                    splitTracker.shellView = model.splitShellView
+                }
+            }
+        } else {
+            // The .onReceive below only exists on the branch above, so a request armed
+            // while no pane is selected would have no consumer and would be cashed in by
+            // some later activation. Revealing a pane that has since gone away lands here.
+            VStack(spacing: 10) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(Theme.textGhost)
+                Text(placeholderText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textTertiary)
+                if showsStartAgentShortcut {
+                    Button("New Agent…") {
+                        model.showNewAgent = true
+                    }
+                    .controlSize(.small)
+                } else if model.hasReconnectableDevice {
+                    Button("Reconnect") {
+                        model.reconnectFailedDevices()
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.terminalBackground)
+            .onAppear { model.pendingSplitAgentFocus = false }
+        }
+    }
+
+    /// One kept-alive attach. Stays in the hierarchy while deselected (opacity 0, no hit
+    /// testing) so its content survives; the selected one is visible and interactive.
+    @ViewBuilder
+    private func attachChild(_ session: AppModel.AttachedEntry, isSelected: Bool) -> some View {
+        let attachmentCapabilities: AgentAttachmentCapabilities? = {
+            guard case .agent(let agentEntry) = session else { return nil }
+            return model.attachmentCapabilities(
+                deviceID: agentEntry.device.id,
+                agentKind: agentEntry.agent.agentKindRaw
+            )
+        }()
+        ZStack {
+            AttachTerminalView(
+                device: session.device,
+                target: session.attachTarget,
+                sessionID: session.id,
+                serverVersion: model.serverVersion(deviceID: session.device.id),
+                attachmentCapabilities: attachmentCapabilities,
+                fontName: terminalFontName,
+                fontSize: terminalFontSize,
+                thinStrokes: terminalThinStrokes,
+                fontWeight: terminalFontWeight,
+                lineSpacing: terminalLineSpacing,
+                dark: colorScheme == .dark,
+                mouseReporting: terminalMouseReporting,
+                // A deselected child stays mounted and keeps draining its PTY, but
+                // Ghostty stops rendering it: occluded surfaces release the display
+                // link instead of drawing frames nobody can see.
+                surfaceVisible: isSelected,
+                onAttachmentError: { model.actionError = $0 },
+                onAttachmentUploadingChanged: { uploading in
+                    if uploading {
+                        uploadingAttachment.insert(session.id)
+                    } else {
+                        uploadingAttachment.remove(session.id)
+                    }
+                },
+                onExit: { code in endedAttach[session.id] = code }
+            )
+                // Keyed on the retry generation only — NOT colorScheme. A theme toggle
+                // must re-theme live via updateNSView (as the split shell already does);
+                // rebuilding here would tear down every kept-alive terminal at once and
+                // throw away the very content this keeps alive.
+                .id("attach-\(session.id)-\(attachRetry[session.id] ?? 0)")
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            if isSelected, endedAttach[session.id] != nil {
+                attachEndedOverlay(session)
             }
         }
+        // Ghostty's Metal layer is non-opaque (clear background), and the
+        // `.opacity` below forces SwiftUI to composite this child offscreen —
+        // where glyph anti-aliasing falls back to a transparent backdrop and
+        // renders pale (worst on dense CJK strokes). A solid backdrop inside
+        // the compositing group gives the text an opaque background to blend
+        // against, matching the pre-keep-alive single-view rendering.
+        .background(Theme.terminalBackground)
+        .opacity(isSelected ? 1 : 0)
+        .allowsHitTesting(isSelected)
+        // A kept-alive child stays in the view tree, so VoiceOver would otherwise
+        // reach every hidden terminal alongside the visible one.
+        .accessibilityHidden(!isSelected)
     }
 
-    private var attachedEntriesToRender: [AppModel.AttachedEntry] {
-        var refs = Set(retainedAttachedRefs)
-        if let selected = model.selectedAttachedEntry?.ref {
-            refs.insert(selected)
-        }
-        return model.allAttachedEntries.filter { refs.contains($0.ref) }
-    }
-
-    private func retainSelectedAttachedTerminal() {
-        guard let ref = model.selectedAttachedEntry?.ref else { return }
-        retainedAttachedRefs.removeAll { $0 == ref }
-        retainedAttachedRefs.append(ref)
-
-        while retainedAttachedRefs.count > maximumRetainedAttachedTerminals {
-            let evicted = retainedAttachedRefs.removeFirst()
-            removeRetainedAttachedState(for: evicted)
-        }
-    }
-
-    private func pruneRetainedAttachedTerminals(liveRefs: Set<PaneRef>) {
-        let removed = retainedAttachedRefs.filter { !liveRefs.contains($0) }
-        retainedAttachedRefs.removeAll { !liveRefs.contains($0) }
-        for ref in removed {
-            removeRetainedAttachedState(for: ref)
-        }
-    }
-
-    private func removeRetainedAttachedState(for ref: PaneRef) {
-        model.unregisterAttachedTerminalView(for: ref)
-        endedAttachedRefs.remove(ref)
-        endedAttachCodes.removeValue(forKey: ref)
-        attachRetries.removeValue(forKey: ref)
-        uploadingAttachmentRefs.remove(ref)
-    }
-
-    private func activateSelectedAttachedTerminal() {
-        guard let ref = model.selectedAttachedEntry?.ref,
-              let view = model.attachedTerminalView(for: ref)
-        else { return }
-        splitTracker.agentView = view
-        model.splitAgentView = view
-        focusTerminal(view)
-    }
-
+    /// The ⌘D sidecar shells, one per Space that has opened a split. Every shell stays
+    /// mounted while another Space is selected — an app-owned shell has no server side
+    /// to reattach to, so tearing its view down would kill what is running in it.
     private var splitShellTerminals: some View {
         ZStack {
             ForEach(model.spaceSplitSessions) { session in
@@ -507,6 +710,7 @@ struct DetailView: View {
                     lineSpacing: terminalLineSpacing,
                     dark: colorScheme == .dark,
                     mouseReporting: terminalMouseReporting,
+                    surfaceVisible: active,
                     onExit: { _ in model.closeSplitSession(for: session.space) },
                     onViewReady: { view in
                         model.registerSplitShellView(view, for: session.space)
@@ -515,21 +719,27 @@ struct DetailView: View {
                         }
                     }
                 )
+                    // Deliberately not keyed on colorScheme like the attach above:
+                    // a new id tears the view down and kills the shell with whatever
+                    // was running in it, and unlike a herdr pane a local shell has no
+                    // server-side state to reattach to. updateNSView re-themes it.
                     .id("space-shell-\(session.id.uuidString)")
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .mountedTerminal(isActive: active)
+                    // Solid backdrop inside the opacity compositing group so glyph AA
+                    // on Ghostty's non-opaque Metal layer stays crisp (see attachChild).
+                    .background(Theme.terminalBackground)
+                    .opacity(active ? 1 : 0)
+                    .allowsHitTesting(active)
+                    .accessibilityHidden(!active)
             }
         }
     }
 
     /// ssh exits 255 for transport failures; everything else is the far end closing
     /// (takeover by another client, the pane going away, herdr stopping).
-    private func attachEndedOverlay(
-        _ entry: AppModel.AttachedEntry,
-        code: Int32?
-    ) -> some View {
-        let dropped = code == 255
+    private func attachEndedOverlay(_ entry: AppModel.AttachedEntry) -> some View {
+        let dropped = (endedAttach[entry.id] ?? nil) == 255
         return VStack(spacing: 10) {
             Image(systemName: dropped ? "bolt.horizontal.circle" : "rectangle.slash")
                 .font(.system(size: 28, weight: .light))
@@ -543,9 +753,8 @@ struct DetailView: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(Theme.textTertiary)
             Button("Reconnect") {
-                endedAttachedRefs.remove(entry.ref)
-                endedAttachCodes.removeValue(forKey: entry.ref)
-                attachRetries[entry.ref, default: 0] += 1
+                endedAttach[entry.id] = nil
+                attachRetry[entry.id, default: 0] += 1
             }
             .controlSize(.small)
             .keyboardShortcut(.defaultAction)
@@ -590,31 +799,65 @@ struct DetailView: View {
 }
 
 struct AddDeviceSheet: View {
+    enum Transport: String, CaseIterable {
+        case ssh
+        case tailcat
+    }
+
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var target = ""
+    @State private var transport: Transport = .ssh
+    @State private var token = ""
+
+    private var canAdd: Bool {
+        switch transport {
+        case .ssh: return !target.trimmingCharacters(in: .whitespaces).isEmpty
+        case .tailcat: return !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(
                 systemImage: "desktopcomputer",
                 title: String(localized: "Add Device"),
-                subtitle: String(localized: "Uses OpenSSH config, agent, Tailscale SSH, or password")
+                subtitle: transport == .ssh
+                    ? String(localized: "Uses OpenSSH config, agent, Tailscale SSH, or password")
+                    : String(localized: "WireGuard tunnel to a herdr behind NAT — no VPN, no account")
             )
             Rectangle().fill(Theme.hairline).frame(height: 1)
 
             VStack(alignment: .leading, spacing: 8) {
+                Picker("", selection: $transport) {
+                    Text(String(localized: "SSH")).tag(Transport.ssh)
+                    Text(String(localized: "Tailcat")).tag(Transport.tailcat)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Spacer().frame(height: 4)
                 SheetSectionLabel("NAME")
                 TextField("mac-studio", text: $name)
                     .textFieldStyle(.roundedBorder)
                 Spacer().frame(height: 8)
-                SheetSectionLabel("SSH TARGET")
-                TextField("vincent@10.10.10.87", text: $target)
-                    .textFieldStyle(.roundedBorder)
-                Text("user@host, a ~/.ssh/config alias, or user@host:port for a custom port.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.textTertiary)
+                if transport == .ssh {
+                    SheetSectionLabel("SSH TARGET")
+                    TextField("vincent@10.10.10.87", text: $target)
+                        .textFieldStyle(.roundedBorder)
+                    Text("user@host, a ~/.ssh/config alias, or user@host:port for a custom port.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.textTertiary)
+                } else {
+                    SheetSectionLabel("TAILCAT TOKEN")
+                    TextField("tcpGFwWCD…", text: $token)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11, design: .monospaced))
+                    Text("On the remote Mac: `herdr plugin install lbr77/herdr-plugin-tailcat`, then `herdr plugin action invoke herdr.tailcat.token` and paste the token here. The WireGuard tunnel is built in — no external tool. The token is stored in the Keychain. Standalone shells and the Files workspace need SSH.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(16)
 
@@ -626,17 +869,25 @@ struct AddDeviceSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Add Device") {
                     let trimmedName = name.trimmingCharacters(in: .whitespaces)
-                    let trimmedTarget = target.trimmingCharacters(in: .whitespaces)
-                    model.addDevice(
-                        name: trimmedName.isEmpty ? trimmedTarget : trimmedName,
-                        sshTarget: trimmedTarget
-                    )
+                    switch transport {
+                    case .ssh:
+                        let trimmedTarget = target.trimmingCharacters(in: .whitespaces)
+                        model.addDevice(
+                            name: trimmedName.isEmpty ? trimmedTarget : trimmedName,
+                            sshTarget: trimmedTarget
+                        )
+                    case .tailcat:
+                        model.addTailcatDevice(
+                            name: trimmedName.isEmpty ? String(localized: "Tailcat Device") : trimmedName,
+                            token: token.trimmingCharacters(in: .whitespacesAndNewlines)
+                        )
+                    }
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(target.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(!canAdd)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -1427,6 +1678,58 @@ struct RenameAgentSheet: View {
     }
 }
 
+struct RenameTerminalSheet: View {
+    @ObservedObject var model: AppModel
+    let entry: AppModel.TerminalEntry
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(
+                systemImage: "pencil",
+                title: String(localized: "Rename Terminal"),
+                subtitle: String(localized: "Rename \(entry.title) on \(entry.device.name)")
+            )
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 8) {
+                SheetSectionLabel("NAME")
+                TextField("Terminal name", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                Text("Chinese, spaces, and punctuation are allowed.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .padding(16)
+
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Rename") {
+                    model.renameTerminal(entry, name: name)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(trimmedName.isEmpty || trimmedName == entry.title)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 400)
+        .onAppear { name = entry.title }
+    }
+}
+
 struct EditDeviceSheet: View {
     @ObservedObject var model: AppModel
     let device: Device
@@ -1483,32 +1786,5 @@ struct EditDeviceSheet: View {
             name = device.name
             target = device.sshTarget ?? ""
         }
-    }
-}
-
-/// Keeps terminal processes mounted while removing inactive views from layout.
-/// A zero-sized SwiftTerm view no longer receives every window resize, avoiding
-/// redundant buffer reshapes, PTY size notifications, and redraws for hidden sessions.
-private struct MountedTerminalModifier: ViewModifier {
-    let isActive: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .frame(
-                minWidth: 0,
-                maxWidth: isActive ? .infinity : 0,
-                minHeight: 0,
-                maxHeight: isActive ? .infinity : 0
-            )
-            .opacity(isActive ? 1 : 0)
-            .allowsHitTesting(isActive)
-            .accessibilityHidden(!isActive)
-            .clipped()
-    }
-}
-
-private extension View {
-    func mountedTerminal(isActive: Bool) -> some View {
-        modifier(MountedTerminalModifier(isActive: isActive))
     }
 }

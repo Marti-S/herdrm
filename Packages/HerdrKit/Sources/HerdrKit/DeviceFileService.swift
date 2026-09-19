@@ -96,6 +96,10 @@ public actor DeviceFileService {
         let path = try await absolutePath(requestedPath)
         let entries: [DeviceFileEntry]
         switch device.kind {
+        case .tailcat:
+            throw HerdrError.fileOperationFailed(
+                "the Files workspace is not supported over a tailcat tunnel"
+            )
         case .local:
             entries = try Self.listLocalDirectory(at: path)
         case .ssh:
@@ -121,6 +125,12 @@ public actor DeviceFileService {
         limit: Int = FileRangeRead.defaultLimit
     ) async throws -> FileRangeRead {
         switch device.kind {
+        case .tailcat:
+            // The tunnel carries the herdr socket only — no shell, no file
+            // reads, so transcript tailing stays unavailable for these devices.
+            throw HerdrError.fileOperationFailed(
+                "reading files is not supported over a tailcat tunnel"
+            )
         case .local:
             return try FileRangeRead.readLocal(path: path, offset: offset, limit: limit)
         case .ssh:
@@ -150,6 +160,10 @@ public actor DeviceFileService {
         )
 
         switch device.kind {
+        case .tailcat:
+            throw HerdrError.fileOperationFailed(
+                "the Files workspace is not supported over a tailcat tunnel"
+            )
         case .local:
             let result = try await Self.copyLocalFile(
                 from: localURL,
@@ -202,6 +216,10 @@ public actor DeviceFileService {
         )
 
         switch device.kind {
+        case .tailcat:
+            throw HerdrError.fileOperationFailed(
+                "the Files workspace is not supported over a tailcat tunnel"
+            )
         case .local:
             return try await Self.copyLocalFile(
                 from: URL(fileURLWithPath: source),
@@ -259,6 +277,10 @@ public actor DeviceFileService {
 
     private func homeDirectory() async throws -> String {
         switch device.kind {
+        case .tailcat:
+            throw HerdrError.fileOperationFailed(
+                "the Files workspace is not supported over a tailcat tunnel"
+            )
         case .local:
             return NSHomeDirectory()
         case .ssh:
@@ -301,6 +323,10 @@ public actor DeviceFileService {
 
     private func pathExists(_ path: String) async throws -> Bool {
         switch device.kind {
+        case .tailcat:
+            throw HerdrError.fileOperationFailed(
+                "the Files workspace is not supported over a tailcat tunnel"
+            )
         case .local:
             return FileManager.default.fileExists(atPath: path)
         case .ssh:

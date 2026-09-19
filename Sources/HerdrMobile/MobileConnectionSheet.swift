@@ -6,12 +6,16 @@ struct AddConnectionSheet: View {
   enum ConnectionKind: String, CaseIterable, Identifiable {
     case bridge
     case directSSH
+    /// Control plane only: the herdr.tailcat tunnel carries RPC and events,
+    /// but no shell, so these devices cannot attach a terminal on iOS.
+    case tailcat
 
     var id: Self { self }
     var title: String {
       switch self {
       case .bridge: return String(localized: "Mac Bridge")
       case .directSSH: return String(localized: "Direct SSH")
+      case .tailcat: return String(localized: "Tailcat")
       }
     }
   }
@@ -36,6 +40,8 @@ struct AddConnectionSheet: View {
   @State private var authMethod: MobileDevice.AuthMethod = .deviceKey
   @State private var password = ""
   @State private var copiedKey = false
+  @State private var tailcatName = ""
+  @State private var tailcatToken = ""
   @State private var errorMessage: String?
 
   init(model: MobileAppModel) {
@@ -55,6 +61,8 @@ struct AddConnectionSheet: View {
         && !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && (authMethod == .deviceKey || !password.isEmpty)
         && UInt16(directPort) != nil
+    case .tailcat:
+      return !tailcatToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
   }
 
@@ -73,6 +81,8 @@ struct AddConnectionSheet: View {
           bridgeForm
         case .directSSH:
           directSSHForm
+        case .tailcat:
+          tailcatForm
         }
       }
       .navigationTitle(String(localized: "Add Connection"))
@@ -239,6 +249,23 @@ struct AddConnectionSheet: View {
     }
   }
 
+  private var tailcatForm: some View {
+    Group {
+      Section(String(localized: "Device")) {
+        TextField(String(localized: "Name (optional)"), text: $tailcatName)
+      }
+      Section {
+        SecureField(String(localized: "Token"), text: $tailcatToken)
+          .autocorrectionDisabled()
+          .textInputAutocapitalization(.never)
+      } header: {
+        Text(String(localized: "Tailcat Token"))
+      } footer: {
+        Text(String(localized: "From the host: herdr plugin action invoke herdr.tailcat.token — the token is stored in this device's Keychain, and the tunnel needs no SSH. The tunnel carries herdr's control plane only, so these devices cannot attach a terminal."))
+      }
+    }
+  }
+
   private func parsePairingJSON() {
     applyPairingJSON(pairingJSON)
   }
@@ -284,6 +311,10 @@ struct AddConnectionSheet: View {
         authMethod: authMethod,
         password: password
       )
+      dismiss()
+
+    case .tailcat:
+      model.addTailcatDevice(name: tailcatName, token: tailcatToken)
       dismiss()
     }
   }
