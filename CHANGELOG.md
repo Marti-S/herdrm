@@ -22,6 +22,10 @@ the Sparkle update description — a release without a section here fails CI.
   @thedavidweng!)
 
 ### Fixed
+- ⌘-clicking a URL in the terminal now opens it. HerdrM never adopted
+  libghostty's open-URL delegate, so clicks on OSC 8 hyperlinks and regex-matched
+  links did nothing; both terminal coordinators now open `http`/`https`/`mailto`
+  links through `NSWorkspace`. (#91, thanks @briandw!)
 - SSH devices on Windows no longer fail the home probe (`echo "$HOME"` under CMD)
   or OpenSSH `-L` socket forwards (drive-letter paths). HerdrM detects Windows,
   proxies RPC through `herdr remote-api-bridge` over SSH stdio (same channel as
