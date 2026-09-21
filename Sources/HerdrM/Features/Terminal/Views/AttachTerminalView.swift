@@ -125,7 +125,18 @@ struct AttachTerminalView: NSViewRepresentable {
         )
     }
 
-    final class Coordinator: NSObject, TerminalSurfaceLifecycleDelegate {
+    final class Coordinator: NSObject, TerminalSurfaceLifecycleDelegate, TerminalSurfaceOpenURLDelegate {
+        private let linkOpener: ((URL) -> Void)?
+
+        init(linkOpener: ((URL) -> Void)? = nil) {
+            self.linkOpener = linkOpener
+            super.init()
+        }
+
+        func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
+            LineBreakTerminalView.openClickedLink(url, opener: linkOpener)
+        }
+
         /// Written on the main actor; read from `deinit`, which is nonisolated.
         nonisolated(unsafe) var authorizationID: UUID?
         var sessionID: String?

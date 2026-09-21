@@ -17,6 +17,7 @@ struct NotificationSettingsView: View {
             Text("Finished agents only notify while you're not watching them — herdr reports panes you have open as idle, not done.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Divider()
 

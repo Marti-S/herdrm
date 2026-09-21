@@ -73,6 +73,9 @@ struct RootView: View {
                 set: { if !$0 { model.actionError = nil } }
             )
         ) {
+            if model.hasReconnectableDevice {
+                Button("Reconnect") { model.reconnectFailedDevices() }
+            }
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.actionError ?? "")

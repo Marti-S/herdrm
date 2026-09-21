@@ -193,7 +193,7 @@ final class FleetStore: ObservableObject {
 
     let fleetStateDidChange = PassthroughSubject<FleetStateChange, Never>()
 
-    private let store = DeviceStore()
+    private let store: DeviceStore
     private var services: [UUID: HerdrService] = [:]
     private var sessionTasks: [UUID: Task<Void, Never>] = [:]
     private var sessionTaskGenerations: [UUID: UInt64] = [:]
@@ -207,8 +207,9 @@ final class FleetStore: ObservableObject {
     private var previousStatuses: [UUID: [String: AgentStatus]] = [:]
     private var hasStarted = false
 
-    init() {
-        let loaded = DeviceStore().load()
+    init(store: DeviceStore = DeviceStore()) {
+        self.store = store
+        let loaded = store.load()
         devices = loaded
         navigation = AppNavigationState(availableDevices: loaded)
         navigationObservation = navigation.objectWillChange.sink { [weak self] _ in
@@ -898,8 +899,33 @@ final class FleetStore: ObservableObject {
             ) {
                 self.setConnection(.connecting, for: device.id)
                 do {
+                    // A refused quit can leave the previous owner inside bridge
+                    // teardown. Finish it before rebinding this device's socket.
+                    for retiring in self.retiringServices {
+                        guard await retiring.device.id == device.id else { continue }
+                        guard await retiring.disconnect() else {
+                            throw HerdrError.connectionFailed(String(localized: "Previous connection is still stopping — retrying"))
+                        }
+                        self.retiringServices.removeAll { $0 === retiring }
+                    }
+                    guard self.isCurrentSessionTask(
+                        deviceID: device.id,
+                        generation: taskGeneration,
+                        service: service
+                    ) else { return }
                     let pong = try await service.connect()
                     guard self.isCurrentSessionTask(
+                        deviceID: device.id,
+                        generation: taskGeneration,
+                        service: service
+                    ) else {
+                        await service.disconnect()
+                        return
+                    }
+                    // Resolve routing metadata before publishing connected. This await
+                    // can outlive a reconnect, edit, removal, or shutdown.
+                    let platformIsCurrent = await self.synchronizeSSHPlatform(deviceID: device.id, using: service)
+                    guard platformIsCurrent, self.isCurrentSessionTask(
                         deviceID: device.id,
                         generation: taskGeneration,
                         service: service
@@ -1083,14 +1109,20 @@ final class FleetStore: ObservableObject {
         Task { await loadAgentCatalog(deviceID: deviceID, using: service) }
     }
 
-    /// Tears down every live tunnel. Awaited from the app's terminate hook — `stopSession`
-    /// fires its disconnect in a detached `Task`, which never runs when the process is exiting.
-    func shutdownAllSessions() async {
-        let live = services
+    // Retain removed sessions until their owned children have actually exited.
+    private var retiringServices: [HerdrService] = []
+
+    /// Quit/relaunch may proceed only after every owned proxy confirms exit.
+    func shutdownAllSessions() async -> Bool {
+        let live = Array(services.values) + retiringServices
+        retiringServices = live
         services.removeAll()
         sessionTasks.values.forEach { $0.cancel() }
         sessionTasks.removeAll()
-        sessionTaskGenerations.removeAll()
+        // Preserve monotonic generations if quit is refused and start() runs again.
+        for id in sessionTaskGenerations.keys {
+            sessionTaskGenerations[id] = (sessionTaskGenerations[id] ?? 0) &+ 1
+        }
         refreshDebounces.values.forEach { $0.cancel() }
         refreshDebounces.removeAll()
         refreshDebounceTokens.removeAll()
@@ -1101,9 +1133,26 @@ final class FleetStore: ObservableObject {
         refreshRequested.removeAll()
         statusGenerations.removeAll()
         hasStarted = false
-        for service in live.values {
-            await service.disconnect()
+        // Teardown is destructive even when a proxy times out. Never leave the
+        // retained fleet snapshot advertising a connection with no session owner.
+        for id in sessions.keys {
+            setConnection(
+                .failed(String(localized: "Session stopped — choose Reconnect to try again")),
+                for: id
+            )
         }
+        var stopped = true
+        for service in live {
+            if await service.disconnect() {
+                retiringServices.removeAll { $0 === service }
+            } else {
+                stopped = false
+            }
+        }
+        if !stopped {
+            actionError = String(localized: "Could not quit because an SSH connection is still stopping. Choose Reconnect to restore stopped sessions, or try quitting again.")
+        }
+        return stopped
     }
 
     private func stopSession(_ id: UUID) {
@@ -1124,7 +1173,14 @@ final class FleetStore: ObservableObject {
         services[id] = nil
         sessions[id] = nil
         publishFleetChange(.device(id))
-        Task { await service?.disconnect() }
+        if let service {
+            retiringServices.append(service)
+            Task {
+                if await service.disconnect() {
+                    retiringServices.removeAll { $0 === service }
+                }
+            }
+        }
     }
 
     func addDevice(name: String, sshTarget: String) {
@@ -1468,15 +1524,58 @@ final class FleetStore: ObservableObject {
         }
     }
 
+    /// Reads platform metadata under the same service/generation lease as the
+    /// connection loop. The loader seam keeps lifecycle tests off real SSH hosts.
+    func synchronizeSSHPlatform(
+        deviceID: UUID,
+        using service: HerdrService,
+        load: (() async -> SSHTunnel.RemotePlatform?)? = nil
+    ) async -> Bool {
+        guard isCurrentService(service, deviceID: deviceID) else { return false }
+        let generation = sessionTaskGenerations[deviceID]
+        let kind = device(deviceID)?.kind
+        let platform: SSHTunnel.RemotePlatform?
+        if let load { platform = await load() }
+        else { platform = await service.sshRemotePlatform() }
+        guard isCurrentService(service, deviceID: deviceID),
+              sessionTaskGenerations[deviceID] == generation,
+              device(deviceID)?.kind == kind else { return false }
+        applySSHPlatform(platform, deviceID: deviceID)
+        return true
+    }
+
+    /// The tunnel's platform is authoritative for command routing; icon probes
+    /// must not overwrite it. Publish only a real semantic metadata change.
+    private func applySSHPlatform(_ platform: SSHTunnel.RemotePlatform?, deviceID: UUID) {
+        guard let platform,
+              let index = devices.firstIndex(where: { $0.id == deviceID }),
+              devices[index].sshTarget != nil else { return }
+        let osID: String?
+        switch platform {
+        case .windows: osID = "windows"
+        case .unix:
+            osID = devices[index].osID?.lowercased() == "windows" ? nil : devices[index].osID
+        }
+        guard devices[index].osID != osID else { return }
+        devices[index].osID = osID
+        store.save(devices)
+        publishFleetChange(.device(deviceID))
+    }
+
     /// Sniffs the device OS once (for the OS brand icon) and persists it.
     private func probeOSIfNeeded(_ device: Device) {
         guard device.osID == nil, let target = device.sshTarget else { return }
+        let generation = sessionTaskGenerations[device.id]
         Task {
             guard let os = try? await SSHTunnel.probeOS(
                 target: target,
                 credentialID: device.id
             ) else { return }
-            if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+            if !Task.isCancelled,
+               self.sessionTaskGenerations[device.id] == generation,
+               let index = self.devices.firstIndex(where: { $0.id == device.id }),
+               self.devices[index].sshTarget == target,
+               self.devices[index].osID == nil {
                 self.devices[index].osID = os
                 self.store.save(self.devices)
                 self.publishFleetChange(.device(device.id))

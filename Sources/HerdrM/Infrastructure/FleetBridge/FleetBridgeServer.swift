@@ -163,7 +163,8 @@ final class FleetBridgeServer: ObservableObject {
             target: request.target.attachTarget,
             mode: request.mode,
             size: request.size,
-            serverVersion: model.serverVersion(deviceID: device.id)
+            serverVersion: model.serverVersion(deviceID: device.id),
+            currentDevice: device
         )
         return FleetBridgeTerminalProcess(
             streamID: request.streamID,
