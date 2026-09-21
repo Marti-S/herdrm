@@ -1,12 +1,13 @@
 # HerdRM Distributed Specification Orchestration
 
 **Document ID:** HRM-ORCH-001  
-**Version:** 1.0  
+**Version:** 1.1  
+**Alignment ID:** PATH-HRM-ALIGN-2026-09-21  
 **Date:** September 21, 2026  
 **Status:** Implementation specification; not an implementation or acceptance report  
 **Primary implementation repository:** `Marti-S/herdrm`  
 **Integration repositories:** `Marti-S/PathWorkflow`, `Marti-S/atomic`  
-**Suggested canonical repository path:** `specs/2026-09-21-herdrm-distributed-orchestration.md`
+**Canonical repository path:** `specs/2026-09-21-herdrm-distributed-orchestration.md`
 
 **Reading guide**
 
@@ -28,7 +29,7 @@ Build a specification-driven delivery system into the HerdRM product, with an in
 
 “MUST” and “MUST NOT” identify binding implementation requirements. “SHOULD” identifies a recommended behavior whose deviation must be documented with its tradeoff. Examples illustrate the proposed contracts and are not claims that these APIs already exist. Source observations in Appendix A are descriptive; the rest of this document defines the target.
 
-This document incorporates the supplied Path refactor and explicitly amends its single-active-milestone restriction. It does not authorize deployment, publication, merging, repository protection changes, or destructive migration merely by being present on disk. Those effects require the operation permissions defined here. No tests or runtime demonstrations were executed to produce this specification.
+This document incorporates the supplied Path refactor and explicitly amends its earlier single-active-milestone restriction. Version 1.1 aligns the published Path companion specifications, service ownership, protocol mapping, metadata storage, lifecycle and acceptance boundaries. Its presence does not authorize implementation, deployment, runtime publication, merging, repository protection changes, or destructive migration. Those effects require the operation permissions defined here. The owner's separate instruction authorizes publication of this documentation revision only. No runtime demonstrations were executed to establish the proposed capabilities.
 
 ### 0.1 Observed source baselines
 
@@ -40,6 +41,20 @@ This document incorporates the supplied Path refactor and explicitly amends its 
 
 All three baselines were read on September 21, 2026. A repository commit is not an installed runtime version. Path's inspected contract names Atomic `0.9.19` as its supported installed version. Implementation must establish and test a compatibility manifest before using any API observed only on Atomic `main`. See Appendix A, R1–R7.
 
+### 0.2 Published companion baseline
+
+The alignment review read Path specifications at `cb5166146b0f08a15a7380af74824b57420e004a` and this specification's version 1.0 at `ac888243defc11db8b7539ffbd8381b87cb3d3c7`. Those commits are pre-alignment observations, not implementation proof. The canonical [alignment manifest](2026-09-21-orchestration-alignment.json), `PATH-HRM-ALIGN-2026-09-21`, pins the exact revised document Git blobs:
+
+| Document | Repository / path | Aligned version |
+|---|---|---|
+| PATH-LAYOUT-001 | `Marti-S/PathWorkflow/specs/2026-09-21-path-project-layout-refactor.md` | 1.1 |
+| PATH-DS-001 | `Marti-S/PathWorkflow/specs/2026-09-21-path-distributed-supervision.md` | 1.1 |
+| HRM-ORCH-001 | `Marti-S/herdrm/specs/2026-09-21-herdrm-distributed-orchestration.md` | 1.1 |
+
+Resolve and retain an immutable manifest revision, then verify each document blob before claiming an aligned intake baseline. Branch links are discovery conveniences only. The manifest deliberately pins document blobs rather than embedding circular self-referential commit hashes. Publication across repositories is not atomic; a partial update does not satisfy alignment. Actual schema/package/runtime/policy digests and acceptance receipts remain required before their consumers or accepted executions are admitted, as applicable. A specification manifest is not a runtime compatibility certificate.
+
+PATH-LAYOUT-001 owns layout, records, migration, codebase-only initial generation and local conformance. PATH-DS-001 owns Path's distributed control port, adapter and proof semantics. This document owns the product supervisor, runner, coordination store, gateway hosting, native clients and release profile. Sections 3.4, 17.5 and 23.2 make their composition explicit; no document authorizes a duplicate acceptance reducer, placement authority or Atomic process adapter.
+
 ## 1. Scope, release boundary, and supersession
 
 ### 1.1 Required first production release
@@ -50,13 +65,13 @@ All three baselines were read on September 21, 2026. A repository commit is not 
 
 **REQ-03 — End-to-end delivery.** Support source observation, explicit revision submission, definition, planning, implementation, independent verification, internal landing, PR publication, human-authorized shared-branch promotion, post-integration verification, and closeout. A workflow returning successfully is not a delivery predicate.
 
-**REQ-04 — Refactor retention.** Preserve permanent milestone directories, separation of current knowledge/approved changes/evidence, optional domain guidance, lean scoped context, revision-checked helpers, recoverable migration, and evidence-backed closeout.
+**REQ-04 — Refactor retention.** Preserve permanent milestone directories, separation of current knowledge/approved changes/evidence, optional domain guidance, lean scoped context, revision-checked helpers, recoverable migration, and evidence-backed closeout. Preserve PATH-LAYOUT-001 GEN-1–GEN-5, MIG/WIRE/CLEAN and EVAL-1–EVAL-3 in the delivered Path capability; Section 23.2 maps their evidence to this product release.
 
 ### 1.2 Explicit non-goals
 
 Do not build a replacement coding-agent runtime, a general-purpose autonomous manager agent, an active-active coordinator cluster, offline multi-writer Path state, cross-repository atomic release transactions, unrestricted shell-over-HTTP, or automatic production deployment. Do not require a mandatory DDD taxonomy, move canonical product specifications into `.project/`, or create empty research/summary/evidence scaffolding.
 
-Transparent live migration of an Atomic session between hosts and cross-host task children remain later capabilities. Recovery on a different host is a **new execution attempt** linked to prior accepted work, unless a separately certified same-run migration adapter exists. The first release must not advertise that later capability.
+Transparent live migration of an Atomic session between hosts and cross-host task children remain later capabilities. Recovery on a different host is a **new execution attempt** linked to prior accepted work. A separately certified same-run migration adapter would require another profile; the first release must not advertise that later capability.
 
 ### 1.3 Superseded and retained obligations
 
@@ -72,7 +87,7 @@ Transparent live migration of an Atomic session between hosts and cross-host tas
 | Release/merge privileges are separate from implementation intent | Retained and made explicit in the operation authorization model. |
 | Historical acceptance definitions/evidence must be preserved | Retained; supersession changes obligations, never historical pass/fail results. |
 
-Implementation must register this supersession in Path's contract revision mechanism before changing protected contracts. Suggested revision identity: `OCR-2026-09-21-herdrm-distributed-orchestration`. The historical case definitions must not be rewritten to make new behavior appear previously verified.
+Implementation must register this supersession in Path's contract revision mechanism before changing protected contracts. Suggested revision identity: `OCR-2026-09-21-herdrm-distributed-orchestration`, with the alignment revision and per-obligation dispositions recorded. Documentation publication does not itself change that protected register. Historical case definitions must not be rewritten to make new behavior appear previously verified.
 
 ## 2. Non-negotiable invariants
 
@@ -116,24 +131,27 @@ herdrm/
 ├── Packages/
 │   └── OrchestrationKit/          # Swift models, API client, streams, signature integration
 ├── services/
-│   ├── supervisor/               # Scheduling, intake, operations, projections, effect admission
-│   └── runner/                   # Host capabilities, workspace lifecycle, Atomic RPC adapter
+│   ├── supervisor/               # Placement, capacity, leases, intake, projections, gateway hosting
+│   └── runner/                   # Host/workspace lifecycle and the single Atomic RPC adapter
 ├── packages/
-│   └── orchestration-protocol/   # Versioned JSON schemas and generated TypeScript bindings
+│   └── orchestration-protocol/   # Product/runner schemas referencing pinned Path domain schemas
 ├── Sources/HerdrM/
 │   ├── Features/Projects/
 │   ├── Features/Milestones/
 │   ├── Features/IntegrationQueue/
 │   └── Runtime/Orchestration/
-├── Sources/<existing-iOS-target>/
+├── Sources/HerdrMobile/
 │   └── ...                       # Equivalent feature/client integration, not another scheduler
 └── specs/
-    └── 2026-09-21-herdrm-distributed-orchestration.md
+    ├── 2026-09-21-herdrm-distributed-orchestration.md
+    └── 2026-09-21-orchestration-alignment.json
 
 PathWorkflow/
 ├── .atomic/workflows/path-deliver.ts
 └── tools/path/
     ├── control/                  # Typed observe/decide/apply/recover boundary
+    │   └── contracts/            # Canonical path/control/v1 schemas and golden fixtures
+    ├── supervision/              # Distributed host/client/proof adapters, not another scheduler
     ├── record/                   # Project registry, milestone state, journals, projections
     ├── shared/                   # Versioned resolver and containment
     ├── dispatch/                 # DAG readiness, local ownership, attempt/integration adapters
@@ -141,7 +159,7 @@ PathWorkflow/
     └── evidence/                 # Verification and acceptance reducers
 ```
 
-Existing repository layout conventions take precedence for the exact iOS source directory; resolve it from the build configuration rather than creating the illustrative placeholder above.
+Resolve exact target paths from the existing build configuration and repository conventions; the named new feature/service directories are proposed deliverables, not claims of existing code.
 
 **REQ-06 — Reuse without duplication.** HerdRM must depend on a pinned, packaged Path control/adapter artifact. Do not copy Path sources into HerdRM or translate its gates into Swift. Publish/install packaging is itself a permissioned release action. Development may use a checked local package link with its source digest recorded.
 
@@ -152,26 +170,36 @@ The existing HerdRM dependency direction and transport owners must be preserved.
 | Component | Owns | Must not own |
 |---|---|---|
 | Native UI/client | Read models, user intent, signed approval requests, terminal links | Task acceptance or source-of-truth status |
-| Supervisor | Subscriptions, assignments, capacity, operation ledger, queue order, notification delivery | An alternative task dependency graph or acceptance reducer |
-| Path state host | Canonical state, admissible actions, contract revisions, evidence acceptance, closeout | Machine capacity or fabricated GitHub facts |
-| Path delivery controller | Phase progression and task dispatch through Atomic | Unfenced remote publication |
-| Runner | Host/process management, local durable launch correlation, sandboxing, artifacts | Scope changes, approvals, merge permission |
+| Supervisor | Subscriptions, assignments, capacity, lease issuance, operation ledger, queue order, notification delivery | An alternative task dependency graph or acceptance reducer |
+| Path state host | Canonical state, admissible actions, contract revisions, fence validation, evidence acceptance, closeout | Machine capacity, a second lease issuer or fabricated GitHub facts |
+| Path delivery controller | Phase progression and task dispatch through Atomic | Unfenced remote publication or another process/RPC launcher |
+| Runner | Host/process management, local durable launch correlation, Atomic RPC adapter, sandboxing, artifacts | Scope changes, approvals, merge permission |
 | Atomic | Agent execution, tracked stages/children/tools, checkpoints/resume | Project governance outside its declared workflow |
 | Effect gateway | Fresh authorization and fencing plus execution of Path-produced effect requests | Reinterpretation of acceptance or approval intent |
 | GitHub | Actual refs, PRs, reviews, checks, queue and merge state | Path milestone acceptance |
 
+### 3.4 Cross-repository composition contract
+
+**REQ-39 — One implementation per authority and shared contract.** PATH-DS-001 implements the Path port, distributed admission/evidence adapters and Git proof semantics used by this product. HerdRM implements the supervisor, machine enrollment/capacity/placement, assignment and lease store, production runner/Atomic process adapter, and gateway hosting once. The former proposed Path `machines.ts` and `agent.ts` must not become parallel product services. Any compatibility facade or headless deployment delegates to these same packages; ordinary standalone-local Path remains usable without a HerdRM UI or service.
+
+Path owns canonical `path/control/v1` JSON schemas and fixtures under its packaged control artifact. HerdRM owns `herdrm/orchestration/v1` and `herdrm/runner/v1`, importing or referencing the Path definitions by pinned identity rather than duplicating them. Section 17.5 defines the semantic mapping. One supervisor assignment must yield one Path controller and one correlated Atomic root launch, including replay/lost-acknowledgement cases. Parent and child operation identities are durable, not regenerated on retry.
+
+Every enrolled project using the same `(forgeHost, repositoryNodeId, fullTargetRef)` shares one gateway reservation lane, even when project and milestone IDs differ. A project-local Path journal may reference that lane but may not create a private competing one. Enrollment rejects incompatible authority/target bindings. Coordination between independently administered installations is outside this release; copying credentials/state does not establish another valid coordinator.
+
+The required profile is `herdrm-distributed-v1`, defined jointly here and in PATH-DS-001 Section 5.6. It requires the exact certified durable runtime/isolation tuple, human-signed candidate promotion, the distinct authority/epoch/incarnation/fence fields, and control-branch metadata storage. Generic backend policy-only promotion is disabled in this profile. The specification alignment manifest pins the normative texts; a separately completed compatibility/evidence manifest establishes implemented versions. Unknown combinations block accepted distributed execution.
+
 ## 4. Identity, versioning, and compatibility
 
-**REQ-07 — Identity.** Use opaque UUIDs for installation, project, milestone, task, attempt, runner, operation, artifact manifest, and approval identities. Human labels such as `M001` and `T001` are scoped display identifiers, not globally unique keys. The coordinator allocates milestone ordinals transactionally; they are never reused. A milestone's original directory slug is immutable even if its display title changes.
+**REQ-07 — Identity.** Use opaque UUIDs for installation, project, milestone, task, attempt, runner, operation, artifact manifest, and approval identities. Human labels such as `M001` and `T001` are scoped display identifiers, not globally unique keys. The coordinator allocates milestone ordinals transactionally through the Path registry; they are never reused. A milestone's original directory slug is immutable even if its display title changes.
 
 Repository identity is `(forgeHost, repositoryNodeId)` with owner/name retained as mutable display metadata. Forks are separate repositories. Several registered projects may use one repository, but target-branch coordination is keyed by repository identity, not project identity.
 
-Resolve task identity as `(projectId, milestoneId, taskId)`. Resolve terminal attachments separately as `(fleetAuthorityId, deviceId, paneId)` and Atomic execution as `(runnerId, executionSessionId, atomicRunId)`.
+Resolve task identity as `(projectId, milestoneId, taskId)`. Resolve terminal attachments separately as `(fleetAuthorityId, deviceId, paneId)` and Atomic execution as `(runnerId, executionSessionId, atomicRunId)`. The durable execution request's `executionId` is separate from its runner RPC session and returned Atomic run ID.
 
 ### 4.1 Common wire types
 
 ```typescript
-// Proposed wire conventions, not existing SDK declarations.
+// Proposed wire conventions, owned by the canonical Path schema artifact.
 type UUID = string;
 type Digest = string;              // sha256:<64 lowercase hexadecimal digits>
 type Revision = string;            // nonnegative canonical decimal, no leading zero except "0"
@@ -188,6 +216,12 @@ interface GitSubject {
   commitOid: string;
   treeOid: string;
 }
+interface AuthorityContext {
+  authorityId: UUID;
+  authorityBindingRevision: Revision;
+  coordinationEpoch: UUID;
+  serviceIncarnationId: UUID;
+}
 interface OwnershipFence {
   coordinationEpoch: UUID;
   scope: "milestone" | "attempt" | "integration-target";
@@ -197,11 +231,13 @@ interface OwnershipFence {
 }
 ```
 
+Authority identity/binding locates the configured Path writer; coordination epoch prevents restored/transferred authority from reviving old grants; service incarnation identifies an intact-service restart; assignment generation fences owners within the epoch. These are not aliases. Task-scoped admissions require applicable milestone and attempt fences; service promotion uses current authority and integration-target admission rather than fabricating a worker lease after implementation stopped. Late worker requests are rejected, while trusted reconciliation can still record effects previously admitted under an old fence.
+
 Every JSON schema must specify required fields, closed enums, size bounds, formats, unknown-field behavior, and nullability. Monotonic counters are decimal strings to avoid cross-language integer precision loss. Git object IDs are validated against the negotiated repository object format; unsupported formats block before a mutation.
 
-**REQ-08 — Independent versions.** Keep protocol major version, Path layout version, state schema version, contract revision/digest, source Git revision, and coordinator epoch distinct. The new Path layout is version `3`; project and milestone record schemas begin at version `1`. Discovery must use an explicit validated marker plus conflict checks, not simply the presence of a Markdown file.
+**REQ-08 — Independent versions.** Keep protocol major version, Path layout version, state schema version, contract revision/digest, source Git revision, authority binding, coordinator epoch and service incarnation distinct. The new Path layout is version `3`; project and milestone record schemas begin at version `1`. Discovery must use an explicit validated marker plus conflict checks, not simply the presence of a Markdown file.
 
-A compatibility manifest must pin supervisor, runner, Path package, Atomic executable/version/digest, host/architecture, protocol, schema, layout, model policy, and verifier policy versions. Unknown runtime combinations cannot execute automatically. Older clients may remain read-only if their decoding is compatible; unsupported mutation schemas are rejected.
+A compatibility manifest must pin supervisor, runner, Path package, Atomic executable/version/digest, host/architecture, all Path/product/runner protocol schemas, layout, model policy, verifier policy, alignment-manifest identity and release-profile version. Unknown runtime combinations cannot execute automatically. Older clients may remain read-only if their decoding is compatible; unsupported mutation schemas are rejected. Certification never silently upgrades Path's registered supported runtime or model policy.
 
 ## 5. Canonical state and `.project/`
 
@@ -231,7 +267,7 @@ A compatibility manifest must pin supervisor, runner, Path package, Atomic execu
         └── evidence/               # Immutable receipts/manifests and durable output references
 ```
 
-**REQ-09 — State split.** Root `state.json` owns project identity, layout/schema markers, registry revision, source registry references, and milestone identity/path references. It does not maintain a second copy of milestone phases, task status, approvals, or live host heartbeats. Root `STATE.md` is rebuilt from milestone records plus explicitly labelled observations.
+**REQ-09 — State split.** Root `state.json` owns project identity, layout/schema markers, registry revision, source registry references, and milestone identity/path references. It stores the approved roadmap revision/digest and validated dependency index, not a second independently editable graph. It does not maintain a second copy of milestone phases, task status, approvals, or live host heartbeats. Root `STATE.md` is rebuilt from milestone records plus explicitly labelled observations.
 
 Each milestone `state.json` owns its phase, lifecycle, accepted source and contract revisions, task lifecycle, blockers, accepted evidence references, branch/PR binding, integration receipts, and completion record. It may reference the current assignment, but the supervisor assignment store owns whether that assignment is live. Task status must not also be maintained in Markdown frontmatter.
 
@@ -264,7 +300,7 @@ interface MilestoneState {
 }
 ```
 
-`TaskLifecycleRecord`, `BlockerRecord`, `BranchBinding`, and evidence records are specified in Sections 7–8 and 13–16. Implementers must generate concrete JSON schemas; unresolved illustrative type names are not an acceptable shipped protocol.
+`TaskLifecycleRecord`, `BlockerRecord`, `BranchBinding`, and evidence records are specified in Sections 7–8 and 13–16. Implementers must generate concrete JSON schemas; unresolved illustrative type names are not an acceptable shipped protocol. Lifecycle action intent/disposition records are distinct from observed runtime state, as required by Section 8.1.
 
 ### 5.2 Where canonical bytes live
 
@@ -280,7 +316,7 @@ interface MilestoneState {
 └── backups/<backupId>/
 ```
 
-Private runtime journals may live outside the human documentation tree. The single path resolver must resolve those locations as well as public artifacts. Workers receive read-only contract/state materializations and attempt-local output directories; they never mount the authoritative store writable.
+Private runtime journals may live outside the human documentation tree. The single path resolver must resolve those locations as well as public artifacts. PATH-LAYOUT-001's local `.control/` paths represent these same logical record roles, not additional distributed writable copies. Workers receive read-only contract/state materializations and attempt-local output directories; they never mount the authoritative store writable.
 
 A standalone Path project may use local canonical files with a local adapter. A project enrolled in distributed mode must declare its remote authority. Offline copies of that project refuse mutations rather than falling back to local mode. Changing authority requires the migration/transfer protocol, not editing an endpoint string.
 
@@ -288,11 +324,11 @@ A standalone Path project may use local canonical files with a local adapter. A 
 
 Canonical product specifications remain at their authored location. Preserve immutable intake snapshots in the artifact store; `.project/` references them.
 
-Operational metadata must not generate competing implementation-branch edits. The first release uses a dedicated `path-control/<projectKey>` Git branch as an append-only history mirror of accepted metadata snapshots. This branch is **not** the live state authority. Its publication may lag and must display that lag. Only the gateway writes it, using expected-ref updates; unrelated or conflicting remote heads block mirror publication without rolling back accepted Path transitions.
+Operational metadata must not generate competing implementation-branch edits. The first release uses a dedicated `path-control/<projectKey>` Git branch as an append-only history mirror of accepted metadata snapshots. This branch is **not** the live state authority. Its publication may lag and must display that lag. Only the gateway writes it, using provider-enforced expected-ref updates; unrelated or conflicting remote heads block mirror publication without rolling back accepted Path transitions.
 
-`PROJECT.md`, `ROADMAP.md`, and milestone contract/history snapshots are mirrored there. `codebase/` remains authored with the corresponding implementation on source branches. Document manifests bind each source document to its exact Git subject or immutable artifact. The logical `.project/` view composes these locations through the resolver; it must never label a composite view as one Git commit.
+Accepted `PROJECT.md`, `ROADMAP.md`, and milestone contract/history snapshots are retained immutably by the Path authority and mirrored there. `codebase/` remains authored with the corresponding implementation on source branches. Worker-visible contracts are read-only, digest-bound materializations, not independently editable product-branch authorities. Document manifests bind each source document to its exact Git subject or immutable artifact. The logical `.project/` view composes these locations through the resolver; it must never label a composite view as one Git commit.
 
-Live heartbeats, lease renewals, and runner telemetry remain outside Git. Task source commits exclude materialized operational state. Codebase documentation updates travel with the source change, while operational contract changes go through Path revision commands. Existing tracked operational files are preserved during migration and dispositioned explicitly.
+Live heartbeats, lease renewals, and runner telemetry remain outside Git. Task source commits exclude materialized operational state and contract snapshots. Codebase documentation updates travel with the source change, while operational contract changes go through Path revision commands. Existing tracked operational files/contracts are preserved during migration and dispositioned explicitly. Standalone-local Path retains authority-owned contracts without requiring a remote mirror; enrollment explicitly adopts the distributed storage/publication policy. Concurrent source merges, contract amendments and metadata publication must not change another milestone's approved subject.
 
 ### 5.4 Codebase and domain knowledge
 
@@ -301,6 +337,8 @@ Live heartbeats, lease renewals, and runner telemetry remain outside Git. Task s
 Definitions belong in their owning topic. Optional `LANGUAGE.md` indexes rather than duplicates them. Record meaning/scope, distinctions, relationships/permitted operations, ownership, and implementation/verification references. Mark approved requirements, observed behavior, and proposed meanings distinctly.
 
 Workers receive only assigned contracts, relevant topic sections and distinctions, and source/test references. Documentation guides but never replaces source inspection. Concurrent milestones may carry branch-specific knowledge changes; HerdRM must show which branch/revision the user is reading. Conflicting meanings or requirements produce a material question, not silent reconciliation.
+
+Initial `PROJECT.md` and codebase generation must retain PATH-LAYOUT-001 GEN-1–GEN-5: codebase-only inputs, a fresh restricted context, supporting source/command provenance, and enforced exclusion of repository prose through inherited instructions, tools, subprocesses, symlinks and network access. Contract derivation and migration are separate stages and cannot supply knowledge-stage facts. Missing enforceable isolation produces a typed block. Scope submission, existing prose and the documentation UI do not waive this boundary. Later owner-attributed constraints are distinct from initial codebase-derived observations. Section 23.2 and AC-086 require the corresponding evidence.
 
 ## 6. Persistence and transition protocol
 
@@ -313,7 +351,7 @@ Persist at least `installations`, `principals`, `enrollments`, `projects`, `sour
 **REQ-13 — Journalled state mutation.** A Path transition follows this protocol under the milestone mutation lock:
 
 1. Authenticate the caller and authorize access to this operation scope, then look up `operationId` before testing the expected revision. An already committed operation with the same canonical request digest returns its original result; different content under the same ID is a conflict.
-2. Check authenticated principal, installation epoch, live assignment/fence where applicable, expected milestone revision, source/contract binding, and required evidence/policy.
+2. Check authenticated principal, authority binding/epoch/incarnation as applicable, live assignment/fences where required, expected milestone revision, source/contract binding, and required evidence/policy.
 3. Write referenced immutable artifacts and `fsync` them before their admission. Verify stored digests and durability; temporary uploads are not accepted evidence.
 4. Append and durably flush a prepared transition record containing previous revision/digest, requested action, subject/evidence references, full next-state digest and a durably stored immutable next-state object reference, and operation ID.
 5. Write and `fsync` the next state to a temporary file in the same filesystem; atomically replace `state.json`; `fsync` its parent directory. **The durable publication of the next state is the transition commit point.**
@@ -326,7 +364,7 @@ Root registry transitions use an equivalent root lock/journal. Operations touchi
 
 ### 6.2 Crossing SQLite and Path state
 
-There is no implicit atomic transaction across SQLite and the filesystem. Use a recoverable operation protocol: persist the supervisor operation; call Path with the same ID; reconcile Path's committed operation result; then persist the supervisor result and projection event. Recovery queries Path by operation ID before reissuing anything.
+There is no implicit atomic transaction across SQLite and the filesystem. Use a recoverable operation protocol: persist the supervisor operation; call Path with the stable corresponding operation identity; reconcile Path's committed operation result; then persist the supervisor result and projection event. Recovery queries Path by operation ID before reissuing anything. A one-to-one unchanged domain request can use the same ID; translated multi-step commands use Section 17.5's durable parent/child mapping, never the same ID for different payloads.
 
 Ownership changes and Path mutation admission pass through the same per-milestone service gate. A lease may not be superseded between final admission and a Path state commit. Do not hold a database transaction while waiting for a model or network response.
 
@@ -334,7 +372,9 @@ Ownership changes and Path mutation admission pass through the same per-mileston
 
 Release 1 has one coordinator host, enforced by a host process lock plus the configured state-root ownership. It has **no automatic cross-host coordinator failover**. A cloned state directory must not be started as another live installation.
 
-Every backup restore or authority transfer rotates `coordinationEpoch`, reenrolls/revokes affected credentials as required, and reconciles outstanding external effects before new admission. Counters from an older restored database cannot make old tokens valid in the new epoch. Application restart on the same intact store retains the epoch, invalidates prior live leases until runners reconcile, and does not reset durable counters.
+Every backup restore or authority transfer rotates `coordinationEpoch`, reenrolls/revokes affected credentials as required, and reconciles outstanding external effects and all bound remote entities before new admission. Counters from an older restored database cannot make old tokens valid in the new epoch. Authority transfer records the new authority identity/binding revision as applicable. Application restart on the same intact store retains the epoch, creates a new `serviceIncarnationId`, invalidates prior live leases until runners reconcile, and does not reset durable counters.
+
+Preserve PATH-DS-001 OWN-4's protected journal high-water marker outside restorable project snapshots. Missing/mismatched markers or uncertain restore enter read-only recovery, not silent reuse of generations or operation identities. Fault-test marker/journal publication ordering. This additional anti-rollback check does not replace epoch rotation. Reconcile unresolved `admitted` as well as `submitted` effects: a request may have been sent before its next ledger write. Root administrators restoring both state and its protection remain outside the stated anti-rollback trust boundary.
 
 ## 7. Source, contract, task, and evidence records
 
@@ -407,7 +447,7 @@ Human approval records bind approval identity, principal/device, exact candidate
 
 **REQ-17 — Typed outcomes.** Use independent milestone phase and lifecycle fields, not one overloaded status string. A blocker preserves the current phase and records code, structured subject, remediation category, related operation/evidence, and whether automatic retry is permitted. User-visible text is explanatory, never parsed to choose an action.
 
-### 8.1 Milestone phases
+### 8.1 Milestone phases and lifecycle actions
 
 | Phase | Entry requirements | Successful exit |
 |---|---|---|
@@ -418,9 +458,23 @@ Human approval records bind approval identity, principal/device, exact candidate
 | Integration | Candidate and PR binding valid | Actual merge observed under allowed policy; any required integration checks satisfied. |
 | Closeout | Required acceptance and merge facts available | Durable completion receipt and immutable outcome data; summary projection queued/generated. |
 
-Allowed lifecycle transitions are `draft → ready → running`; `running ↔ waiting/blocked/paused` through admitted operations; and `running → completed/cancelled/superseded` where the corresponding predicates hold. Definition/planning may complete through deterministic fast paths. Starting a model is not mandatory when no work remains.
+The following action-by-lifecycle table is normative and is shared with PATH-LAYOUT-001 LIFE-9 and PATH-DS-001. Actions still require authorization, applicable revisions and evidence. Lifecycle intent is a separate durable operation/disposition; a request acknowledgement alone cannot claim runtime quiescence.
 
-A phase transition may regress only through an explicit recovery/amendment/revalidation operation retaining history. `completed` is immutable: later defects or requirements create corrective/new milestones, or a superseding correction record explaining an erroneous historical claim. Do not silently reopen the same completed record.
+| Action | Eligible current lifecycle | Admitted result / conditions |
+|---|---|---|
+| Establish readiness | `draft` | `ready` after definition/planning prerequisites; no implicit execution. |
+| Start | `ready` | `running` after execution admission and reconciled runner launch; launch acknowledgement is not completion. |
+| Record wait or block | `running`, `waiting`, `blocked` | `waiting` or `blocked` with typed reason; preserve phase and accepted work. |
+| Pause | `running`, `waiting`, `blocked` | Record requested; reach `paused` only when relevant work is quiescent or fenced, or no execution remains admitted. Do not infer process death from fencing. |
+| Resume / resolve wait | `paused`, `waiting`, `blocked` | `running` only through explicit reconciled admission after the applicable blocker is resolved; valid same-run resume or a separately identified recovery, never a blind launch. Deterministic finalization need not start a model. |
+| Cancel | `draft`, `ready`, `running`, `waiting`, `blocked`, `paused` | Record requested without first starting/resuming work. Reach `cancelled` when no launch/work remains admitted or execution is quiescent or fenced. Retain uncertain effects and reservations. |
+| Supersede active work | `draft`, `ready`, `running`, `waiting`, `blocked`, `paused` | `superseded` through explicit amendment/replacement with the same quiescence/fencing and effect-retention rules. |
+| Complete | `running`, `waiting` | `completed` only in closeout with all completion predicates and a durable receipt; no unresolved blocking question/task. No new implementation process is needed solely to finalize. |
+| Resume terminal history | `completed`, `cancelled`, `superseded` | Refused. A later execution uses a new/linked milestone or the specifically permitted append-only correction record, not a reopened terminal run. |
+
+A cancellation can become terminal while an already admitted remote effect remains unknown only after further execution/acceptance is fenced; its target/resource reservation and reconciliation obligation survive independently. Do not describe that effect as cancelled or release shared resources on the basis of terminal lifecycle alone. Repeated control requests reuse their operation identities.
+
+Definition/planning may complete through deterministic fast paths. A phase transition may regress only through an explicit recovery/amendment/revalidation operation retaining history. `completed` is immutable: later defects or requirements create corrective/new milestones, or a superseding correction record explaining an erroneous historical claim. Do not reopen the same completed record or rewrite its evidence.
 
 ### 8.2 Task and attempt lifecycle
 
@@ -466,7 +520,7 @@ A clarification or amendment that cannot be applied safely remains a typed block
 
 ### 10.1 Scheduling ownership
 
-**REQ-20 — Two scheduling levels, one DAG.** Path owns task readiness. The supervisor owns milestone placement and physical resource allocation. The supervisor may reject or defer a ready task for capacity/capability, but may not invent task dependencies, bypass a Path gate, or mark a task accepted.
+**REQ-20 — Two scheduling levels, one DAG.** Path owns task readiness. The supervisor owns milestone placement and physical resource allocation. The supervisor may reject or defer a ready task for capacity/capability, but may not invent task dependencies, bypass a Path gate, or mark a task accepted. The Path distributed adapter does not run an additional machine registry or placement algorithm.
 
 For release 1, allocate a milestone controller to a runner and keep its implementation children on that runner. Obtain capacity reservations per active task so idle or approval-waiting milestones do not hold model slots. Enforce project/repository milestone limits, runner task limits, provider/model-pool limits, budgets, and exclusive resources. A waiting milestone consumes no implementation slot unless it actually has running work.
 
@@ -478,7 +532,7 @@ A runner advertises OS/architecture, available runtimes/toolchains, isolation ca
 
 **REQ-21 — Fenced assignments.** Allocate a durable assignment with a unique ID and increasing generation under `(projectId, milestoneId)`. Allocate attempt ownership separately. Every state-changing runner command and effect request carries the relevant milestone and attempt fences. A stale generation returns `STALE_FENCE`, preserving the submitted artifact only as quarantined, non-accepted evidence where policy allows.
 
-Proposed configurable defaults are heartbeat every 15 seconds and lease duration 90 seconds. They are liveness settings, not correctness proofs. Server time governs leases; runners use a monotonic local deadline with a safety margin and may not extend authority from their own wall clock. On coordinator restart, leases require explicit reconciliation/renewal; a clock discontinuity fails closed until re-established.
+Proposed configurable defaults are heartbeat every 15 seconds and lease duration 90 seconds. They are liveness settings, not correctness proofs. The coordinator's monotonic clock within its service incarnation governs expiry; server wall-clock deadlines are informational representations, not a way to extend leases. Runners use a monotonic local deadline with a safety margin and cannot extend authority from their own wall clock. Restart changes service incarnation and requires explicit reconciliation/renewal; a clock discontinuity fails closed until re-established.
 
 Lease expiry stops new admission. By default, the runner requests cooperative pause of work and stops new child launches. Already-running local computation may finish into a quarantined result, but no publication, shared integration, or acceptance is possible without current authority. After a 30-second configurable stop grace, terminate the attempt process group unless a declared tool-specific safe-stop rule requires manual intervention. Destructive tools are not permitted in the ordinary implementation profile.
 
@@ -490,15 +544,15 @@ Resource keys are explicit: repository interfaces, test databases, simulator poo
 
 ### 10.4 Effect-boundary enforcement
 
-All privileged effects pass through the gateway. It checks current epoch/generation, action permission, subject/contract, expected refs, required evidence, and applicable human approval immediately before dispatching an effect.
+All privileged effects pass through the gateway. It checks current authority/epoch/generation, action permission, subject/contract, expected refs, required evidence, and applicable human approval immediately before dispatching an effect.
 
 Ownership transfer and effect admission share a serialized scope gate. An admitted external request may already be in flight when its lease expires. Do not claim it was prevented: retain its effect slot and reconcile its result before admitting conflicting successor effects. An unknown outcome freezes the affected integration target or resource, not all unrelated milestones.
 
-Remote model workers have no direct GitHub write/merge token and no canonical-state signing key. A fence enforced only in a prompt or an editable worker file does not meet this requirement.
+Remote model workers have no direct GitHub write/merge token and no canonical-state signing key. A fence enforced only in a prompt or an editable worker file does not meet this requirement. Trusted service reconciliation observes previously admitted facts without reusing obsolete worker authority for new effects.
 
 ## 11. Atomic adapter and execution lifecycle
 
-**REQ-22 — Supported runtime integration.** Implement a persistent `atomic --mode rpc` adapter, using the pinned supported runtime. Launch, status, pause, resume, and quit are machine-facing operations. Do not scrape terminal output or ask a free-form manager model to execute controls.
+**REQ-22 — Supported runtime integration.** Implement one persistent `atomic --mode rpc` production adapter in the HerdRM runner, using the pinned supported runtime. Launch, status, pause, resume, and quit are machine-facing operations. Path owns its workflow/child contracts and uses this adapter; do not implement another production RPC/process adapter in Path's distributed modules. Do not scrape terminal output or ask a free-form manager model to execute controls.
 
 Reuse the repository's existing RPC smoke harness where appropriate, but convert its helpers into tested production adapters rather than treating fixture smoke success as end-to-end acceptance. Atomic's documented JSONL protocol uses LF record delimiters; U+2028/U+2029 inside JSON strings must not split records. Implement incremental UTF-8 decoding, backpressure, correlated command IDs, and durable spooling. See R5–R7.
 
@@ -552,7 +606,7 @@ Large artifacts use resumable uploads with digest/size validation and finalizati
 
 ### 12.2 Cleanup
 
-Cleanup runs only after evidence/result ingestion is durable, the attempt is quiescent, and retention policy allows removal. Cancellation does not discard uncollected work. Branch/worktree deletion is a journalled effect with identity and expected-ref checks. If a ref moved or a process remains live, stop cleanup and report the conflict.
+Cleanup runs only after evidence/result ingestion is durable, the attempt is quiescent, and retention policy allows removal. Cancellation does not discard uncollected work. Branch/worktree deletion is a journalled effect with identity and expected-ref checks. If a ref moved or a process remains live, stop cleanup and report the conflict. Conditional remote deletion must enforce its expected old OID atomically at the provider boundary; a read followed by unconditional deletion is insufficient.
 
 ## 13. Branches, internal landing, and PR publication
 
@@ -570,13 +624,13 @@ path-task/<projectKey>/M002/T001/a-<attemptUUID>  -> path/<projectKey>/M002 -> m
 
 The target is configurable; `main` is illustrative. One delivery PR exists per active milestone/target binding. Task PRs are optional collaboration artifacts, not required by default. Project namespace prevents collisions when several projects share a repository. Existing branch names remain readable through migration mappings; never rename or delete an active remote branch without an explicit recoverable operation.
 
-Task attempt refs are immutable once a candidate is sealed. Changes after review create another candidate/attempt identity with new evidence. A milestone integration ref is mutable only through its serialized landing lane and expected-OID updates. Remote writes run through the gateway. No worker may force-push a shared ref or delete another attempt's ref.
+Task attempt refs are immutable once a candidate is sealed. Changes after review create another candidate/attempt identity with new evidence. A milestone integration ref is mutable only through its serialized landing lane and provider-enforced expected-OID updates. Creation requires expected absence. Remote writes run through the gateway. No worker may force-push a shared ref or delete another attempt's ref.
 
 ### 13.2 Internal landing
 
 Path may automatically land a verified task into its milestone branch when the invocation/policy authorizes internal integration. Serialize per milestone branch, not per entire repository.
 
-Before landing, verify task ownership, contract digest, base/dependency receipts, changed paths, candidate source identity, required focused checks, and required independent review. Construct an integration candidate against the current milestone head; execute applicable integration checks on that candidate; then advance the milestone ref with an expected-old-OID precondition and record the resulting commit/tree.
+Before landing, verify task ownership, contract digest, base/dependency receipts, changed paths, candidate source identity, required focused checks, and required independent review. Construct an integration candidate against the current milestone head; execute applicable integration checks on that candidate; then advance the milestone ref with an atomic expected-old-OID precondition and record the resulting commit/tree.
 
 When the target ref moved, do not reuse evidence for a different candidate. Recompute the integration candidate and rerun affected checks. Text conflicts may receive bounded Path-authored repair; semantic uncertainty or an exhausted budget blocks. Accept the task's landing only after the ref effect is observed and its receipt admitted. Dependent tasks start from the accepted resulting revision, never simply because the worker exited.
 
@@ -616,13 +670,13 @@ Closeout creates an immutable completion receipt with source/contract, accepted 
 
 ## 15. External effects, idempotency, and uncertainty
 
-**REQ-27 — Effect ledger.** Every branch push, PR mutation, queue operation, merge, metadata publication, cleanup, or external notification has a unique operation/effect ID and canonical request digest. Record `prepared`, `admitted`, `submitted`, `succeeded`, `rejected`, or `unknown`; a submitted request with a missing definitive outcome becomes `unknown` after recovery.
+**REQ-27 — Effect ledger.** Every branch push, PR mutation, queue operation, merge, metadata publication, cleanup, or external notification has a unique operation/effect ID and canonical request digest. Record `prepared`, `admitted`, `submitted`, `succeeded`, `rejected`, or `unknown`. An unresolved admitted or submitted operation may already have acted; recovery must reconcile it before retry or conflicting progression. In particular, a crash after sending but before the next ledger write can leave the durable state at `admitted`. That state is not proof that dispatch never happened.
 
 A request retry with the same operation ID and payload returns the original committed/admitted result or its current reconciliation status. Reusing the ID with different content returns `OPERATION_ID_CONFLICT`. End-to-end “exactly once” external execution is not promised. The required guarantee is deduplicated commands, at most one accepted local transition, and reconciliation of uncertain remote effects before retry or conflicting progression.
 
 ### 15.1 Gateway procedure
 
-Prepare the effect durably; acquire its scope lane; reread current policy/permissions/ownership/evidence; record admission; dispatch the Path adapter request; persist the response; observe authoritative remote state where needed; admit the resulting Path receipt; publish the outcome. If any stage fails, keep the last certain stage and recover from it.
+Prepare the effect durably; acquire its scope lane; reread current policy/permissions/ownership/evidence; record admission and durable dispatch intent before allowing the request to be sent; dispatch the Path adapter request; persist the response; observe authoritative remote state where needed; admit the resulting Path receipt; publish the outcome. If any stage fails, keep the last certain stage and recover from it. A separately represented may-have-been-sent state is allowed, but recovery must conservatively reconcile any unresolved admission that could have crossed the send boundary. Only durable proof of no dispatch permits the not-sent path. Fault-inject immediately before send, after transmission, and after response receipt but before durable result storage.
 
 A gateway process must never run repository build/test code under its credential-bearing identity. Git operations importing untrusted objects use a hardened import worker; GitHub API credentials stay in the gateway transport process. Model processes cannot call arbitrary gateway endpoints.
 
@@ -639,9 +693,11 @@ A gateway process must never run repository build/test code under its credential
 
 Reconciliation observations are versioned receipts. If an external service no longer retains an operation result, query durable entity state; if that is insufficient, keep `unknown` and require operator resolution rather than inventing success.
 
+Every managed remote ref mutation requires a certified provider-side expected-old-OID or expected-absence primitive, including metadata mirrors and conditional deletions. A read followed by an unconditional update/delete is not compare-and-swap. Record the concrete adapter mechanism and negative race evidence. Unsupported conditional mutation fails closed as `TARGET_CAS_UNSUPPORTED`; it cannot be replaced by a weaker API call. Shared-target promotion additionally requires Section 16's protection/review/check semantics; a ref-update primitive is not permission to bypass them.
+
 ## 16. Promotion and merge policy
 
-**REQ-28 — Three separate actions.** Internal task landing, milestone promotion to a shared target, and release/deployment are distinct permissions and receipts. Default policy permits verified internal landing after authorized implementation, requires human authorization for milestone promotion, and disables deployment.
+**REQ-28 — Three separate actions.** Internal task landing, milestone promotion to a shared target, and release/deployment are distinct permissions and receipts. Default policy permits verified internal landing after authorized implementation, requires human authorization for milestone promotion, and disables deployment. The `herdrm-distributed-v1` profile makes human-signed candidate approval mandatory; generic Path policy-only promotion cannot satisfy it.
 
 ### 16.1 Candidate approval
 
@@ -660,7 +716,7 @@ These policies must be visibly distinct. A native queue does not retroactively e
 
 A promotion requires current Path candidate evidence, valid applicable human approval, current supervisor queue admission, current actor permissions, readable supported repository protections, required GitHub reviews/checks, and the expected head. A HerdRM approval is **not** a GitHub PR review unless an explicitly implemented user-authorized integration submits that review as the actual GitHub user. Do not bypass GitHub's required human reviews with a bot check.
 
-All application-initiated merges use the one gateway lane keyed by `(forgeHost, repositoryNodeId, targetRef)`. Unrelated targets continue independently. A task/milestone worker cannot merge directly even if its run is otherwise authorized to publish.
+All application-initiated merges use the one gateway lane keyed by `(forgeHost, repositoryNodeId, targetRef)`, shared across projects. Unrelated targets continue independently. A task/milestone worker cannot merge directly even if its run is otherwise authorized to publish. Service-owned promotion may proceed under current authority/target fencing after implementation has stopped; it must not relaunch implementation solely to manufacture a worker lease.
 
 ### 16.3 Native merge-queue profile
 
@@ -687,7 +743,7 @@ Newer asynchronous GitHub merge endpoints may be used only after their acknowled
 
 ### 16.5 External merges and protection drift
 
-A human may merge directly in GitHub. Record the actual merge, identify the actor and subject, and evaluate Path acceptance. Without a valid equivalent approval/policy receipt, mark `integrated-unaccepted` through an integration-phase blocker; do not falsify a human approval or erase the external fact.
+A human may merge directly in GitHub. Record the actual merge, identify the actor and subject, and evaluate Path acceptance. Without a valid equivalent approval/policy receipt permitted by the active profile, mark `integrated-unaccepted` through an integration-phase blocker; do not falsify a human approval or erase the external fact. In the HerdRM profile an equivalent receipt must still establish the required human authorization.
 
 Protection changes, unknown rulesets, missing check identities, unexpected head writes, and unauthorized target movement suspend new automatic promotion. They do not cancel already-running unrelated implementation. Recovery requires current observation and explicit policy reconciliation; stored old protection snapshots are not reusable permission.
 
@@ -699,7 +755,7 @@ Protection changes, unknown rulesets, missing check identities, unexpected head 
 
 | Endpoint | Required behavior |
 |---|---|
-| `GET /v1/capabilities` | Protocol/version, supported actions, compatibility, feature flags; no credentials. |
+| `GET /v1/capabilities` | Protocol/version, API role, schema/profile identities, supported actions, compatibility, feature flags; no credentials. |
 | `GET /v1/projects` | Authorized project registry with projection freshness and pagination. |
 | `GET /v1/projects/{id}/snapshot` | Consistent projection snapshot, cursor/epoch, milestone summaries and component revisions. |
 | `GET /v1/projects/{id}/milestones/{mid}` | Milestone contract/state view, attempts, evidence/PR references, admissible UI actions. |
@@ -710,7 +766,7 @@ Protection changes, unknown rulesets, missing check identities, unexpected head 
 | `POST /v1/approval-requests` | Construct exact server-side approval subject and short-lived signing challenge. |
 | `POST /v1/artifact-uploads` | Allocate scoped bounded upload; chunks/finalize use its capability, never arbitrary paths. |
 
-A command acknowledgement returns `202` plus operation ID and current disposition. Replayed known results may return `200`. State conflict/stale subject returns `409`; invalid schema `400`; unsupported protocol `426`; authentication failure `401`; authorization failure `403`; resource limits `429` or typed `409` as appropriate. Admission never reports completion merely because work was queued.
+A command acknowledgement returns `202` plus operation ID and current disposition. Replayed known results may return `200`. State conflict/stale subject returns `409`; invalid schema `400`; unsupported protocol `426`; authentication failure `401`; authorization failure `403`; unavailable authority/capability `503`; resource limits `429` or typed `409` as appropriate. Unmet domain gates return typed conflicts/blocks, not false success. Admission never reports completion merely because work was queued. The internal Path adapter's status codes are translated explicitly in Section 17.5.
 
 ```typescript
 interface CommandEnvelope {
@@ -719,15 +775,17 @@ interface CommandEnvelope {
   clientId: UUID;
   projectId: UUID;
   milestoneId?: UUID;
+  authority?: AuthorityContext;
   expectedRevision?: Revision;
   expectedContractDigest?: Digest;
   fence?: OwnershipFence;
+  attemptFence?: OwnershipFence;
   action: string;                     // schema is a closed discriminated union
   payload: unknown;                   // validated by the action-specific schema
 }
 ```
 
-Authenticated actor identity comes from the connection/enrollment and verified signature, not an arbitrary `actor` field. For each action, the schema must make the relevant revision/fence mandatory; optional syntax in this illustrative common envelope does not make admission checks optional.
+Authenticated actor identity comes from the connection/enrollment and verified signature, not an arbitrary `actor` field. For each action, the schema must make the relevant revision/authority/fences mandatory; optional syntax in this illustrative common envelope does not make admission checks optional.
 
 ### 17.2 Required command actions
 
@@ -752,17 +810,46 @@ Project/runner registration, role changes, protection-profile changes, key rotat
 
 ### 17.3 Runner protocol
 
-A runner initiates an authenticated outbound connection; the coordinator need not hold SSH private keys or inbound access to every machine. Required operations are enrollment/capabilities, heartbeat, assignment poll/acknowledge, attempt start/inspect/pause/quit, result/artifact submission, and reconciliation. Messages bind runner ID, runner boot identity, assignment and operation ID, and current epoch/fence.
+A runner initiates an authenticated outbound connection; the coordinator need not hold SSH private keys or inbound access to every machine. Required operations are enrollment/capabilities, heartbeat, assignment poll/acknowledge, attempt start/inspect/pause/quit, result/artifact submission, and reconciliation. Messages bind runner ID, runner boot identity, assignment and operation ID, authority context and current applicable fences. The `herdrm/runner/v1` schema references canonical Path subject/fence types.
 
 A runner maintains a local durable mapping before invoking Atomic. Redelivered assignments return the same local operation/run identity. If that identity cannot be established, it returns an unknown-outcome block rather than launching again. Reconnection requires a state handshake, not replay of every cached start message.
 
-Existing HerdRM SSH/Tailscale facilities may assist initial installation and terminal access under explicit user permission. They are not the job authority and must not be copied into the runner as shared application credentials.
+Existing HerdRM SSH/Tailscale facilities may assist initial installation and terminal access under explicit user permission. They are not the job authority and must not be copied into the runner as shared application credentials. Path-facing machine/control aliases delegate to this protocol; they do not create another Path machine server.
 
 ### 17.4 Path control port
 
 The Path package must expose typed `observe`, `decideNextAction`, `applyTransition`, `lookupOperation`, `admitEvidence`, and `recover` operations through local/remote adapters. `decideNextAction` returns one of `execute`, `wait`, `blocked`, or `complete`, with typed action/subject/prerequisites. It never grants permanent permission; effect/transition admission rechecks current state.
 
+Path owns their canonical schemas and golden fixtures. Named doors such as `request_execution`, `pause_execution`, `resume_execution`, `offer_evidence` and `promote_candidate` are validated adapters over the same port, not independent reducers. The optional Path HTTP adapter is hosted at a separately advertised Path base URL, with `POST /v1/commands/<door-name>` and `GET /v1/observations/<door-name>` relative to that base. Product clients do not mistake those routes for the outer HerdRM API. Embedded calls use the same port without an extra network hop.
+
 The Swift package consumes JSON schemas and shared golden fixtures. Generate models when practical; any hand-maintained bindings must pass cross-language round-trip tests. Swift must not parse a free-text `next_action` string into executable behavior.
+
+### 17.5 Product-to-Path and runner mapping
+
+The following mapping is normative together with PATH-DS-001 Section 5.1. It describes proposed contracts, not existing SDK methods. Freeze concrete action schemas before consumers; every advertised action must map to an implemented handler and pass cross-repository fixtures.
+
+| Product action | Path / supervisor / runner execution | Required distinction |
+|---|---|---|
+| `source.observe` | Supervisor snapshot/intake adapter; Path records an observation through a closed transition schema where needed | Observation alone never submits or executes. |
+| `source.submit` | Supervisor authenticates exact revision; Path registry/contract submission transition | Stable submission identity; no separate invented scope/plan approval. |
+| `milestone.start` | Path `observe` / `decideNextAction`; supervisor reserves/places; Path `request_execution`; one runner `launch` | One assignment/controller/root launch; acknowledgement is not completion. |
+| `milestone.pause` | Path `pause_execution`; runner `pauseRun`; admit observed quiescence/fencing | Requested versus observed pause remains explicit. |
+| `milestone.resume` | Path `resume_execution`; runner `inspectRun` / `resumeRun` | Valid same-run continuation only; invalid/cross-host continuation uses explicit recovery. |
+| `milestone.cancel` | Path `cancel_execution`; cancel pending launch or runner `quitRun`; admit terminal disposition | Every nonterminal lifecycle; never start/resume merely to cancel; retain uncertain effects. |
+| `clarification.answer` | Store authenticated answer; Path revision/clarification transition | Answer composes a revision, not automatic submission or promotion approval. |
+| `contract.amend` | Path impact assessment and revision transitions with supervisor fencing of affected work | Preserve unaffected history; invalidate/revalidate affected evidence and approvals. |
+| `attempt.report` | Finalize runner artifacts; Path `offer_evidence` / `admitEvidence` | Applicable milestone and attempt fences; worker-written success is not proof. |
+| `attempt.recover` | Supervisor fences/reassigns; Path `recover`; new `request_execution` where needed | Preserve old run history, accepted work and budgets; no invented migration. |
+| `budget.extend` | Supervisor budget authorization/store plus applicable Path policy-bound transition | Explicit new limit and rationale; retries cannot reset counters. |
+| `promotion.approve` | Product challenge/signature verification; Path `record_promotion_authorization` | Exact subject, human scope and profile; not automatically a GitHub review. |
+| `promotion.revoke` | Path `revoke_promotion_authorization`; gateway blocks new use | Reconcile effects that may already have acted. |
+| `promotion.enqueue` / `promotion.dequeue` | Supervisor queue; Path `promote_candidate` only when eligible; gateway execution/removal reconciliation | Queue admission is not merging; target lane spans projects. |
+| `migration.preview` / `migration.apply` | Path migration/recovery port with supervisor quiescence/transfer coordination | Preview is read-only; apply binds inventory digest and one authority switch. |
+| Reads and operation recovery | Path `observe` / `lookupOperation` / `recover` plus labelled supervisor/runtime/GitHub projections | Exact document/state subjects; stale activity cannot become accepted progress. |
+
+Authenticate at the product boundary and pass verified service context to Path; do not trust actor/role claims from payloads. Fresh admission still checks current authority, applicable revisions, fences and policy. Internal Path `stale-revision`/HTTP 412 maps to product `STALE_REVISION`/409; `stale-controller` maps to `STALE_FENCE`/409; `unsupported-version` to `PROTOCOL_UNSUPPORTED`/426; `unsupported-capability` to `CAPABILITY_UNAVAILABLE`/503; `target-cas-unsupported` to `TARGET_CAS_UNSUPPORTED`/409. Unknown outcomes map to the operation-specific `EFFECT_OUTCOME_UNKNOWN` or `LAUNCH_OUTCOME_UNKNOWN` disposition and retain last certain state, not a generic retryable failure. Unmapped domain codes block capability advertisement.
+
+Preserve identity and canonical payload for retries of the same logical operation. When one product action expands into several operations, persist a parent-to-child mapping with distinct deterministic child IDs and immutable payload digests before effects. Do not reuse an ID for different layer-specific payloads or allocate another child to hide a timeout. Cancellation/reconciliation can inspect the whole operation graph after restart. AC-081 exercises the actual HerdRM adapter and runner with shared Path fixtures; two independently passing mock protocols do not prove compatibility.
 
 ## 18. Events, projections, and HerdRM UI
 
@@ -846,6 +933,7 @@ A proposed non-secret configuration shape is:
 
 ```yaml
 schemaVersion: 1
+profile: herdrm-distributed-v1
 installation:
   mode: single-coordinator
   stateRoot: /var/lib/herdrm-orchestration
@@ -882,7 +970,7 @@ Health must distinguish process liveness, canonical store readiness, durable Ato
 
 Distributed mode requires the certified durable Atomic backend. This specification adds no replacement runtime database; Atomic retains its supported DBOS/Postgres arrangement. No automatic fallback to non-durable execution is allowed for accepted distributed milestones. Installation/bootstrap must probe the actual supported runtime rather than infer availability from a package file.
 
-Pin Node/runtime dependencies, GitHub API version, schema generator, and SQLite binding in the delivered lock/compatibility manifests. Do not use “latest” in reproducibility-critical execution configuration. Atomic updates are separate compatibility promotions, not an incidental global reinstall.
+Pin Node/runtime dependencies, GitHub API version, schema generator, and SQLite binding in the delivered lock/compatibility manifests. Do not use “latest” in reproducibility-critical execution configuration. Atomic updates are separate compatibility promotions, not an incidental global reinstall. The profile binds the Path/product/runner schema digests and actual adapter conformance; specification alignment alone cannot enable runtime admission.
 
 ### 20.2 Performance and resource acceptance targets
 
@@ -896,7 +984,7 @@ Enforce budget ceilings across all retries, resumes, and hosts for a milestone. 
 
 Back up a consistent coordination snapshot, Path state/journals, referenced content-addressed artifacts, event cursors, and a manifest of immutable software/policy identities. Quiesce new mutation/effect admission during the backup cut, flush journals, and use a tested SQLite backup/checkpoint procedure. Record the cut and any already-submitted remote effects. Backing up a live database file while omitting required WAL data is not accepted backup behavior.
 
-Restore into a new coordination epoch. Reconcile all bound remote branches, PRs, queues, and control refs, not only operations listed as pending in the older backup. A remote effect may have occurred after the backup and be absent locally. Audit gaps remain explicit and block affected automatic promotion until resolved.
+Restore into a new coordination epoch. Reconcile all bound remote branches, PRs, queues, and control refs, not only operations listed as pending in the older backup. A remote effect may have occurred after the backup and be absent locally. Audit gaps remain explicit and block affected automatic promotion until resolved. Restore/anti-rollback procedures preserve Section 6.3's high-water and incarnation distinctions rather than copying old lease authority into the new installation state.
 
 Accepted evidence, approval provenance, completion receipts, and migration originals are preserved by default. Retention may remove transient workspaces and unaccepted raw logs only after durable result ingestion and policy checks. Deletion of accepted evidence requires an explicit retention/deletion operation and must leave a tombstone/impact record; it may invalidate claims requiring that evidence. Do not silently garbage-collect referenced artifacts.
 
@@ -916,9 +1004,11 @@ Map intent/synthesis to milestone context; existing plans/tasks to one authorita
 
 Competing authorities, duplicate milestone identities, unmatched shipment records, modified approvals, missing evidence, and uncertain active processes block apply or activation. The service must never pick whichever file looks newest.
 
+The Path package must additionally retain PATH-LAYOUT-001's bounded self-migration bootstrap, quiescence/cutover guards against replay of legacy writers, complete WIRE-2 success/refusal coverage and registered legacy retirement. Generic migration fixtures alone do not substitute for its actual repository migration and v3 continuation evidence. Those local prerequisites do not require a running HerdRM UI.
+
 ### 21.1 Authority transfer
 
-Standalone-to-distributed enrollment creates one authority record and leaves local materializations marked remote/read-only. Distributed-to-standalone export requires quiescence, reconciliation of pending effects, revocation of distributed assignments, and explicit transfer. Both directions preserve operation/evidence identity and record the new authority epoch.
+Standalone-to-distributed enrollment creates one authority record and leaves local materializations marked remote/read-only. Distributed-to-standalone export requires quiescence, reconciliation of pending effects, revocation of distributed assignments, and explicit transfer. Both directions preserve operation/evidence identity and record the new authority binding/coordination epoch.
 
 A multi-milestone project cannot be downgraded into an older single-milestone layout by discarding other milestones. Unsupported downgrade is refused.
 
@@ -937,77 +1027,94 @@ Keep prior acceptance definitions/evidence intact and register new named checks 
 | `STALE_REVISION` / `STALE_CONTRACT` | Refuse transition; return current revision and invalidate stale UI action. |
 | `STALE_FENCE` / `AUTHORITY_CHANGED` | Refuse acceptance/effect; quarantine late results and require reconciliation. |
 | `LAUNCH_OUTCOME_UNKNOWN` | Inspect runtime/local launch mapping; do not create another run. |
-| `EFFECT_OUTCOME_UNKNOWN` | Freeze conflicting effects in that scope; reconcile external fact. |
+| `EFFECT_OUTCOME_UNKNOWN` | Freeze conflicting effects in that scope; reconcile external fact, including unresolved admitted records. |
 | `RUNNER_UNREACHABLE` | Preserve last-known status; fence/reassign according to policy, not guessed process death. |
 | `DURABILITY_UNAVAILABLE` | Block distributed launch/resume before new execution. |
 | `CHECK_FAILED` / `CHECK_INCONCLUSIVE` | Record exact outcome; bounded repair or material block. |
 | `APPROVAL_STALE` / `APPROVAL_REVOKED` | Prevent new promotion admission; reconcile already-submitted remote operations. |
 | `PROTECTION_UNKNOWN` / `PROTECTION_CHANGED` | Disable affected automatic promotion; continue eligible independent implementation. |
+| `TARGET_CAS_UNSUPPORTED` | Refuse conditional remote mutation; never substitute a preflight read and unconditional write/delete. |
 | `SOURCE_CHANGED` | Record candidate revision; do not silently rewrite active contracts. |
 | `MIGRATION_AMBIGUOUS` / `JOURNAL_CORRUPT` | Fail closed with inventory/valid-prefix diagnostics; no inferred completion. |
 | `RESOURCE_LIMIT` / `BUDGET_EXHAUSTED` | Stop new admission; preserve evidence and require explicit limit change. |
 | `CAPABILITY_UNAVAILABLE` / `PROTOCOL_UNSUPPORTED` | Typed refusal; no no-op `completed` response. |
 | `PROJECTION_PENDING` / `MIRROR_PENDING` | Accepted state remains valid; repair display/history projection independently. |
 
-Pause/cancel requests must display `requested` until runtime quiescence or a fenced terminal outcome is observed. Cancellation does not imply Git rollback, PR closure, or deletion. Compensating remote actions require their own admission and receipts. A terminal client disconnect must not cancel the underlying accepted job.
+Pause/cancel requests must display `requested` until runtime quiescence, absence of admitted execution, or a fenced terminal outcome is established under Section 8.1. Cancellation does not imply Git rollback, PR closure, process death, or deletion. Uncertain effects retain their independent reservations after terminal cancellation. Compensating remote actions require their own admission and receipts. A terminal client disconnect must not cancel the underlying accepted job.
 
 ## 23. Implementation work packages
 
-**REQ-36 — Delivery sequencing.** The following packages form the implementation plan baseline. Each must produce addressable task contracts with owned paths, dependencies, outputs, acceptance IDs, and exact verification commands before execution. Parallel package work is permitted only after shared interface contracts are frozen; changes to those contracts require revision/revalidation.
+**REQ-36 — Delivery sequencing.** The following packages form the implementation plan baseline. Each must produce addressable task contracts with owned paths, dependencies, outputs, acceptance IDs, and exact verification commands before execution. Parallel package work is permitted only after shared interface contracts are frozen; changes to those contracts require revision/revalidation. Verify the Path v3 baseline before accepted distributed integration. HerdRM backend and UI work may proceed against frozen contracts in parallel, but mock compatibility cannot satisfy live acceptance.
 
 | Package | Repository and owned area | Dependencies | Deliverable and acceptance focus |
 |---|---|---|---|
-| WP-01 Protocol and contract foundation | HerdRM `packages/orchestration-protocol/`, `Packages/OrchestrationKit/` schema fixtures; Path contract register | None | Concrete schemas, generated bindings, identity/version/failure contracts, supersession record. AC-001–004, AC-063. |
-| WP-02 Path milestone state and migration | Path `record/`, `shared/`, `control/` | WP-01 | Layout 3, canonical milestone state, resolver, journals, local/remote ports, preview/apply/recover. AC-005–012, AC-067–070. |
-| WP-03 Supervisor service and coordination | HerdRM `services/supervisor/` coordination/auth/storage | WP-01, Path port contract | Durable operations, enrollment, assignments, lease generations, capacity, event log, service lifecycle. AC-013–021, AC-057–062. |
-| WP-04 Runner and Atomic adapter | HerdRM `services/runner/`; narrowly scoped Atomic patches only for proven correlation/isolation gaps | WP-01, WP-03 assignment protocol | Persistent RPC, launch correlation, certified isolation, artifacts, pause/resume/recovery. AC-022–030. |
-| WP-05 Intake and Path delivery driver | Path entry/control/dispatch; supervisor intake adapter | WP-02–04 | Revision submission, clarification/amendment, real end-to-end driver, bounded task execution. AC-031–037. |
-| WP-06 Branch, evidence, and publication | Path dispatch/github/evidence; HerdRM effect gateway integration | WP-02, WP-04, gateway contract | Task/milestone refs, candidate verification, serialized internal landing, PR idempotency. AC-038–046. |
-| WP-07 Promotion and integration queue | HerdRM supervisor queue/approval; Path GitHub promotion adapter | WP-03, WP-06 | Human approval, native/local/manual profiles, exact-subject integration, uncertain-effect recovery. AC-047–056. |
-| WP-08 Native project/milestone UX | HerdRM macOS/iOS features and `Runtime/Orchestration/` | WP-01, projection API contract; live validation after WP-03 | Revision-aware documents, state/progress, controls, attention, terminal links, queue UI. AC-064–066, AC-073–075. |
-| WP-09 Operational hardening | HerdRM service deployment/backup/limits; cross-repository harness | WP-02–08 | Backup/restore, retention, upgrade, performance, security regression and license manifest. AC-071–072, AC-076–078. |
-| WP-10 End-to-end certification | Cross-repository fixtures/evidence and release manifests | WP-01–09 | Two-host same-repository delivery, crash/fence/merge races, documented release results. AC-079–080 plus demonstrations in Section 25. |
+| WP-01 Protocol and contract foundation | Path `control/contracts/` and contract register; HerdRM `packages/orchestration-protocol/`, `Packages/OrchestrationKit/` references/bindings | None | Canonical Path schemas, product/runner mapping, identity/profile/failure fixtures, alignment and supersession. AC-001–004, AC-063, AC-081. |
+| WP-02 Path milestone state and migration | Path `record/`, `shared/`, `control/`, local entry wiring | WP-01 | Verified full local layout baseline, resolver, journals, migration and retained GEN/MIG/WIRE/CLEAN obligations; no UI prerequisite. AC-005–012, AC-067–070, AC-082, AC-084, AC-086. |
+| WP-03 Supervisor service and coordination | HerdRM `services/supervisor/` coordination/auth/storage | WP-01, Path port contract; verified package for live integration | One enrollment/placement/lease/operation authority, capacity, events, service lifecycle, shared target reservations. AC-013–021, AC-057–062, AC-081, AC-083. |
+| WP-04 Runner and Atomic adapter | HerdRM `services/runner/`; narrowly scoped Atomic patches only for proven correlation/isolation gaps | WP-01, WP-03 assignment protocol | Single production RPC/process adapter, launch correlation, certified isolation, artifacts, pause/resume/recovery. AC-022–030, AC-081–082. |
+| WP-05 Intake and Path delivery driver | Path entry/control/dispatch; supervisor intake adapter | WP-02–04 for live integrated execution | Submission, clarification/amendment, retained isolated codebase-generation boundary, real driver and bounded children. AC-031–037, AC-086. |
+| WP-06 Branch, evidence, and publication | Path dispatch/github/evidence; HerdRM gateway hosting | WP-02, WP-04, gateway contract | Task/milestone refs, exact-subject verification, provider-conditional internal landing and publication. AC-038–046, AC-084–085. |
+| WP-07 Promotion and integration queue | HerdRM supervisor queue/approval; Path proof/GitHub adapter | WP-03, WP-06 | Human approval, native/local/manual profiles, shared target lane, uncertain-effect recovery. AC-047–056, AC-083, AC-085. |
+| WP-08 Native project/milestone UX | HerdRM macOS/iOS features and `Runtime/Orchestration/` | WP-01, projection contract; live validation after WP-03 | Revision-aware documents, controls, attention, terminals and queue; actual adapter behavior. AC-064–066, AC-073–075, AC-082, AC-084. |
+| WP-09 Operational hardening | HerdRM service deployment/backup/limits; cross-repository harness | WP-02–08 | Epoch/incarnation/high-water restore, retention, upgrades, performance, security and license manifest. AC-071–072, AC-076–078, AC-083, AC-086. |
+| WP-10 End-to-end certification | Cross-repository fixtures/evidence and release manifests | WP-01–09 and applicable Path component proofs | Actual two-host same-repository delivery and native product proof. AC-079–080 plus AC-081–086 and Section 25 demonstrations. |
 
 ### 23.1 Minimum independently addressable task decomposition
 
 | Task | Contract boundary | Required output |
 |---|---|---|
-| W01-T01 | Protocol schemas and deterministic canonicalization | Concrete closed schemas, examples, schema compatibility rules. |
-| W01-T02 | Swift/TypeScript bindings and golden fixtures | Cross-language conformance tests; no duplicated gate implementation. |
-| W01-T03 | Baseline/supersession and packaging contract | Registered Path revision; pinned dependency/compatibility manifest format. |
+| W01-T01 | Protocol schemas and deterministic canonicalization | Path-owned domain schemas; product/runner imports, concrete closed schemas and compatibility rules. |
+| W01-T02 | Swift/TypeScript bindings and golden fixtures | Cross-language and actual adapter conformance; no duplicated gate implementation. |
+| W01-T03 | Baseline/supersession and packaging contract | Pinned alignment manifest, registered Path revision, profile and compatibility format. |
 | W02-T01 | Versioned resolver and project/milestone records | Typed record adapters and ambiguity tests. |
 | W02-T02 | Journal, operation lookup, projection separation | Crash-injection tests at each commit boundary. |
-| W02-T03 | Migration and authority transfer | Read-only preview plus interruption/competing-authority fixtures. |
+| W02-T03 | Migration and authority transfer | Read-only preview, interrupted cutover, legacy replay refusal and actual Path migration evidence. |
 | W03-T01 | Service storage/auth/administration | SQLite migrations, enrollment, roles, process exclusivity. |
-| W03-T02 | Assignment/capacity/fence coordinator | Race/expiry/reassignment and fair-scheduling tests. |
-| W03-T03 | Operations/outbox/projections | Durable replay/cursor/snapshot behavior across restart. |
-| W04-T01 | Persistent Atomic RPC lifecycle | Launch correlation and lost-acknowledgement recovery. |
+| W03-T02 | Assignment/capacity/fence coordinator | One lease issuer; race/expiry/reassignment, shared-target and fair-scheduling tests. |
+| W03-T03 | Operations/outbox/projections | Durable parent/child replay, cursors/snapshots and Path commit reconciliation. |
+| W04-T01 | Persistent Atomic RPC lifecycle | Single runner-owned launch correlation and lost-acknowledgement recovery. |
 | W04-T02 | Certified workspace/process profiles | Mac/Linux isolation and controlled Git import tests. |
-| W04-T03 | Artifact ingestion and cleanup | Resumable finalized uploads; safe retention/quiescence. |
+| W04-T03 | Artifact ingestion and cleanup | Resumable finalized uploads; safe retention/quiescence and conditional deletion. |
 | W05-T01 | Source adapters and authenticated submission | Immutable snapshots, dedupe, observe-only defaults. |
-| W05-T02 | Contract compilation and scoped context | Inline/separate contracts, DAG/resources, source/topic references. |
-| W05-T03 | Delivery/clarification/amendment workflow | Typed phase outcomes, real task children, bounded repair. |
-| W06-T01 | Branch and internal integration adapter | Expected-ref landings, task proof, shared-base refresh. |
+| W05-T02 | Contract compilation and scoped context | Inline/separate contracts, DAG/resources, source/topic references and retained GEN boundary. |
+| W05-T03 | Delivery/clarification/amendment workflow | Typed phase outcomes, real children, lifecycle control mapping and bounded repair. |
+| W06-T01 | Branch and internal integration adapter | Provider-enforced expected-ref landings, task proof, shared-base refresh. |
 | W06-T02 | Independent verifier and evidence admission | Signed exact-subject receipts, review independence, generator checks. |
-| W06-T03 | Gateway publication/effect reconciliation | PR marker/identity, lost-response tests, no worker credentials. |
-| W07-T01 | Signed human approval protocol | Fresh challenge, stale/revoked subject handling, actor provenance. |
-| W07-T02 | Local/native/manual promotion adapters | Certified protection/head/base semantics and queue recovery. |
-| W07-T03 | Post-merge acceptance and closeout | Actual merge mapping, completion receipt, summary projection. |
-| W08-T01 | Native stores and project/milestone document views | Freshness, manifests, branch selection, deduplicated identity. |
-| W08-T02 | Native controls and approval/queue views | Conflict handling, real user intent, offline restrictions. |
-| W08-T03 | Fleet/mobile/attention integration | Optional terminal links, retained existing bridge contracts, persisted attention. |
-| W09-T01 | Packaging/service lifecycle/upgrades | Reproducible pinned installs, health, safe shutdown and promotion. |
-| W09-T02 | Backups/restore/retention | New-epoch recovery and remote inventory reconciliation. |
-| W09-T03 | Security/performance/release documentation | Threat-model tests, reference workload results, dependency/license manifest. |
-| W10-T01 | Real distributed delivery demonstration | Actual model-backed two-host execution and human promotion evidence. |
-| W10-T02 | Failure-injection demonstration | Stale worker, uncertain merge, restart, and amendment evidence. |
-| W10-T03 | Compatibility and acceptance report | Complete requirement-to-test-to-artifact mapping and honest limitations. |
+| W06-T03 | Gateway publication/effect reconciliation | PR identity, conditional mirror updates, admitted/send-window recovery, no worker credentials. |
+| W07-T01 | Signed human approval protocol | Fresh challenge, stale/revoked subject handling, mandatory profile and actor provenance. |
+| W07-T02 | Local/native/manual promotion adapters | Certified protection/head/base semantics and cross-project queue recovery. |
+| W07-T03 | Post-merge acceptance and closeout | Actual merge mapping, immutable completion, independent summary projection. |
+| W08-T01 | Native stores and project/milestone document views | Freshness, manifests, branch selection, independent contract revisions and identity. |
+| W08-T02 | Native controls and approval/queue views | Full lifecycle table, conflict handling, real user intent and offline restrictions. |
+| W08-T03 | Fleet/mobile/attention integration | Optional terminals, retained bridge contracts and persisted attention. |
+| W09-T01 | Packaging/service lifecycle/upgrades | Pinned installs, health, safe shutdown and compatibility/profile promotion. |
+| W09-T02 | Backups/restore/retention | New-epoch recovery, high-water/incarnation tests and bound-entity reconciliation. |
+| W09-T03 | Security/performance/release documentation | Threat tests, workload results, EVAL evidence applicability and dependency/license manifest. |
+| W10-T01 | Real distributed delivery demonstration | Actual model-backed two-host execution, real adapter and human promotion. |
+| W10-T02 | Failure-injection demonstration | Stale worker, uncertain effect, restart, cancellation and amendment evidence. |
+| W10-T03 | Compatibility and acceptance report | Complete cross-repository requirement/task/case/artifact mapping and honest limitations. |
 
 Task IDs above are planning identifiers scoped to this specification. The adopted Path plan must allocate stable UUIDs, freeze exact owned paths, and resolve intra-package dependencies. For example, schema consumers depend on W01-T01; journal-based migration depends on W02-T02; promotion depends on evidence and the effect gateway. Shared schema/register files have one designated landing owner; parallel workers propose changes without overwriting them.
 
+### 23.2 Companion obligation and evidence mapping
+
+| Companion obligation | Owning deliverable / evidence | Product acceptance |
+|---|---|---|
+| PATH-LAYOUT-001 GEN-1–GEN-5 and AC5 | Path codebase-generation stage with restricted snapshot, supporting provenance, effective read boundary and denied prose-access probes | WP-02/WP-05; AC-086. UI or migration prose cannot substitute. |
+| PATH-LAYOUT-001 MIG/WIRE/CLEAN, AC1/AC2/AC6 | Full local v3 entry wiring, bootstrap/cutover/continuation, real repository migration and registered retirement | WP-02; AC-067–070, AC-086. Generic fixtures alone are insufficient. |
+| PATH-LAYOUT-001 EVAL-1–EVAL-3 and AC7 | Paired fresh-context evaluation and honest optional/mandatory decision | WP-09; AC-078, AC-086. No positive outcome required; reuse exact applicable evidence rather than rerun without reason. |
+| Layout SUP-7/AC8; PATH-DS-001 DS-AC2/DS-AC7/DS-AC14 | Canonical Path port, actual product/runner adapter and one launch ledger | WP-01/WP-03/WP-04; AC-081. Separate mocks cannot establish interoperability. |
+| Layout LIFE-9/AC11; DS-AC5/DS-AC14 | Nonterminal cancellation, pause/resume and admitted-effect crash recovery | WP-02/WP-04/WP-08; AC-053, AC-055, AC-082. |
+| DS-AC3/DS-AC4/DS-AC15 | Shared repository/target lane and authority/epoch/incarnation recovery | WP-03/WP-07/WP-09; AC-051, AC-071, AC-083. |
+| Layout STORE/AC10; DS-AC13/DS-AC16 | Authority-owned contracts, branch-specific knowledge and control-mirror provenance | WP-02/WP-06/WP-08; AC-065, AC-084. |
+| Layout SUP-5/AC9; DS-AC8/DS-AC9 | Provider-conditional creation/update/mirror/deletion and promotion protection proof | WP-06/WP-07; AC-030, AC-039, AC-053, AC-085. |
+| DS-AC10–DS-AC12 | Actual HerdRM backend plus Path two-host component delivery | Prerequisite evidence for WP-10; AC-079/AC-080 and native demonstrations A/B remain mandatory. |
+
+Each adopted task contract identifies its owned requirement IDs and exact evidence obligations. Reuse is permitted only when source/runtime/policy/profile and measured scope apply, or an explicit permitted revalidation establishes applicability. A component conformance pass cannot be relabelled as native-product acceptance. Missing mappings or incompatible evidence block release. Preserve the 56 historical Path case definitions unchanged; new alignment cases are additional named obligations, not retroactive passes.
+
 ## 24. Acceptance catalogue
 
-**REQ-37 — Executable acceptance.** Each case below must have a registered executable test/scenario, its exact command or tool invocation, source/runtime/policy identity, environment, outcome, and durable evidence manifest. Unit fixtures, simulated transport tests, real Git tests, live Atomic tests, real GitHub effects, and actual two-host demonstrations must be labelled separately. A mocked test cannot satisfy a live requirement. All cases are **not run** at publication of this specification.
+**REQ-37 — Executable acceptance.** Each case below must have a registered executable test/scenario, its exact command or tool invocation, source/runtime/policy identity, environment, outcome, and durable evidence manifest. Unit fixtures, simulated transport tests, real Git tests, live Atomic tests, real GitHub effects, and actual two-host demonstrations must be labelled separately. A mocked test cannot satisfy a live requirement. All cases are **not run** at publication of this specification. Version 1.1 adds AC-081–086 without converting any prior case or companion obligation into a passing result.
 
 | ID | Requirement | Scenario and required observable result |
 |---|---|---|
@@ -1091,39 +1198,45 @@ Task IDs above are planning identifiers scoped to this specification. The adopte
 | AC-078 | REQ-11 | Compare task-scoped language guidance with baseline on Forma-like and UXP-like fixtures. Report correctness, discovery work, rework and cost/usage; do not mandate guidance solely because it adds documentation. |
 | AC-079 | REQ-02, REQ-03, REQ-36, REQ-37, REQ-38 | Complete the live two-host same-repository demonstration with actual model execution, durable verification and human-authorized promotion. Retain reproducible evidence and validate the adopted task/requirement/case traceability index. |
 | AC-080 | REQ-05, REQ-35, REQ-38 | Complete the live recovery demonstration with stale worker, changed candidate, lost external response and interrupted closeout. No duplicate acceptance or unauthorized promotion occurs. |
+| AC-081 | REQ-06, REQ-22, REQ-29, REQ-39 | Run shared Path fixtures through the actual HerdRM product adapter and runner. Repeated start/lost acknowledgement yields one assignment, one Path controller and one correlated Atomic root launch. Verify parent/child operation persistence, pause/resume, approval revocation, stale milestone/attempt fences, typed error translation and unknown outcomes. Two unrelated mocks cannot pass. |
+| AC-082 | REQ-13, REQ-17, REQ-27, REQ-39 | Cancel from every nonterminal lifecycle without starting/resuming work, including unknown launch and in-flight promotion. Distinguish requested from quiescent/fenced terminal state; retain effect reservations. Reject terminal resume and preserve correction history. Inject all admitted/send/result-write crash boundaries; no blind repeat. |
+| AC-083 | REQ-07, REQ-21, REQ-28, REQ-33, REQ-39 | Race promotions from two projects sharing one repository/target: both use one lane. Restore an older backup, rotate epoch and replay old assignments/approvals; reject obsolete authority and reconcile absent-from-backup effects. Separately prove intact restart/incarnation invalidation and high-water ordering. |
+| AC-084 | REQ-09, REQ-10, REQ-19, REQ-30, REQ-39 | Amend one milestone contract while merging another source branch and delaying/conflicting metadata publication. Product commits exclude operational/contracts materializations; neither action changes the other's approved subject. Display correct document manifests and preserve accepted evidence after cleanup; mirror failure cannot roll back acceptance. |
+| AC-085 | REQ-24, REQ-25, REQ-27, REQ-28, REQ-39 | Through the certified provider adapter, change refs after final reads before creation/update/mirror publication/conditional deletion. Expected absence/old OID is enforced atomically; stale requests preserve intervening changes. Unsupported primitives block and raw ref writes cannot bypass protected-target review/check requirements. |
+| AC-086 | REQ-04, REQ-08, REQ-11, REQ-34, REQ-36, REQ-39 | Validate the alignment manifest and full Section 23.2 evidence index. Retain Path's codebase-only generation/prose-isolation proof, actual self-migration/all-door wiring/retirement proof and prescribed paired evaluation. Reuse only applicable exact-subject evidence or explicitly revalidate; missing evidence blocks and a negative/inconclusive language experiment does not require a fabricated positive result. |
 
 ### 24.1 Test classification and evidence handling
 
 Deterministic suites must use controllable clocks/transports and explicit barriers rather than timing guesses. Failure injection must exercise production-backed code paths. Real Git tests use disposable repositories and check actual objects/refs. Network/protection tests use an explicitly authorized disposable GitHub repository. Negative fixtures must not publish fabricated green checks to production repositories.
 
-Record the test mode in every receipt. Live-required cases remain not-run or blocked when credentials/toolchains are unavailable; they must not pass through a fixture fallback. The acceptance report maps each REQ/INV to its cases and each case to exact artifact digests. Missing mappings fail the release gate.
+Record the test mode in every receipt. Live-required cases remain not-run or blocked when credentials/toolchains are unavailable; they must not pass through a fixture fallback. The acceptance report maps each REQ/INV to its cases and each case to exact artifact digests, including REQ-39 and the companion obligations. Missing mappings fail the release gate.
 
 ### 24.2 Invariant traceability
 
 | Invariant | Minimum acceptance coverage |
 |---|---|
 | INV-01 | AC-005, AC-006, AC-012, AC-070 |
-| INV-02 | AC-015, AC-016, AC-021 |
+| INV-02 | AC-015, AC-016, AC-021, AC-081 |
 | INV-03 | AC-003, AC-016, AC-040, AC-044 |
-| INV-04 | AC-009, AC-011, AC-023, AC-062 |
+| INV-04 | AC-009, AC-011, AC-023, AC-062, AC-081 |
 | INV-05 | AC-016, AC-017, AC-028, AC-058 |
-| INV-06 | AC-023, AC-046, AC-048, AC-053, AC-071 |
+| INV-06 | AC-023, AC-046, AC-048, AC-053, AC-071, AC-082 |
 | INV-07 | AC-002, AC-007, AC-024, AC-041, AC-066 |
-| INV-08 | AC-037, AC-040, AC-042, AC-044, AC-055 |
-| INV-09 | AC-013, AC-019, AC-039, AC-051 |
+| INV-08 | AC-037, AC-040, AC-042, AC-044, AC-055, AC-086 |
+| INV-09 | AC-013, AC-019, AC-039, AC-051, AC-083, AC-085 |
 | INV-10 | AC-047, AC-049, AC-050 |
 | INV-11 | AC-025, AC-048, AC-052, AC-057 |
 | INV-12 | AC-028, AC-058, AC-059, AC-061 |
 | INV-13 | AC-003, AC-038, AC-066, AC-069 |
-| INV-14 | AC-010, AC-055, AC-068, AC-069, AC-072 |
+| INV-14 | AC-010, AC-055, AC-068, AC-069, AC-072, AC-082, AC-084 |
 | INV-15 | AC-019, AC-020, AC-052, AC-073 |
-| INV-16 | AC-050, AC-051, AC-052 |
+| INV-16 | AC-050, AC-051, AC-052, AC-085 |
 | INV-17 | AC-056 |
-| INV-18 | AC-044, AC-069, AC-071 |
+| INV-18 | AC-044, AC-069, AC-071, AC-086 |
 
 ## 25. Required end-to-end demonstrations
 
-**REQ-38 — Demonstrate the product, not only its adapters.** The release candidate must execute both demonstrations below with pinned sources and the actual installed Path/Atomic pair. Synthetic tests are additional evidence, not substitutes.
+**REQ-38 — Demonstrate the product, not only its adapters.** The release candidate must execute both demonstrations below with pinned sources and the actual installed Path/Atomic pair, HerdRM supervisor/runner and native clients. Synthetic tests and PATH-DS-001 component conformance are additional/prerequisite evidence, not substitutes.
 
 ### Demonstration A: concurrent delivery
 
@@ -1141,25 +1254,27 @@ During another controlled run, disconnect a runner after local work starts. Fenc
 
 Inject a lost acknowledgement after a real or controlled production-adapter external request, including at least one real GitHub publication/merge outcome in an authorized test repository. Verify lookup/reconciliation rather than blind retry. Change a candidate after approval and demonstrate refusal. Interrupt the coordinator between Path commit and projection update, and interrupt closeout around its commit point. Recovery must preserve one accepted history and no false completed status.
 
-Include a material source amendment and one verification failure requiring bounded repair. Show that repair budget, source/contract binding, independent review requirements, and permission revocation survive restart/reassignment.
+Include a material source amendment and one verification failure requiring bounded repair. Show that repair budget, source/contract binding, independent review requirements, and permission revocation survive restart/reassignment. The alignment cases additionally exercise cancellation, shared targets across projects and admitted-before-result-write uncertainty through the same production components.
 
 ### 25.1 Knowledge-layout evaluation
 
-Separate evaluation fixtures must represent both Forma-like and UXP-like codebases: logical responsibilities mapped to physical packages, multiple independent/shared implementations, wrappers and differing type meanings, authored/generated artifacts, and scoped verification environments. Use the same tasks and comparable model/budget settings for baseline and task-scoped language guidance runs. Report observed outcomes and limitations; do not claim a universal model-quality improvement from a small fixture sample.
+Separate evaluation fixtures must represent both Forma-like and UXP-like codebases: logical responsibilities mapped to physical packages, multiple independent/shared implementations, wrappers and differing type meanings, authored/generated artifacts, and scoped verification environments. Follow PATH-LAYOUT-001 EVAL-1–EVAL-3, including the recorded task types, at least three paired fresh-context repetitions per task, counterbalanced order, identical source/contracts/model/budget settings except guidance, all failed/blocked attempts, and the within-profile adoption rule. The layout's prescribed comparison is the normative experiment, not a looser duplicate study.
+
+Report correctness, discovery work, rework, tokens/cost observations, elapsed time and limitations. A negative/inconclusive result leaves guidance optional or removes degraded automatic guidance; it does not fail the layout milestone merely for lacking improvement. Reuse its evidence only when exact source/runtime/policy and measured scope apply, or after explicit permitted revalidation. Do not claim universal model-quality improvement from a small fixture sample.
 
 ## 26. Definition of implementation complete
 
 The implementation is complete only when mandatory release capabilities are implemented, all applicable acceptance cases have genuine evidence, demonstrations A and B pass, and no unresolved blocker weakens an invariant. Optional native-queue or other capability-specific cases must be explicitly marked not-applicable with their certified safe fallback; they may not be reported passed without execution. Cross-host task children and background iOS push are explicitly outside the first release and must not appear as delivered features.
 
-Deliver reproducible supervisor/runner packages, the Swift client integration, the pinned Path control package, any narrowly required Atomic patch, versioned schemas/golden fixtures, registered contract supersession, migration tools, operator configuration/backup/recovery guides, threat model, evidence-backed acceptance report, and dependency/license notices.
+Deliver reproducible supervisor/runner packages, the Swift client integration, the pinned Path control package, any narrowly required Atomic patch, canonical Path schemas plus product/runner schemas and shared fixtures, the pinned alignment/profile manifests, registered contract supersession, migration tools, operator configuration/backup/recovery guides, threat model, evidence-backed acceptance report, and dependency/license notices. Include AC-081–086 and every applicable companion prerequisite in the evidence index. A Path backend component pass alone cannot establish HerdRM product completion.
 
-The handoff must state the exact tested repositories/commits, installed runtime versions, operating environments, model/verifier policies, deployment modes, and remaining limitations. Existing HerdRM fleet/mobile/terminal tests and Path gate/discovery/recovery tests must still pass in their documented environments. No test may be weakened or silently skipped to create a green report.
+The handoff must state the exact tested repositories/commits, installed runtime versions, operating environments, model/verifier policies, schema/profile identities, deployment modes, and remaining limitations. Existing HerdRM fleet/mobile/terminal tests and Path gate/discovery/recovery tests must still pass in their documented environments. No test may be weakened or silently skipped to create a green report.
 
 A release summary, a code diff, a manager-agent statement, or a screenshot of two terminals is not sufficient proof.
 
 ## Appendix A. Source register and observed implementation boundaries
 
-These sources establish the inspected starting point and external integration constraints. They do not establish that the proposed system has been implemented. Repository links are pinned to inspected commits; external documentation was checked on September 21, 2026.
+These sources establish the inspected starting point and external integration constraints. They do not establish implementation of the proposed system. R1–R13 retain their historical inspected-commit references; external documentation was checked for the original specification on September 21, 2026. R15–R16 identify revised companion documents through the immutable blob baseline in the alignment manifest; their branch links are discovery conveniences, not version pins.
 
 **R1 — HerdRM application architecture.** Existing native feature/runtime/infrastructure boundaries and shared packages.  
 [docs/architecture.md](https://github.com/Marti-S/herdrm/blob/f903dd3872e19c7266cfa5fd7a11a3acf6fe0c95/docs/architecture.md)
@@ -1168,7 +1283,7 @@ These sources establish the inspected starting point and external integration co
 [docs/MOBILE_BRIDGE.md](https://github.com/Marti-S/herdrm/blob/f903dd3872e19c7266cfa5fd7a11a3acf6fe0c95/docs/MOBILE_BRIDGE.md)  
 [Fleet bridge types](https://github.com/Marti-S/herdrm/blob/f903dd3872e19c7266cfa5fd7a11a3acf6fe0c95/Packages/HerdrKit/Sources/HerdrKit/FleetBridge/FleetBridge.swift)
 
-**R3 — Path repository contract.** Existing source-submission intent, separate remote permissions, historical acceptance preservation, branch-topology restriction, and supported Atomic runtime. The target explicitly supersedes only the obligations listed in Section 1.3.  
+**R3 — Path repository contract.** Existing source-submission intent, separate remote permissions, historical acceptance preservation, branch-topology restriction, and supported Atomic runtime. The target explicitly supersedes only the obligations listed in Section 1.3 and the registered alignment dispositions.  
 [AGENTS.md](https://github.com/Marti-S/PathWorkflow/blob/fb634cbaa369c7be21e4db3b026128a0b79d7ad9/AGENTS.md)
 
 **R4 — Path single-host ownership.** The inspected implementation explicitly lacks distributed lease/fencing coordination and refuses foreign-host ownership. Local claim files cannot fulfill this specification alone.  
@@ -1189,9 +1304,10 @@ These sources establish the inspected starting point and external integration co
 [Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)  
 [Merge-queue availability and use](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-a-pull-request-with-a-merge-queue)
 
-**R9 — GitHub merge API and branch protection.** Expected PR head parameter, asynchronous acknowledgement distinctions, strict up-to-date checks, and expected check issuers. The documented synchronous merge input does not supply a target/base-OID compare-and-swap.  
+**R9 — GitHub merge API and branch protection.** Expected PR head parameter, asynchronous acknowledgement distinctions, strict up-to-date checks, and expected check issuers. The documented synchronous merge input does not supply a target/base-OID compare-and-swap. The concrete ref-effect adapter must separately certify conditional mutation semantics.  
 [Pull request REST endpoints](https://docs.github.com/en/rest/pulls/pulls)  
-[Protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+[Protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)  
+[Git reference REST endpoints](https://docs.github.com/en/rest/git/refs)
 
 **R10 — GitHub webhook handling.** Raw-payload verification, HTTPS, event/action validation, delivery-ID handling and recovery guidance.  
 [Webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)
@@ -1206,7 +1322,13 @@ These sources establish the inspected starting point and external integration co
 [Path resolver](https://github.com/Marti-S/PathWorkflow/blob/fb634cbaa369c7be21e4db3b026128a0b79d7ad9/tools/path/shared/paths.ts)  
 [Path state model](https://github.com/Marti-S/PathWorkflow/blob/fb634cbaa369c7be21e4db3b026128a0b79d7ad9/tools/path/record/state.ts)
 
-**R14 — Owner-provided requirements.** The Path refactor specification and subsequent requirement for multiple computers, concurrent milestones, HerdRM integration, Path-managed branches/PRs, and supervisor/human merge control were supplied directly in the originating conversation. Preserve that text as an immutable intake source when adopting this specification; do not manufacture a repository provenance URL for it.
+**R14 — Owner-provided requirements.** The original Path refactor and subsequent requirements for multiple computers, concurrent milestones, HerdRM integration, Path-managed branches/PRs and supervisor/human merge control were supplied in the originating conversation. Preserve that original text as immutable intake provenance; do not manufacture a repository URL for the conversation. R15–R16 and the alignment manifest now establish the published companion contracts rather than relying on that conversation alone.
+
+**R15 — Published Path layout contract.** PATH-LAYOUT-001 version 1.1, including codebase-only generation, self-migration, complete entry wiring, contract storage, local lifecycle and paired evaluation obligations. Exact blob is pinned by the alignment manifest.  
+[Path layout specification](https://github.com/Marti-S/PathWorkflow/blob/main/specs/2026-09-21-path-project-layout-refactor.md)
+
+**R16 — Published Path distributed contract.** PATH-DS-001 version 1.1, including the shared Path port, HerdRM ownership/mapping, authority profile, conditional effects and actual cross-repository component conformance. Exact blob is pinned by the alignment manifest.  
+[Path distributed specification](https://github.com/Marti-S/PathWorkflow/blob/main/specs/2026-09-21-path-distributed-supervision.md)
 
 ## Appendix B. Glossary
 
@@ -1215,20 +1337,22 @@ These sources establish the inspected starting point and external integration co
 | Accepted | Admitted by Path's deterministic policy using valid subject-bound evidence; not synonymous with a worker returning. |
 | Assignment | Supervisor-owned allocation of execution authority and capacity to a runner. |
 | Attempt | One immutable execution lineage for a task/candidate; retries with new execution have new identities. |
+| Authority binding | Configured Path writer identity and binding revision; not a worker assignment or runtime session. |
 | Candidate | Exact source/contract/evidence subject proposed for internal landing or shared-target promotion. |
 | Controller | The milestone's Path delivery workflow using Atomic; not a free-form manager agent. |
 | Coordinator epoch | Installation authority generation changed on restore/transfer so old tokens cannot regain authority. |
 | Effect | An operation that changes local authoritative or external state and requires durable identity/reconciliation. |
 | Fence | Scope-bound generation checked by the receiver of an acceptance or privileged effect. |
-| Integration lane | Serialized admission/effect ownership for one milestone branch or shared target; not a global implementation lock. |
+| Integration lane | Serialized admission/effect ownership for one repository/ref shared across projects; not a global implementation lock. |
 | Materialization | Read-only working copy of canonical records/contracts, labelled with authority and revision. |
 | Projection | Rebuildable view of accepted state and observations, never an independent workflow authority. |
-| Promotion | Movement of a verified milestone candidate into a shared target under human/policy authorization. |
+| Promotion | Movement of a verified milestone candidate into a shared target under human/profile authorization. |
+| Service incarnation | Identity of an intact-service start; restart invalidates previous incarnation leases without pretending it was a backup restore. |
 | Submission | An authenticated instruction to implement a specific immutable source revision. |
 | Unknown outcome | A request may have acted but definitive observation is unavailable; not automatically success or failure. |
 
 ## Appendix C. Required implementation evidence index
 
-The final acceptance report must index: requirement/invariant IDs; case IDs and mode; implementation commit(s); installed runtime/Path/supervisor/runner identities; test command/tool; environment manifest; observed result; evidence artifact paths and digests; approval/integration subjects; and any not-applicable ruling. Each index entry must resolve to durable retained content.
+The final acceptance report must index: requirement/invariant and companion IDs; case IDs and mode; implementation commits; alignment-manifest and profile identity; actual schema/Path/supervisor/runner/runtime versions and digests; test command/tool; environment manifest; observed result; artifact paths and digests; approval/integration subjects; applicability/revalidation receipts; and any not-applicable ruling. Each index entry resolves to durable retained content. REQ-39 and AC-081–086 are included, not optional alignment commentary.
 
-The source specification remains the change contract. The report records what was actually established. Neither artifact substitutes for the other.
+The source specifications remain the change contracts. The report records what was actually established. Neither artifact substitutes for the other.

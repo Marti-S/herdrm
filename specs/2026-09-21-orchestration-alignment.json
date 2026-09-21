@@ -1,0 +1,151 @@
+{
+  "kind": "path-herdrm/specification-alignment",
+  "schemaVersion": 1,
+  "alignmentId": "PATH-HRM-ALIGN-2026-09-21",
+  "version": "1.0",
+  "date": "2026-09-21",
+  "status": "specification-baseline-not-runtime-certification",
+  "canonicalRepository": "Marti-S/herdrm",
+  "canonicalPath": "specs/2026-09-21-orchestration-alignment.json",
+  "pinning": {
+    "objectFormat": "git-sha1",
+    "rule": "Resolve and retain an immutable manifest revision, then verify all three exact Git blobs at their repository paths. Branch URLs are discovery only.",
+    "crossRepositoryPublication": "Not atomic; partial publication does not establish an aligned baseline.",
+    "selfReference": "Document blobs are pinned instead of circular commit hashes. This manifest does not embed its own digest."
+  },
+  "documents": [
+    {
+      "documentId": "PATH-LAYOUT-001",
+      "version": "1.1",
+      "repository": "Marti-S/PathWorkflow",
+      "path": "specs/2026-09-21-path-project-layout-refactor.md",
+      "gitBlobSha": "c486ffd581ddd4734518e63b280679ae30dbf2ad",
+      "normativeOwnership": [
+        "layout",
+        "record authority",
+        "resolver",
+        "local lifecycle",
+        "migration and complete entry wiring",
+        "codebase-only generation",
+        "language-guidance evaluation"
+      ]
+    },
+    {
+      "documentId": "PATH-DS-001",
+      "version": "1.1",
+      "repository": "Marti-S/PathWorkflow",
+      "path": "specs/2026-09-21-path-distributed-supervision.md",
+      "gitBlobSha": "f6d151986a2b7763c5bc805928b7cdbf7d505c13",
+      "normativeOwnership": [
+        "Path control port and domain schemas",
+        "distributed admission and evidence adapters",
+        "Path Git proof semantics",
+        "product-to-Path mapping",
+        "distributed component conformance"
+      ]
+    },
+    {
+      "documentId": "HRM-ORCH-001",
+      "version": "1.1",
+      "repository": "Marti-S/herdrm",
+      "path": "specs/2026-09-21-herdrm-distributed-orchestration.md",
+      "gitBlobSha": "6db75877a266b8e97608a48bef12ab74c6e96610",
+      "normativeOwnership": [
+        "supervisor and coordination store",
+        "placement and lease issuance",
+        "runner and Atomic process adapter",
+        "gateway hosting",
+        "product and runner APIs",
+        "native clients",
+        "release certification"
+      ]
+    }
+  ],
+  "reviewedPreAlignmentBaselines": [
+    {
+      "repository": "Marti-S/PathWorkflow",
+      "commit": "cb5166146b0f08a15a7380af74824b57420e004a"
+    },
+    {
+      "repository": "Marti-S/herdrm",
+      "commit": "ac888243defc11db8b7539ffbd8381b87cb3d3c7"
+    }
+  ],
+  "targetContracts": [
+    {
+      "id": "path/control/v1",
+      "ownerRepository": "Marti-S/PathWorkflow",
+      "proposedSource": "tools/path/control/contracts/",
+      "status": "concrete-schema-digest-required-before-consumer-admission"
+    },
+    {
+      "id": "herdrm/orchestration/v1",
+      "ownerRepository": "Marti-S/herdrm",
+      "proposedSource": "packages/orchestration-protocol/",
+      "references": [
+        "path/control/v1"
+      ],
+      "status": "concrete-schema-digest-and-adapter-conformance-required"
+    },
+    {
+      "id": "herdrm/runner/v1",
+      "ownerRepository": "Marti-S/herdrm",
+      "proposedSource": "packages/orchestration-protocol/",
+      "references": [
+        "path/control/v1"
+      ],
+      "status": "concrete-schema-digest-and-runner-conformance-required"
+    }
+  ],
+  "requiredReleaseProfile": {
+    "id": "herdrm-distributed-v1",
+    "normativeSections": [
+      "PATH-DS-001:5.6",
+      "HRM-ORCH-001:3.4"
+    ],
+    "runtimeCertification": "not-established-by-this-manifest",
+    "requirements": [
+      "One supervisor placement/lease authority, one runner Atomic process adapter and one gateway implementation.",
+      "Path owns readiness, journalled state, evidence admission and closeout; supervisor SQLite is separate coordination state.",
+      "Authority identity/binding, coordination epoch, service incarnation and applicable assignment/attempt fences remain distinct.",
+      "All projects sharing a repository and full target ref share one installation gateway lane.",
+      "Human-signed exact-candidate approval is mandatory; policy-only promotion and implicit deployment are disabled.",
+      "The exact durable Atomic/Path/supervisor/runner/schema/policy tuple and macOS/Linux isolation profiles must be certified.",
+      "Source-branch knowledge and authority-owned contract snapshots compose a provenance-labelled view; the control branch is a history mirror only.",
+      "Cancellation never requires starting or resuming work; terminal history is immutable and uncertain effects retain reservations.",
+      "Provider-conditional ref mutations and reconciliation of unresolved admitted/submitted effects are mandatory."
+    ]
+  },
+  "supersession": {
+    "repository": "Marti-S/PathWorkflow",
+    "suggestedRevisionId": "OCR-2026-09-21-herdrm-distributed-orchestration",
+    "status": "per-obligation-registration-required-before-behavior-change",
+    "protectedRegisterModifiedByThisDocumentationUpdate": false,
+    "historicalAcceptanceDefinitionsModified": false
+  },
+  "evidenceTraceability": {
+    "normativeTables": [
+      "PATH-DS-001:8/Cross-repository traceability",
+      "HRM-ORCH-001:23.2"
+    ],
+    "layoutCases": "PATH-LAYOUT-001:AC1-AC11",
+    "distributedCases": "PATH-DS-001:DS-AC1-DS-AC16",
+    "productCases": "HRM-ORCH-001:AC-001-AC-086",
+    "mandatoryProductDemonstrations": [
+      "HRM-ORCH-001:25/Demonstration A",
+      "HRM-ORCH-001:25/Demonstration B"
+    ],
+    "retainedObligations": [
+      "PATH-LAYOUT-001:GEN-1-GEN-5",
+      "PATH-LAYOUT-001:MIG/WIRE/CLEAN",
+      "PATH-LAYOUT-001:EVAL-1-EVAL-3"
+    ],
+    "reuseRule": "Reuse only evidence applicable to the exact source/runtime/policy/profile and measured scope, or a permitted explicit revalidation. Component or mock success is not native-product acceptance.",
+    "runtimeAcceptanceResults": "not-run-by-this-documentation-update"
+  },
+  "publicationAuthorization": {
+    "date": "2026-09-21",
+    "ownerInstruction": "agreed update the specs with the changes and merge in directly",
+    "scope": "Documentation updates directly to main in Marti-S/PathWorkflow and Marti-S/herdrm; no implementation launch, deployment, protection change or runtime publication."
+  }
+}
