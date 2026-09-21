@@ -43,13 +43,13 @@ assert kit_requirement <= (6, 1), "macos-15 default Swift 6.1 is too old for Her
 print("apple-builds/herdrkit-tests: macos-15 default Swift 6.1 >=", kit_requirement)
 
 apps = apple["xcode-builds"]
-assert apps["runs-on"] == "macos-15"
-assert any("--switch /Applications/Xcode_26.3.app" in s.get("run", "") for s in apps["steps"])
-assert app_requirement <= (6, 2), "Xcode 26.3 Swift 6.2.x is too old for app packages"
+assert apps["runs-on"] == "macos-26", "Asset compilation requires the reviewed macOS 26 runner"
+assert not any("xcode-select" in s.get("run", "") for s in apps["steps"]), "Use the same default Xcode as Validate"
+assert app_requirement <= (6, 2), "Recheck macos-26 default for a new tools requirement"
 assert {m["destination"] for m in apps["strategy"]["matrix"]["include"]} == {
     "generic/platform=macOS", "generic/platform=iOS", "generic/platform=iOS Simulator"
 }
-print("apple-builds/xcode-builds: all three matrix destinations use Xcode 26.3 Swift 6.2.x >=", app_requirement)
+print("apple-builds/xcode-builds: all three matrix destinations use macos-26 default Xcode 26.x Swift >= 6.2 meets", app_requirement)
 
 for name, job in (("validate.yml", "build-and-test"), ("release.yml", "release")):
     jobs = workflow(name)
@@ -71,7 +71,7 @@ checkouts = ROOT / "build/SourcePackages/checkouts"
 assert checkouts.is_dir(), "Run an app gate to resolve its package cache first"
 cached = {p.parent.name: tools_version(p) for p in checkouts.glob("*/Package.swift")}
 assert cached, "Empty resolved package cache"
-assert max(cached.values()) <= (6, 2), f"Recheck Xcode 26.3 compatibility: {cached}"
+assert max(cached.values()) <= (6, 2), f"Recheck macos-26 default compatibility: {cached}"
 assert installed >= max(cached.values()), cached
 print(f"Resolved app package cache requirements: {cached}")
-print("Apple job configuration is compatible; no workflow toolchain change required.")
+print("Apple job configuration and package tools requirements checked; hosted asset compilation still requires CI validation.")

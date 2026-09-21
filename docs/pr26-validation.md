@@ -50,21 +50,26 @@ bundles go under `.atomic/verification/`. Existing result bundles are not overwr
 
 ## Apple CI compatibility
 
-The historical tools-version mismatch is already addressed in the current tree.
-No `.github/workflows` change was needed for this slice. All three workflow files
-match the workflow baseline captured before the repairs.
+The historical tools-version mismatch was addressed before this slice. PR #30
+subsequently exposed an asset-tool runtime failure with Xcode 26.3 on `macos-15`:
+both the initial build and retry crashed AssetCatalogAgent with missing CoreMedia
+symbols during `CompileAssetCatalogVariant`. The app matrix now uses `macos-26`
+and its default Xcode, matching Validate; HerdrKit and all build destinations,
+architecture settings, and failure checks remain unchanged. Hosted CI must confirm
+the adjusted matrix before merge; package tools-version checks alone cannot prove
+asset-tool runtime compatibility.
 
 | Job | Current selection | Requirement | Assessment |
 | --- | --- | --- | --- |
 | `apple-builds.yml` HerdrKit | `macos-15`, default Xcode | HerdrKit and HerdrTailcat tools 6.0 | Historical Swift 6.1 default meets this requirement; this job does not resolve HerdrSSH. |
-| `apple-builds.yml` app matrix | Explicit `/Applications/Xcode_26.3.app` | HerdrSSH tools 6.2; other local packages 6.0 | Xcode 26.3 supplies Swift 6.2.x for all three destinations. |
+| `apple-builds.yml` app matrix | `macos-26` default Xcode 26.x | HerdrSSH tools 6.2; other local packages 6.0 | Matches Validate's runner/toolchain selection for all three destinations; adjusted matrix awaits hosted CI. |
 | `validate.yml` build/test | `macos-26` default Xcode 26.x | Tools 6.2 | Historical successful run used Xcode 26.6 and Swift 6.3.3. |
 | `release.yml` release build | `macos-26` default Xcode 26.x | Tools 6.2 during project resolution | Compatible tools selection; signing/notarization was not exercised. |
 
 Evidence:
 
 - `git show 342c08d539d9c7d7b2d5ffc909205663d8c82149 -- .github/workflows/apple-builds.yml`
-  shows the existing change from default `Xcode.app` to `Xcode_26.3.app` for the app
+  shows the historical change from default `Xcode.app` to `Xcode_26.3.app` for the app
   matrix, plus package-plugin validation flags. It was merged through PR #25.
 - [Historical failing Apple run 33549034062](https://github.com/Marti-S/herdrm/actions/runs/33549034062)
   says `package 'herdrssh' is using Swift tools version 6.2.0 but the installed

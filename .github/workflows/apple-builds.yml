@@ -35,7 +35,9 @@ jobs:
 
   xcode-builds:
     name: ${{ matrix.name }}
-    runs-on: macos-15
+    # Match Validate's runner/default Xcode: Xcode 26.3 on macos-15 crashes
+    # AssetCatalogAgent with missing CoreMedia symbols during icon compilation.
+    runs-on: macos-26
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -60,8 +62,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode with Swift 6.2
-        run: sudo xcode-select --switch /Applications/Xcode_26.3.app
+      - name: Print toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
 
       - name: Install XcodeGen
         run: brew install xcodegen
