@@ -391,7 +391,7 @@ struct DetailView: View {
         }()
         ZStack {
             AttachTerminalView(
-                device: session.device,
+                device: model.device(session.device.id) ?? session.device,
                 target: session.attachTarget,
                 sessionID: session.id,
                 serverVersion: model.serverVersion(deviceID: session.device.id),

@@ -19,8 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Task { @MainActor in
-            await model.shutdownAllSessions()
-            sender.reply(toApplicationShouldTerminate: true)
+            let stopped = await model.shutdownAllSessions()
+            sender.reply(toApplicationShouldTerminate: stopped)
         }
         return .terminateLater
     }

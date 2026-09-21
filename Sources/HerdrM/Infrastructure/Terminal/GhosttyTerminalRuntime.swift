@@ -507,6 +507,29 @@ final class LineBreakTerminalView: AppTerminalView {
         NSWorkspace.shared.open(url)
     }
 
+    /// ⌘-click on a link Ghostty matched (URL regex or OSC 8). Ghostty reports
+    /// the click unhandled unless the host takes it — its own fallback opener
+    /// refuses OSC 8 targets on macOS — so this is the only path that opens
+    /// anything. The URL is producer-controlled terminal output and the
+    /// wrapper does not distinguish OSC 8 from regex matches, so only web and
+    /// mail schemes are opened.
+    static func openClickedLink(_ string: String, opener: ((URL) -> Void)? = nil) {
+        guard let url = clickedLinkURL(string) else { return }
+        if let opener {
+            opener(url)
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    static func clickedLinkURL(_ string: String) -> URL? {
+        guard let url = URL(string: string),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https", "mailto"].contains(scheme)
+        else { return nil }
+        return url
+    }
+
     @objc private func copyLinkFromMenu(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         NSPasteboard.general.clearContents()

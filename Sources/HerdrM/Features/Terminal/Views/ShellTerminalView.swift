@@ -97,7 +97,18 @@ struct ShellTerminalView: NSViewRepresentable {
         coordinator.host?.terminate()
     }
 
-    final class Coordinator: NSObject, TerminalSurfaceLifecycleDelegate {
+    final class Coordinator: NSObject, TerminalSurfaceLifecycleDelegate, TerminalSurfaceOpenURLDelegate {
+        private let linkOpener: ((URL) -> Void)?
+
+        init(linkOpener: ((URL) -> Void)? = nil) {
+            self.linkOpener = linkOpener
+            super.init()
+        }
+
+        func terminalDidRequestOpenURL(_ url: String, kind: TerminalOpenURLKind) {
+            LineBreakTerminalView.openClickedLink(url, opener: linkOpener)
+        }
+
         var onExit: ((Int32?) -> Void)?
         var sessionID: UUID?
         /// Written on the main actor; read from `deinit`, which is nonisolated.

@@ -7,6 +7,15 @@ the Sparkle update description — a release without a section here fails CI.
 
 ## [Unreleased]
 
+### Fixed
+- Connecting no longer fails at random with `setsockopt(SO_RCVTIMEO): Invalid
+  argument`. herdr closes each request connection right after writing its
+  reply, and macOS refuses every socket option once the peer is gone — so
+  losing that race turned an answered request into a connection error even
+  though the reply was already buffered. The reply is now read.
+
+## [0.6.7] - 2026-09-20
+
 ### Added
 - **Settings → Terminal → Import from Ghostty…** copies your `font-family` and
   `font-size` from `~/.config/ghostty/config` (honoring `XDG_CONFIG_HOME`) into
@@ -14,12 +23,25 @@ the Sparkle update description — a release without a section here fails CI.
   change. It's a one-time import — herdrm's own settings stay in charge
   afterward — and it reports what it applied or skipped. (#73)
 
+### Changed
+- Changing language in Settings → Appearance now shows a **Relaunch** button
+  that quits and reopens herdrm for you, instead of a hint to do it by hand.
+  The button only appears when the UI language would actually change — English
+  → Follow System is a no-op when the Mac is already English. (#94, thanks
+  @thedavidweng!)
+
 ### Fixed
-- Connecting no longer fails at random with `setsockopt(SO_RCVTIMEO): Invalid
-  argument`. herdr closes each request connection right after writing its
-  reply, and macOS refuses every socket option once the peer is gone — so
-  losing that race turned an answered request into a connection error even
-  though the reply was already buffered. The reply is now read.
+- ⌘-clicking a URL in the terminal now opens it. HerdrM never adopted
+  libghostty's open-URL delegate, so clicks on OSC 8 hyperlinks and regex-matched
+  links did nothing; both terminal coordinators now open `http`/`https`/`mailto`
+  links through `NSWorkspace`. (#91, thanks @briandw!)
+- SSH devices on Windows no longer fail the home probe (`echo "$HOME"` under CMD)
+  or OpenSSH `-L` socket forwards (drive-letter paths). HerdrM detects Windows,
+  proxies RPC through `herdr remote-api-bridge` over SSH stdio (same channel as
+  the official CLI), and attaches panes via the local herdr CLI pointed at that
+  bridge socket. (#92, thanks @thedavidweng!)
+- The Notifications settings caption now wraps inside the fixed-width window
+  instead of ending in an ellipsis. (#94, thanks @thedavidweng!)
 
 ## [0.6.6] - 2026-09-16
 

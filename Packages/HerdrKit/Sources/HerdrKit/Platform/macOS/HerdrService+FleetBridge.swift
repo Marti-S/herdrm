@@ -9,8 +9,10 @@ extension HerdrService {
         target: TerminalAttachTarget,
         mode: TerminalSessionMode,
         size: TerminalSize,
-        serverVersion: String? = nil
+        serverVersion: String? = nil,
+        currentDevice: Device? = nil
     ) -> TerminalCommand {
+        let device = currentDevice ?? self.device
         let targetValue: String
         switch target {
         case .agent(let paneID): targetValue = paneID
@@ -23,8 +25,11 @@ extension HerdrService {
             + takeover
             + " --cols \(size.columns) --rows \(size.rows)"
 
-        switch device.kind {
-        case .local, .tailcat:
+        // The service is cached before discovery. Callers with current fleet
+        // metadata pass it explicitly instead of rebuilding the connected owner.
+        let windowsSSH = device.sshTarget != nil
+            && device.osID?.lowercased() == "windows"
+        if device.isLocal || device.isTailcat || windowsSSH {
             var environment = (ShellEnvironment.cached ?? .empty).launchEnvironment(binary: nil)
             environment.removeValue(forKey: "TERM")
             environment.removeValue(forKey: "COLUMNS")
@@ -34,6 +39,9 @@ extension HerdrService {
             // session stream rides the same WireGuard tunnel as the RPCs, and a
             // named-session Local device must not fall back to the default
             // session's socket.
+            if windowsSSH, let target = device.sshTarget {
+                environment["HERDR_SOCKET_PATH"] = SSHTunnel.localSocketPath(for: target)
+            } else
             if device.isTailcat {
                 environment["HERDR_SOCKET_PATH"] =
                     TailcatBridgeManager.localSocketPath(deviceID: device.id)
@@ -49,7 +57,9 @@ extension HerdrService {
                 authorizationID: nil
             )
 
-        case .ssh(let target):
+        }
+
+        if case .ssh(let target) = device.kind {
             let script = "\(SSHTunnel.remotePathExport); "
                 + "\(Self.attachBinarySelection(serverVersion: serverVersion)); "
                 + "exec \"$hb\" \(arguments)"
@@ -77,6 +87,7 @@ extension HerdrService {
                 authorizationID: authentication.authorizationID
             )
         }
+        preconditionFailure("Unsupported device kind")
     }
 }
 #endif
