@@ -10,3 +10,7 @@ Sources/HerdrM/Info.plist
 xcuserdata/
 build-rel/
 build-ios/
+build-ios-device/
+.atomic/
+.review-board-*/
+review-board/

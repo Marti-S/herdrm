@@ -23,7 +23,7 @@ Enable **Keep bridge available in background** in the Mobile Pairing window to r
 
 Closing the last HerdrM window never terminates the process or disconnects mobile clients. When background availability is enabled, the app switches to the same menu-bar presentation after the last window closes. Opening HerdrM again restores the normal Dock application and window. Explicit **Quit HerdrM** still closes terminal children, SSH tunnels, and bridge connections cleanly.
 
-The bridge stays in the main HerdrM process rather than a second credential-bearing daemon. This preserves a single owner for `AppModel`, SSH sessions, Keychain credentials, terminal processes, authentication state, and fleet revisions. macOS may require approval under **System Settings → General → Login Items** before the login item becomes active.
+The bridge stays in the main HerdrM process rather than a second credential-bearing daemon. This preserves a single owner for `FleetStore`, SSH sessions, Keychain credentials, terminal processes, authentication state, and fleet revisions. macOS may require approval under **System Settings → General → Login Items** before the login item becomes active.
 
 ## Network exposure
 

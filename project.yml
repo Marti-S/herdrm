@@ -29,6 +29,10 @@ packages:
     # release tag; bump deliberately.
     url: https://github.com/jt-wang/StickySectionHeaders
     exactVersion: "1.0.0"
+# Establish shared navigator roots before hostless targets add nested sources.
+fileGroups:
+  - Sources/HerdrM
+  - Tests/HerdrMTests
 targets:
   HerdrM:
     type: application
@@ -164,7 +168,77 @@ targets:
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
 
+  # Hostless tests compile the actual mobile runtime and adapters, without
+  # launching app composition or loading persisted devices/credentials.
+  MobileLifecycleTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - Tests/HerdrMobileTests/Runtime/Fleet
+      - Packages/HerdrKit/Tests/HerdrKitTests/Support/FixtureDeadline.swift
+      - Sources/HerdrMobile/Runtime/Fleet/MobileBridgeSession.swift
+      - Sources/HerdrMobile/Runtime/Fleet/MobileSessions.swift
+      - Sources/HerdrMobile/Runtime/Fleet/MobileDevice.swift
+      - Sources/HerdrMobile/Runtime/Terminal/MobileAttachCommand.swift
+      - Sources/HerdrMobile/Features/Connections/Models/MobileBridge.swift
+      - Sources/HerdrMobile/Features/Fleet/Models/FleetEntries.swift
+      - Sources/HerdrMobile/Features/Composer/MobileAttachment.swift
+      - Sources/HerdrMobile/Infrastructure/Transport
+      - Sources/HerdrMobile/Infrastructure/Security
+      - Sources/HerdrMobile/Infrastructure/FleetBridge
+    dependencies:
+      - package: HerdrKit
+      - package: HerdrSSH
+      - package: HerdrTailcat
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.bybee.herdrm.mobile-lifecycle-tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.10"
+        TEST_HOST: ""
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ARCHS: arm64
+
+  # Hostless cache/wire tests must not launch the app or touch persisted devices.
+  FleetBridgeCacheTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/HerdrMTests/Infrastructure/FleetBridge
+      - Sources/HerdrM/Infrastructure/FleetBridge/FleetBridgeSnapshotCache.swift
+      - Packages/HerdrKit/Tests/HerdrKitTests/FleetBridge/FleetBridgeWireTests.swift
+      - Packages/HerdrKit/Tests/HerdrKitTests/FleetBridge/FleetBridgeAuthenticationTests.swift
+    dependencies:
+      - package: HerdrKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.bybee.herdrm.fleet-bridge-cache-tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.10"
+        TEST_HOST: ""
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) FLEET_BRIDGE_CACHE_TESTS"
+
 schemes:
+  FleetBridgeCacheTests:
+    build:
+      targets:
+        FleetBridgeCacheTests: [test]
+    test:
+      config: Debug
+      targets:
+        - FleetBridgeCacheTests
+  MobileLifecycleTests:
+    build:
+      targets:
+        MobileLifecycleTests: [test]
+    test:
+      config: Debug
+      targets:
+        - MobileLifecycleTests
   HerdrM:
     build:
       targets:

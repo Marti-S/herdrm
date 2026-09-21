@@ -19,18 +19,22 @@ Design canvas (waku-style sidebar, light/dark): `design/` — published as the
   arm64 xcframeworks (`Artifacts/PROVENANCE.md`), ported from Heeler's
   HeelerSSH. `SSHConnection` does `direct-streamlocal` to the remote herdr
   socket (one channel per RPC), PTY exec channels for terminal attach.
-- `Sources/HerdrM` — macOS SwiftUI app (XcodeGen `project.yml`). The terminal is
-  libghostty (`GhosttyTerminal` product of Lakr233/libghostty-spm, Metal): each
-  pane is a host-managed `InMemoryTerminalSession` fed by `TerminalProcess`, a
-  local `forkpty` byte pump. `LineBreakTerminalView` subclasses ghostty's
-  `AppTerminalView` and keeps herdrm's own behavior (light-mode ANSI adapter,
-  ⌘-editing-key readline chords via `session.sendInput`, agent-aware paste).
-- `Sources/HerdrMobile` — iOS/iPadOS SwiftUI app (`HerdrMobile` target, iOS 18,
-  iPhone + iPad). Devices are SSH hosts (Ed25519 device key in Keychain or
-  password; TOFU host keys); RPC over `HerdrSSH`; terminal is the same libghostty
-  `InMemoryTerminalSession`, fed by the SSH PTY channel, display-first behind an
-  APC bootstrap marker + native composer (`agent.prompt`) + key bar
-  (`pane.send_input` keys). No relay yet — a second `MobileTransport` later.
+- `Sources/HerdrM` — macOS SwiftUI app (XcodeGen `project.yml`), organized as
+  `App`, feature-owned `Features`, long-lived `Runtime`, platform adapters in
+  `Infrastructure`, and `SharedUI`. The terminal uses libghostty
+  (`GhosttyTerminal` product of Lakr233/libghostty-spm, Metal). Each pane is a
+  host-managed `InMemoryTerminalSession` fed by `TerminalProcess`, a local
+  `forkpty` byte pump. `LineBreakTerminalView` subclasses ghostty's
+  `AppTerminalView` and keeps herdrm's light-mode ANSI adapter, Command-key
+  readline chords via `session.sendInput`, and agent-aware paste.
+- `Sources/HerdrMobile` — iOS/iPadOS SwiftUI app (`HerdrMobile` target, iOS 18),
+  with the same App/Features/Runtime/Infrastructure ownership model. Devices
+  are SSH hosts (Ed25519 device key in Keychain or password; TOFU host keys),
+  RPC uses `HerdrSSH`, and the terminal is a libghostty
+  `InMemoryTerminalSession` fed by the SSH PTY channel. It is display-first
+  behind an APC bootstrap marker, with a native composer (`agent.prompt`) and
+  key bar (`pane.send_input` keys). See `docs/architecture.md` for dependency
+  and lifetime rules.
 - `design/` — design canvas working files (`*.dc.html` artboards + `canvas.json`).
 
 ## Build & test
